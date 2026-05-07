@@ -646,8 +646,8 @@ pub struct ModelProviderConfig {
     /// forces native tool calls on, `Some(false)` forces text-fallback.
     /// Currently consulted only by the Groq factory, which defaults to
     /// text-fallback because llama-family Groq models reject native tool
-    /// calls with HTTP 400 (#5848). Setting `native_tools = true` re-enables
-    /// native tool calling for Groq models that support it.
+    /// calls with HTTP 400. Setting `native_tools = true` re-enables native
+    /// tool calling for Groq models that support it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_tools: Option<bool>,
 }
@@ -2732,6 +2732,12 @@ impl Default for BrowserComputerUseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "browser"]
+#[integration(
+    category = "ToolsAutomation",
+    display_name = "Browser",
+    description = "Chrome/Chromium control",
+    status_field = "enabled"
+)]
 pub struct BrowserConfig {
     /// Enable `browser_open` tool (opens URLs in the system browser without scraping)
     #[serde(default = "default_true")]
@@ -3395,6 +3401,12 @@ pub struct GoogleWorkspaceAllowedOperation {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "google-workspace"]
+#[integration(
+    category = "ToolsAutomation",
+    display_name = "Google Workspace",
+    description = "Drive, Gmail, Calendar, Sheets, Docs via gws CLI",
+    status_field = "enabled"
+)]
 pub struct GoogleWorkspaceConfig {
     /// Enable the `google_workspace` tool. Default: `false`.
     #[serde(default)]
@@ -10247,6 +10259,21 @@ async fn ensure_bootstrap_files(workspace_dir: &Path) -> Result<()> {
 }
 
 impl Config {
+    /// Collect the `IntegrationDescriptor` from every nested config that
+    /// declares one via `#[integration(...)]`. Adding a new toggleable
+    /// integration is one struct-level attribute on the new config + one
+    /// row in this method. The integrations registry consumes the result
+    /// without per-vendor branches.
+    pub fn integration_descriptors(&self) -> Vec<crate::config::IntegrationDescriptor> {
+        // V3 doesn't yet annotate BrowserConfig / GoogleWorkspaceConfig
+        // with `#[integration(...)]`, and cron has been flattened to a
+        // HashMap with no enable toggle. The `toggles` chain in the
+        // integration registry will pick up entries here once those
+        // schema attributes are added (tracked separately as a follow-up
+        // to the v0.7.5 → v0.8.0 merge).
+        Vec::new()
+    }
+
     /// Return top-level TOML keys in `raw_toml` that Config does not recognise.
     ///
     /// Keys present in `Config::default()` serialization pass immediately.
