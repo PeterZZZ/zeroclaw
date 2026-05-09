@@ -60,6 +60,11 @@ pub struct SlackChannel {
     /// Seconds to wait for an operator reply to a `request_approval` prompt
     /// before treating the silence as a deny. Default 300.
     approval_timeout_secs: u64,
+    /// Cached `auth.test` user_id for the SDK self-loop guard. Populated
+    /// on the first inbound message via `cache_bot_user_id`; the
+    /// `Channel::self_handle` override reads it without an HTTP call so
+    /// the guard runs on every inbound after the first.
+    cached_bot_user_id: Mutex<Option<String>>,
 }
 
 const SLACK_HISTORY_MAX_RETRIES: u32 = 3;
@@ -190,6 +195,24 @@ impl SlackChannel {
             cancel_reaction: None,
             pending_approvals: Arc::new(AsyncMutex::new(HashMap::new())),
             approval_timeout_secs: 300,
+            cached_bot_user_id: Mutex::new(None),
+        }
+    }
+
+    /// Populate the bot-user-id cache used by the [`Channel::self_handle`]
+    /// override. Called on the inbound path before the orchestrator's
+    /// self-loop guard runs so the first echo from the bot's own
+    /// posts gets caught instead of looping. No-op if already cached.
+    async fn cache_bot_user_id(&self) {
+        if let Ok(guard) = self.cached_bot_user_id.lock()
+            && guard.is_some()
+        {
+            return;
+        }
+        if let Some(uid) = self.get_bot_user_id().await
+            && let Ok(mut guard) = self.cached_bot_user_id.lock()
+        {
+            *guard = Some(uid);
         }
     }
 
@@ -3332,6 +3355,20 @@ impl Channel for SlackChannel {
         "slack"
     }
 
+    /// Returns the cached `auth.test` `user_id` so the SDK self-loop
+    /// guard can drop the bot's own message echoes (Events API delivers
+    /// the bot's posts back as `bot_id`/`user` events even though
+    /// they're outbound). The cache is populated by
+    /// [`Self::cache_bot_user_id`] on the inbound path; before the
+    /// first hit, returns `None` and the guard falls through to the
+    /// agent-loop fallback in the orchestrator.
+    fn self_handle(&self) -> Option<String> {
+        self.cached_bot_user_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         // Detect Block Kit payloads produced by the `/config` command.
         let body = if let Some(blocks_json) =
@@ -3742,6 +3779,10 @@ impl Channel for SlackChannel {
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        // Cache the bot user id on the struct so `self_handle` (sync,
+        // called by the orchestrator's self-loop guard on every inbound)
+        // resolves without an additional `auth.test` round-trip.
+        self.cache_bot_user_id().await;
         let bot_user_id = self.get_bot_user_id().await.unwrap_or_default();
         let scoped_channels = self.scoped_channel_ids();
         if self.configured_app_token().is_some() {

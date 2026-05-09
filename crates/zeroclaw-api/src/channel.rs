@@ -153,11 +153,19 @@ pub trait Channel: Send + Sync {
     /// messages, even if a misconfigured peer group lists the bot's
     /// handle as an external peer.
     ///
-    /// Override this in channel implementations that have access to
-    /// their own bot identity at runtime (e.g. after authenticating
-    /// with the platform's API). Default returns `None` so adding
-    /// the guard does not break any existing channel impl; channels
-    /// opt in as their identity becomes available.
+    /// **Channels that handle inbound traffic must override this.**
+    /// The default `None` makes both layers of the orchestrator's
+    /// self-loop guard (the SDK-side `drop_self_messages` here, and
+    /// the agent-loop fallback `peers::should_drop_self_loop`) into
+    /// no-ops — both layers consult the same `self_handle`, so a
+    /// channel that returns `None` has no protection from looping on
+    /// its own outbound. Outbound-only channels (webhook, gmail-push,
+    /// voice-call) never see inbound and can keep the default. The
+    /// in-tree overrides currently cover Telegram (`bot_username`
+    /// cache), IRC (configured nickname), Discord (decoded from token),
+    /// Slack (cached `auth.test` user_id); other inbound channels
+    /// remain on the default and rely on per-impl filtering instead
+    /// of the shared guard.
     fn self_handle(&self) -> Option<String> {
         None
     }

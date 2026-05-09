@@ -2553,6 +2553,17 @@ impl Channel for TelegramChannel {
         "telegram"
     }
 
+    /// Telegram's `getMe` username, populated lazily by
+    /// `fetch_bot_username` and cached in `bot_username`. Returning
+    /// the cache here lets the SDK self-loop guard
+    /// (`Channel::drop_self_messages`) drop the bot's own messages
+    /// once the cache is hot. Before the first `getMe` resolves, the
+    /// cache is `None` and the guard falls through to the agent-loop
+    /// fallback in the orchestrator.
+    fn self_handle(&self) -> Option<String> {
+        self.bot_username.lock().clone()
+    }
+
     fn supports_draft_updates(&self) -> bool {
         self.stream_mode != StreamMode::Off
     }

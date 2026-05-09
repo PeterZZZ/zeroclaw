@@ -354,6 +354,18 @@ impl Channel for IrcChannel {
         "irc"
     }
 
+    /// IRC echoes the bot's own PRIVMSGs back through the same socket
+    /// for any channel the bot is JOINed to. Returning the configured
+    /// nickname here engages the SDK self-loop guard so those echoes
+    /// drop before reaching the agent loop. The nickname is set at
+    /// construction (`config.nickname`) and used as the preferred nick
+    /// during NICK negotiation; if the server forces a different nick
+    /// (collision fallback in `listen`), the agent-loop fallback
+    /// catches the gap.
+    fn self_handle(&self) -> Option<String> {
+        Some(self.nickname.clone())
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let mut guard = self.writer.lock().await;
         let writer = guard

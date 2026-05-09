@@ -901,6 +901,17 @@ impl Channel for DiscordChannel {
         "discord"
     }
 
+    /// Discord bot tokens encode the bot's user ID in the first
+    /// segment (`base64(user_id).timestamp.hmac`); decode on demand
+    /// rather than caching since the result is deterministic and the
+    /// orchestrator only calls `self_handle` on the inbound path.
+    /// Returning the user ID engages the SDK self-loop guard against
+    /// gateway events the bot itself produced (typing indicators,
+    /// echoed message events from intent overlap, etc.).
+    fn self_handle(&self) -> Option<String> {
+        Self::bot_user_id_from_token(&self.bot_token)
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let raw_content = crate::util::strip_tool_call_tags(&message.content);
         let (cleaned_content, parsed_attachments) = parse_attachment_markers(&raw_content);
