@@ -16,7 +16,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
-use zeroclaw_config::multi_agent::{AgentAlias, MemoryBackendKind};
+use zeroclaw_config::multi_agent::MemoryBackendKind;
 use zeroclaw_config::schema::{AliasedAgentConfig, Config, ensure_bootstrap_files};
 
 pub mod session_registry;
@@ -60,6 +60,12 @@ pub struct DeleteReport {
     pub peer_group_memberships: Vec<String>,
     /// `true` when `DeleteOptions::dry_run` was set; nothing was touched.
     pub dry_run: bool,
+    /// In-flight session count observed at report time. On the
+    /// destructive path this is the value the active-session gate
+    /// compared against; on the dry-run path it lets an operator see
+    /// whether a real delete would be refused without coupling the
+    /// inspection to the gate.
+    pub active_sessions: usize,
 }
 
 /// One row of [`list_agents`]'s output.
@@ -163,25 +169,40 @@ pub async fn delete_agent(
         .map(|(name, _)| name.clone())
         .collect();
 
+    let active = session_registry::active_sessions_for(alias);
+
     if opts.dry_run {
-        // Dry-run is a pure read-only impact report; the active-session
-        // check is enforced only on the destructive path so an operator
-        // can always inspect what a delete *would* do without coupling
-        // the inspection to the runtime state of running agents.
+        // Dry-run is a read-only impact report. Surface the
+        // active-session count so the operator can see whether a
+        // real delete would be refused without coupling the
+        // inspection to the gate; the gate itself only fires on the
+        // destructive path below.
         return Ok(DeleteReport {
             workspace_dir,
             peer_group_memberships,
             dry_run: true,
+            active_sessions: active,
         });
     }
 
-    let active = session_registry::active_sessions_for(alias);
     if active > 0 && !opts.force_active_sessions {
         bail!(
             "agent {alias:?} has {active} active session(s); refuse to delete. \
              Stop the running sessions first, or pass force_active_sessions=true \
              to override (the in-flight agent loop will surface I/O errors when \
              its workspace disappears)."
+        );
+    }
+
+    if active > 0 && opts.force_active_sessions {
+        // Loud audit trail for the force path. A scripted operator
+        // running force_active_sessions = true otherwise leaves no
+        // record of which agent's in-flight sessions were ripped out
+        // from under the running loop.
+        tracing::warn!(
+            agent_alias = alias,
+            active_sessions = active,
+            "delete_agent: forcing through {active} active session(s) (force_active_sessions=true)"
         );
     }
 
@@ -208,6 +229,7 @@ pub async fn delete_agent(
         workspace_dir,
         peer_group_memberships,
         dry_run: false,
+        active_sessions: active,
     })
 }
 
@@ -234,12 +256,6 @@ pub fn list_agents(config: &Config) -> Vec<AgentSummary> {
         })
         .collect()
 }
-
-/// Quiet `unused` for the `AgentAlias` import — kept so consumers
-/// can build [`AgentSpec`]s from typed primitives if a future caller
-/// wants to (the public field is `String` today for clap-friendliness).
-#[allow(dead_code)]
-type _AgentAliasReference = AgentAlias;
 
 #[cfg(test)]
 mod tests {
@@ -435,6 +451,33 @@ mod tests {
         delete_agent(&mut config, alias, DeleteOptions::default())
             .await
             .expect("delete succeeds once sessions clear");
+    }
+
+    #[tokio::test]
+    async fn delete_agent_dry_run_reports_active_session_count() {
+        let alias = "agents_test_delete_dry_run_reports_active";
+        let tmp = TempDir::new().unwrap();
+        let mut config = config_in_tempdir(&tmp);
+        create_agent(&mut config, make_spec(alias)).await.unwrap();
+
+        let _guard = session_registry::register_session(alias);
+
+        let report = delete_agent(
+            &mut config,
+            alias,
+            DeleteOptions {
+                dry_run: true,
+                ..DeleteOptions::default()
+            },
+        )
+        .await
+        .expect("dry_run inspection must succeed even with active sessions");
+
+        assert!(report.dry_run);
+        assert_eq!(
+            report.active_sessions, 1,
+            "dry_run must surface the active-session count an operator would otherwise have to inspect separately"
+        );
     }
 
     #[tokio::test]
