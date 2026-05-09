@@ -32,7 +32,7 @@ pub struct Agent {
     prompt_builder: SystemPromptBuilder,
     tool_dispatcher: Box<dyn ToolDispatcher>,
     memory_loader: Box<dyn MemoryLoader>,
-    config: zeroclaw_config::schema::DelegateAgentConfig,
+    config: zeroclaw_config::schema::AliasedAgentConfig,
     model_name: String,
     temperature: f64,
     workspace_dir: std::path::PathBuf,
@@ -130,7 +130,7 @@ pub struct AgentBuilder {
     prompt_builder: Option<SystemPromptBuilder>,
     tool_dispatcher: Option<Box<dyn ToolDispatcher>>,
     memory_loader: Option<Box<dyn MemoryLoader>>,
-    config: Option<zeroclaw_config::schema::DelegateAgentConfig>,
+    config: Option<zeroclaw_config::schema::AliasedAgentConfig>,
     model_name: Option<String>,
     temperature: Option<f64>,
     workspace_dir: Option<std::path::PathBuf>,
@@ -224,7 +224,7 @@ impl AgentBuilder {
         self
     }
 
-    pub fn config(mut self, config: zeroclaw_config::schema::DelegateAgentConfig) -> Self {
+    pub fn config(mut self, config: zeroclaw_config::schema::AliasedAgentConfig) -> Self {
         self.config = Some(config);
         self
     }
@@ -2248,10 +2248,10 @@ mod tests {
             .first_model_provider_type()
             .expect("model_provider configured above")
             .to_string();
-        let agent_cfg = zeroclaw_config::schema::DelegateAgentConfig {
+        let agent_cfg = zeroclaw_config::schema::AliasedAgentConfig {
             model_provider: format!("{provider_alias}.default").into(),
             risk_profile: "test-profile".to_string(),
-            ..zeroclaw_config::schema::DelegateAgentConfig::default()
+            ..zeroclaw_config::schema::AliasedAgentConfig::default()
         };
         config.agents.insert("test-agent".to_string(), agent_cfg);
 
@@ -2752,9 +2752,9 @@ mod tests {
         // Force trimming with the boundary landing inside a pair:
         // 5 entries (AC, TR, AC, TR, AC) > 4 → drop_count = 1 → AC1 dropped,
         // TR1 left as an orphan unless the trim guards against it.
-        let agent_config = zeroclaw_config::schema::DelegateAgentConfig {
+        let agent_config = zeroclaw_config::schema::AliasedAgentConfig {
             max_history_messages: 4,
-            ..zeroclaw_config::schema::DelegateAgentConfig::default()
+            ..zeroclaw_config::schema::AliasedAgentConfig::default()
         };
 
         let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});

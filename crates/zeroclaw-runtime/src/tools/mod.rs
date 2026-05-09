@@ -143,7 +143,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use zeroclaw_config::schema::{Config, DelegateAgentConfig};
+use zeroclaw_config::schema::{Config, AliasedAgentConfig};
 use zeroclaw_memory::Memory;
 
 /// Shared handle to the delegate tool's parent-tools list.
@@ -293,7 +293,7 @@ pub fn all_tools(
     http_config: &zeroclaw_config::schema::HttpRequestConfig,
     web_fetch_config: &zeroclaw_config::schema::WebFetchConfig,
     workspace_dir: &std::path::Path,
-    agents: &HashMap<String, DelegateAgentConfig>,
+    agents: &HashMap<String, AliasedAgentConfig>,
     fallback_api_key: Option<&str>,
     root_config: &zeroclaw_config::schema::Config,
     canvas_store: Option<CanvasStore>,
@@ -344,7 +344,7 @@ pub fn all_tools_with_runtime(
     http_config: &zeroclaw_config::schema::HttpRequestConfig,
     web_fetch_config: &zeroclaw_config::schema::WebFetchConfig,
     workspace_dir: &std::path::Path,
-    agents: &HashMap<String, DelegateAgentConfig>,
+    agents: &HashMap<String, AliasedAgentConfig>,
     fallback_api_key: Option<&str>,
     root_config: &zeroclaw_config::schema::Config,
     canvas_store: Option<CanvasStore>,
@@ -920,7 +920,7 @@ pub fn all_tools_with_runtime(
     let delegate_handle: Option<DelegateParentToolsHandle> = if agents.is_empty() {
         None
     } else {
-        let delegate_agents: HashMap<String, DelegateAgentConfig> = agents
+        let delegate_agents: HashMap<String, AliasedAgentConfig> = agents
             .iter()
             .map(|(name, cfg)| (name.clone(), cfg.clone()))
             .collect();
@@ -1274,7 +1274,7 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert(
             "researcher".to_string(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "ollama.researcher".into(),
                 ..Default::default()
             },

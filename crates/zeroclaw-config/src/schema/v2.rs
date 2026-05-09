@@ -1156,10 +1156,10 @@ fn drain_enabled_keep(channel_type: &str, instance: &mut toml::Table) -> bool {
 ///   brain with `model_provider = "<provider>.agent_<id>"`.
 /// - **T14a max_iterations rename**: V2 `max_iterations: usize` →
 ///   V3 `max_tool_iterations: usize` (V3 keeps it inline on
-///   `DelegateAgentConfig`, just renamed).
+///   `AliasedAgentConfig`, just renamed).
 /// - **T14b runtime override synthesis**: V2 `agentic`, `allowed_tools`,
 ///   `timeout_secs`, `agentic_timeout_secs` are removed from
-///   `DelegateAgentConfig` in V3 — they belong on `RuntimeProfileConfig`.
+///   `AliasedAgentConfig` in V3 — they belong on `RuntimeProfileConfig`.
 ///   When any are set, synthesize a per-agent runtime profile at
 ///   `runtime_profiles.agent_<id>` and point `runtime_profile = "agent_<id>"`.
 /// - **T14c risk override synthesis**: V2 `max_depth` → per-agent
@@ -1280,7 +1280,7 @@ fn synthesize_agent_brains(
 
         // T14d: skills_directory → synthesize a per-agent skill_bundle and
         //   point agent.skill_bundles at it. Per #5947: "per-agent V2
-        //   DelegateAgentConfig.skills_directory overrides become per-agent
+        //   AliasedAgentConfig.skills_directory overrides become per-agent
         //   skill bundles." V3 SkillBundleConfig has a `directory:
         //   Option<String>` slot that carries the V2 path verbatim.
         if let Some(toml::Value::String(skills_dir)) = agent_table.remove("skills_directory")
@@ -1290,7 +1290,7 @@ fn synthesize_agent_brains(
             let mut bundle_entry = toml::Table::new();
             bundle_entry.insert("directory".to_string(), toml::Value::String(skills_dir));
             install_profile_entry(passthrough, "skill_bundles", &bundle_alias, bundle_entry);
-            // V3 DelegateAgentConfig.skill_bundles is Vec<String> of aliases.
+            // V3 AliasedAgentConfig.skill_bundles is Vec<String> of aliases.
             // Append our synthesized bundle alias (preserve any user-set list).
             let existing = agent_table
                 .remove("skill_bundles")
@@ -1386,7 +1386,7 @@ fn ensure_memory_namespace(passthrough: &mut toml::Table, alias: &str) {
     }
 }
 
-/// Pull V2 `DelegateAgentConfig` fields that V3 moved onto
+/// Pull V2 `AliasedAgentConfig` fields that V3 moved onto
 /// `RuntimeProfileConfig` out of the agent table. Returns `Some(table)` if
 /// any V3 runtime-profile field was set; `None` otherwise.
 fn extract_runtime_overrides(agent: &mut toml::Table) -> Option<toml::Table> {

@@ -7,7 +7,7 @@
 //! and config file round-trips to verify workspace discovery and persistence.
 
 use std::fs;
-use zeroclaw::config::{Config, DelegateAgentConfig, MemoryConfig};
+use zeroclaw::config::{Config, AliasedAgentConfig, MemoryConfig};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config default construction
@@ -54,12 +54,12 @@ fn config_default_temperature_positive() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DelegateAgentConfig defaults
+// AliasedAgentConfig defaults
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn agent_config_default_max_tool_iterations() {
-    let agent = DelegateAgentConfig::default();
+    let agent = AliasedAgentConfig::default();
     assert_eq!(
         agent.max_tool_iterations, 10,
         "default max_tool_iterations should be 10"
@@ -68,7 +68,7 @@ fn agent_config_default_max_tool_iterations() {
 
 #[test]
 fn agent_config_default_max_history_messages() {
-    let agent = DelegateAgentConfig::default();
+    let agent = AliasedAgentConfig::default();
     assert_eq!(
         agent.max_history_messages, 50,
         "default max_history_messages should be 50"
@@ -77,7 +77,7 @@ fn agent_config_default_max_history_messages() {
 
 #[test]
 fn agent_config_default_tool_dispatcher() {
-    let agent = DelegateAgentConfig::default();
+    let agent = AliasedAgentConfig::default();
     assert_eq!(
         agent.tool_dispatcher, "auto",
         "default tool_dispatcher should be 'auto'"
@@ -86,7 +86,7 @@ fn agent_config_default_tool_dispatcher() {
 
 #[test]
 fn agent_config_default_compact_context_on() {
-    let agent = DelegateAgentConfig::default();
+    let agent = AliasedAgentConfig::default();
     assert!(
         agent.compact_context,
         "compact_context should default to true"
@@ -278,9 +278,9 @@ default_temperature = 0.7
         parsed.agents.is_empty(),
         "minimal TOML should not synthesize any agent"
     );
-    // The DelegateAgentConfig defaults still apply when an agent IS
+    // The AliasedAgentConfig defaults still apply when an agent IS
     // configured but omits a tunable.
-    let default_agent_cfg = zeroclaw_config::schema::DelegateAgentConfig::default();
+    let default_agent_cfg = zeroclaw_config::schema::AliasedAgentConfig::default();
     assert_eq!(default_agent_cfg.max_tool_iterations, 10);
     assert_eq!(default_agent_cfg.max_history_messages, 50);
     assert!(default_agent_cfg.compact_context);

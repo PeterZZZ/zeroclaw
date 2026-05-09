@@ -31,7 +31,7 @@ use axum::{Router, extract::State, routing::post};
 use tempfile::TempDir;
 use tokio::sync::Mutex as AsyncMutex;
 use zeroclaw_config::providers::ProvidersConfig;
-use zeroclaw_config::schema::{Config, DelegateAgentConfig, RiskProfileConfig};
+use zeroclaw_config::schema::{Config, AliasedAgentConfig, RiskProfileConfig};
 use zeroclaw_memory::{Memory, MemoryCategory, SqliteMemory};
 
 // Unique sentinel that exists ONLY in the planted Conversation entry — must
@@ -121,7 +121,7 @@ async fn scheduled_run_does_not_leak_conversation_memory_into_provider_request()
     let mut agents = HashMap::new();
     agents.insert(
         "default".to_string(),
-        DelegateAgentConfig {
+        AliasedAgentConfig {
             enabled: true,
             model_provider: format!("{provider_type}.default").into(),
             risk_profile: "default".to_string(),

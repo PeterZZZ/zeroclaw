@@ -129,7 +129,7 @@ mod tests {
         );
         config.agents.insert(
             "test-agent".to_string(),
-            zeroclaw_config::schema::DelegateAgentConfig {
+            zeroclaw_config::schema::AliasedAgentConfig {
                 model_provider: "openrouter.default".into(),
                 risk_profile: "default".to_string(),
                 ..Default::default()
@@ -152,7 +152,7 @@ mod tests {
             .ensure("openrouter", "default")
             .expect("known family");
         config.agents.entry("test-agent".to_string()).or_insert(
-            zeroclaw_config::schema::DelegateAgentConfig {
+            zeroclaw_config::schema::AliasedAgentConfig {
                 model_provider: "openrouter.default".into(),
                 risk_profile: "default".to_string(),
                 ..Default::default()

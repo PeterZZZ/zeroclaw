@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use zeroclaw_api::tool::{Tool, ToolResult};
 use zeroclaw_config::schema::{
-    DelegateAgentConfig, DelegateToolConfig, MemoryNamespaceConfig, ModelProviderConfig,
+    AliasedAgentConfig, DelegateToolConfig, MemoryNamespaceConfig, ModelProviderConfig,
     RiskProfileConfig, RuntimeProfileConfig, SkillBundleConfig,
 };
 use zeroclaw_memory::{Memory, NamespacedMemory};
@@ -61,7 +61,7 @@ pub enum BackgroundTaskStatus {
 /// Background results are persisted to `workspace/delegate_results/{task_id}.json`
 /// and can be retrieved via `action: "check_result"`.
 pub struct DelegateTool {
-    agents: Arc<HashMap<String, DelegateAgentConfig>>,
+    agents: Arc<HashMap<String, AliasedAgentConfig>>,
     security: Arc<SecurityPolicy>,
     /// Global credential (from config.api_key) used when an agent has none set.
     global_credential: Option<String>,
@@ -95,7 +95,7 @@ pub struct DelegateTool {
 
 impl DelegateTool {
     pub fn new(
-        agents: HashMap<String, DelegateAgentConfig>,
+        agents: HashMap<String, AliasedAgentConfig>,
         global_credential: Option<String>,
         security: Arc<SecurityPolicy>,
     ) -> Self {
@@ -108,7 +108,7 @@ impl DelegateTool {
     }
 
     pub fn new_with_options(
-        agents: HashMap<String, DelegateAgentConfig>,
+        agents: HashMap<String, AliasedAgentConfig>,
         global_credential: Option<String>,
         security: Arc<SecurityPolicy>,
         provider_runtime_options: zeroclaw_providers::ModelProviderRuntimeOptions,
@@ -137,7 +137,7 @@ impl DelegateTool {
     /// When sub-agents eventually get their own tool registry, construct
     /// their DelegateTool via this method with `depth: parent.depth + 1`.
     pub fn with_depth(
-        agents: HashMap<String, DelegateAgentConfig>,
+        agents: HashMap<String, AliasedAgentConfig>,
         global_credential: Option<String>,
         security: Arc<SecurityPolicy>,
         depth: u32,
@@ -152,7 +152,7 @@ impl DelegateTool {
     }
 
     pub fn with_depth_and_options(
-        agents: HashMap<String, DelegateAgentConfig>,
+        agents: HashMap<String, AliasedAgentConfig>,
         global_credential: Option<String>,
         security: Arc<SecurityPolicy>,
         depth: u32,
@@ -380,7 +380,7 @@ impl DelegateTool {
     /// Returns the namespaced memory if memory_namespace is set, otherwise returns
     /// the original memory.
     #[allow(dead_code)] // WIP: will be used when delegate agents support memory
-    fn get_agent_memory(&self, agent_config: &DelegateAgentConfig) -> Option<Arc<dyn Memory>> {
+    fn get_agent_memory(&self, agent_config: &AliasedAgentConfig) -> Option<Arc<dyn Memory>> {
         self.memory.as_ref().map(|mem| {
             if let Some(ns) = self.resolve_memory_ns(&agent_config.memory_namespace) {
                 Arc::new(NamespacedMemory::new(mem.clone(), ns)) as Arc<dyn Memory>
@@ -1222,7 +1222,7 @@ impl DelegateTool {
     /// with the operator-configured `system_prompt` string.
     fn build_enriched_system_prompt(
         &self,
-        agent_config: &DelegateAgentConfig,
+        agent_config: &AliasedAgentConfig,
         model_name: &str,
         sub_tools: &[Box<dyn Tool>],
         workspace_dir: &Path,
@@ -1302,7 +1302,7 @@ impl DelegateTool {
     async fn execute_agentic(
         &self,
         agent_name: &str,
-        agent_config: &DelegateAgentConfig,
+        agent_config: &AliasedAgentConfig,
         provider_type: &str,
         model: &str,
         model_provider: &dyn ModelProvider,
@@ -1502,11 +1502,11 @@ mod tests {
         Arc::new(SecurityPolicy::default())
     }
 
-    fn sample_agents() -> HashMap<String, DelegateAgentConfig> {
+    fn sample_agents() -> HashMap<String, AliasedAgentConfig> {
         let mut agents = HashMap::new();
         agents.insert(
             "researcher".to_string(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 system_prompt: Some("You are a research assistant.".to_string()),
                 model_provider: "ollama.researcher".into(),
                 ..Default::default()
@@ -1514,7 +1514,7 @@ mod tests {
         );
         agents.insert(
             "coder".to_string(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "openrouter.coder".into(),
                 ..Default::default()
             },
@@ -1661,8 +1661,8 @@ mod tests {
         }
     }
 
-    fn agentic_agent_config() -> DelegateAgentConfig {
-        DelegateAgentConfig {
+    fn agentic_agent_config() -> AliasedAgentConfig {
+        AliasedAgentConfig {
             system_prompt: Some("You are agentic.".to_string()),
             model_provider: "openrouter.agentic".into(),
             runtime_profile: "agentic_test".to_string(),
@@ -1800,7 +1800,7 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert(
             "broken".to_string(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "totally-invalid-provider.default".into(),
                 ..Default::default()
             },
@@ -1908,7 +1908,7 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert(
             "tester".to_string(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "invalid-for-test.default".into(),
                 ..Default::default()
             },
@@ -1938,7 +1938,7 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert(
             "tester".to_string(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "invalid-for-test.default".into(),
                 ..Default::default()
             },
@@ -2359,7 +2359,7 @@ mod tests {
 
     #[test]
     fn enriched_prompt_includes_tools_workspace_datetime() {
-        let config = DelegateAgentConfig {
+        let config = AliasedAgentConfig {
             system_prompt: Some("You are a code reviewer.".to_string()),
             model_provider: "openrouter.test".into(),
             ..Default::default()
@@ -2403,7 +2403,7 @@ mod tests {
 
     #[test]
     fn enriched_prompt_includes_shell_policy_when_shell_present() {
-        let config = DelegateAgentConfig::default();
+        let config = AliasedAgentConfig::default();
 
         struct MockShellTool;
         #[async_trait]
@@ -2474,7 +2474,7 @@ mod tests {
 
     #[test]
     fn enriched_prompt_omits_shell_policy_without_shell_tool() {
-        let config = DelegateAgentConfig::default();
+        let config = AliasedAgentConfig::default();
 
         let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
         let workspace = std::env::temp_dir();
@@ -2507,7 +2507,7 @@ mod tests {
         );
         config.agents.insert(
             "ok".into(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "ollama.default".into(),
                 risk_profile: "default".into(),
                 ..Default::default()
@@ -2534,7 +2534,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = DelegateAgentConfig {
+        let config = AliasedAgentConfig {
             skill_bundles: vec!["code_review".to_string()],
             ..Default::default()
         };
@@ -2580,7 +2580,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = DelegateAgentConfig::default();
+        let config = AliasedAgentConfig::default();
 
         let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
 

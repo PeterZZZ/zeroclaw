@@ -3477,7 +3477,7 @@ mod tests {
     /// the alias-specific entry rather than `first_model_provider()`.
     fn config_with_two_anthropic_aliases() -> zeroclaw_config::schema::Config {
         use zeroclaw_config::schema::{
-            AnthropicModelProviderConfig, Config, DelegateAgentConfig, ModelProviderConfig,
+            AnthropicModelProviderConfig, Config, AliasedAgentConfig, ModelProviderConfig,
         };
         let mut config = Config::default();
         let default_alias = AnthropicModelProviderConfig {
@@ -3506,14 +3506,14 @@ mod tests {
             .models
             .anthropic
             .insert("work".to_string(), work_alias);
-        let work_agent = DelegateAgentConfig {
+        let work_agent = AliasedAgentConfig {
             model_provider: "anthropic.work".into(),
-            ..DelegateAgentConfig::default()
+            ..AliasedAgentConfig::default()
         };
         config.agents.insert("work_agent".to_string(), work_agent);
-        let default_agent = DelegateAgentConfig {
+        let default_agent = AliasedAgentConfig {
             model_provider: "anthropic.default".into(),
-            ..DelegateAgentConfig::default()
+            ..AliasedAgentConfig::default()
         };
         config
             .agents

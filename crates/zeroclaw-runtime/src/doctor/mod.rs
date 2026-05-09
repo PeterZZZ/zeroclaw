@@ -1126,7 +1126,7 @@ mod tests {
         let mut config = Config::default();
         config.agents.insert(
             "broken".to_string(),
-            zeroclaw_config::schema::DelegateAgentConfig {
+            zeroclaw_config::schema::AliasedAgentConfig {
                 model_provider: "totally-fake.default".into(),
                 risk_profile: "default".to_string(),
                 ..Default::default()
@@ -1268,14 +1268,14 @@ mod tests {
         let mut config = Config::default();
         config.agents.insert(
             "zeta".into(),
-            zeroclaw_config::schema::DelegateAgentConfig {
+            zeroclaw_config::schema::AliasedAgentConfig {
                 model_provider: "totally-fake.default".into(),
                 ..Default::default()
             },
         );
         config.agents.insert(
             "alpha".into(),
-            zeroclaw_config::schema::DelegateAgentConfig {
+            zeroclaw_config::schema::AliasedAgentConfig {
                 model_provider: "totally-fake.default".into(),
                 ..Default::default()
             },

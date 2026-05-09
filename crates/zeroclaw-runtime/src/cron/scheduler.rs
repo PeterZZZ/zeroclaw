@@ -727,7 +727,7 @@ mod tests {
         );
         config.agents.insert(
             "test-agent".to_string(),
-            zeroclaw_config::schema::DelegateAgentConfig {
+            zeroclaw_config::schema::AliasedAgentConfig {
                 model_provider: "openrouter.default".into(),
                 risk_profile: "default".to_string(),
                 ..Default::default()

@@ -327,7 +327,7 @@ pub struct Config {
     /// Delegate agent configurations for multi-agent workflows.
     #[serde(default)]
     #[nested]
-    pub agents: HashMap<String, DelegateAgentConfig>,
+    pub agents: HashMap<String, AliasedAgentConfig>,
 
     /// Named risk/autonomy profiles (`[risk_profiles.<alias>]`).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -2581,7 +2581,7 @@ impl Default for DelegateToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "delegate-agent"]
-pub struct DelegateAgentConfig {
+pub struct AliasedAgentConfig {
     /// Whether this agent is active. Set false to disable without removing the definition.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -2731,7 +2731,7 @@ fn default_agent_compact_context() -> bool {
     true
 }
 
-impl Default for DelegateAgentConfig {
+impl Default for AliasedAgentConfig {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -2841,7 +2841,7 @@ impl Config {
     /// isn't configured — callers should treat this as a config error
     /// rather than synthesizing a default.
     #[must_use]
-    pub fn agent(&self, agent_alias: &str) -> Option<&DelegateAgentConfig> {
+    pub fn agent(&self, agent_alias: &str) -> Option<&AliasedAgentConfig> {
         self.agents.get(agent_alias)
     }
 
@@ -8263,7 +8263,7 @@ pub struct RuntimeProfileConfig {
     pub allowed_tools: Vec<String>,
     /// Agentic run timeout in seconds.
     pub agentic_timeout_secs: Option<u64>,
-    // ── Per-agent runtime tunables (also live on DelegateAgentConfig) ─
+    // ── Per-agent runtime tunables (also live on AliasedAgentConfig) ─
     /// Maximum conversation history messages retained per session. `None` inherits.
     pub max_history_messages: Option<usize>,
     /// Maximum estimated tokens for context before compaction. `None` inherits.
@@ -15080,7 +15080,7 @@ reasoning_effort = "turbo"
 
     #[test]
     async fn agent_config_defaults() {
-        let cfg = DelegateAgentConfig::default();
+        let cfg = AliasedAgentConfig::default();
         assert!(cfg.compact_context);
         assert_eq!(cfg.max_tool_iterations, 10);
         assert_eq!(cfg.max_history_messages, 50);
@@ -15357,7 +15357,7 @@ default_temperature = 0.7
         );
         config.agents.insert(
             "worker".into(),
-            DelegateAgentConfig {
+            AliasedAgentConfig {
                 model_provider: "openrouter.worker".into(),
                 ..Default::default()
             },
