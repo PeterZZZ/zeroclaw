@@ -55,19 +55,16 @@ The agent-loop entry binds `agent_alias` as a tracing-span field; SubAgent spawn
 ## CLI
 
 - `zeroclaw agent ...` (singular) — runs an agent.
-- `zeroclaw agents create <alias> --risk-profile <name> [--memory-backend <kind>]` — writes a new `[agents.<alias>]` block, creates the workspace dir, seeds bootstrap identity files.
-- `zeroclaw agents delete <alias> [--yes] [--dry-run]` — drops the config block, strips the alias from peer-group memberships, removes the workspace dir. `--dry-run` prints the impact set without touching anything.
-- `zeroclaw agents list` — prints configured aliases with risk-profile, model-provider, memory-backend, and channel summary.
 
-The `agents delete` active-session refusal (the issue's "refuse on in-flight sessions" guard) lands in v0.8.1 alongside the runtime session registry. v0.8.0 protection is the `--yes`/`--dry-run` flags.
+Agents are added by editing `[agents.<alias>]` blocks in `config.toml`. The runtime creates the per-agent workspace dir under `<install>/agents/<alias>/workspace/` and seeds bootstrap identity files on first agent-loop entry. See the [setup walkthrough](../contributing/multi-agent-setup.md) for full operator guidance.
 
 ## Out of scope for v0.8.0
 
-Documented in the issue's [non-goals list](https://github.com/zeroclaw-labs/zeroclaw/issues/6272) and tracked separately for v0.8.1:
+Tracked separately for v0.8.1:
 
 - Cross-backend cross-agent memory access (e.g. SQLite agent reading a Postgres agent's rows).
 - Agent rename. The `agents.id` UUID indirection is the rename-ready foundation.
 - Pre-delete archive and restore.
-- Per-agent secret namespacing. Single workspace-wide `SecretStore` stays unchanged in v0.8.0.
+- Per-agent secret namespacing. The single workspace-wide `SecretStore` stays unchanged.
 - Lucid wire-format extensions for cross-agent scoping.
-- Active-session refusal on `agents delete`.
+- A dedicated `zeroclaw agents` management CLI for creating/deleting/listing agents (plus the active-session refusal it would gate on).

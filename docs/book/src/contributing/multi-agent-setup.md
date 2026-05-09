@@ -11,35 +11,30 @@ Background: each agent has its own workspace dir at `<install>/agents/<alias>/wo
 
 ## Add a second agent
 
-```bash
-zeroclaw agents create researcher \
-    --risk-profile default \
-    --memory-backend sqlite
-```
-
-This:
-
-1. Writes a new `[agents.researcher]` block to `config.toml` with `enabled = true`, the supplied risk profile, and `memory.backend = "sqlite"`.
-2. Creates `<install>/agents/researcher/workspace/`.
-3. Seeds default identity files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `BOOTSTRAP.md`) so the agent has a basic identity to load on its first run.
-
-Edit those identity files to give the agent its persona; the agent loop reads them on every start.
-
-## Bind a channel
-
-The created agent has no channels by default — without one, it has nowhere to listen. Edit `config.toml`:
+Add a new `[agents.<alias>]` block to `config.toml`:
 
 ```toml
 [agents.researcher]
 enabled = true
 risk_profile = "default"
-channels = ["telegram.prod"]   # must reference a configured [channels.telegram.prod]
+channels = []   # add channel refs in the next step
 
 [agents.researcher.memory]
 backend = "sqlite"
 
 [agents.researcher.workspace]
 # `path` defaults to <install>/agents/researcher/workspace/
+```
+
+The runtime creates `<install>/agents/researcher/workspace/` on first agent-loop entry and seeds default identity files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `BOOTSTRAP.md`) when they don't exist. Edit those identity files to give the agent its persona; the agent loop reads them on every start.
+
+## Bind a channel
+
+Without a channel the agent has nowhere to listen. Add one to the `channels` array on the agent's block:
+
+```toml
+[agents.researcher]
+channels = ["telegram.prod"]   # must reference a configured [channels.telegram.prod]
 ```
 
 Save and restart the daemon. The agent picks up its channel on next start.
@@ -98,34 +93,21 @@ The schema validator at config load enforces:
 
 ## Inspect the install
 
-```bash
-zeroclaw agents list
-```
-
-Prints every configured agent with its risk profile, model provider, memory backend, and channel set. Useful before `agents delete <alias>` to see what's wired up.
+Every configured agent lives under an `[agents.<alias>]` block in `config.toml` with its risk profile, model provider, memory backend, and channel set.
 
 ## Delete an agent
 
-```bash
-zeroclaw agents delete researcher --dry-run
-# review the impact set, then:
-zeroclaw agents delete researcher --yes
-```
-
-`--dry-run` prints the impact set (config block, workspace dir, peer-group memberships) without touching anything. Without `--yes` the command requires an interactive `[y/N]` confirm. On confirm:
-
-- The `[agents.researcher]` block is removed from `config.toml`.
-- Every `[peer_groups.<name>]` that listed `researcher` has the alias stripped (memberships rewrite, the group itself stays).
-- `<install>/agents/researcher/workspace/` is removed.
-
-The agent's memory rows in the shared SQLite/Postgres store are **not** automatically purged — they keep their `agent_id = <researcher-uuid>` attribution, but no live agent maps to that UUID anymore. Manual cleanup if desired:
+1. Remove the `[agents.<alias>]` block (and any nested `[agents.<alias>.workspace]` / `[agents.<alias>.memory]` tables) from `config.toml`.
+2. Strip the alias from every `[peer_groups.<name>]` block's `agents` list.
+3. Remove the workspace dir: `rm -rf <install>/agents/<alias>/workspace/`.
+4. Optional cleanup of the agent's memory rows (they retain `agent_id = <alias-uuid>` attribution but no live agent maps to that UUID anymore):
 
 ```sql
 DELETE FROM memories WHERE agent_id = (SELECT id FROM agents WHERE alias = 'researcher');
 DELETE FROM agents WHERE alias = 'researcher';
 ```
 
-(Per-agent memory data deletion lands as a v0.8.1 follow-up; v0.8.0 leaves the rows in place so an operator can recover them if a delete was a mistake.)
+The schema validator will refuse to load if a `[peer_groups.<name>]` still lists the deleted alias, so step 2 is required before the daemon will start cleanly.
 
 ## Verify
 
