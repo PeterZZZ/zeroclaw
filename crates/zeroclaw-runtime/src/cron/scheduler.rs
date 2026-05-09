@@ -294,8 +294,10 @@ async fn run_agent_job(
     // `SubAgentSpawn::for_agent` so permission inheritance, tracing
     // span shape, and audit attribution stay uniform across spawn
     // sites.
-    let subagent_ctx = match crate::subagent::SubAgentSpawn::for_agent(config, agent_alias) {
-        Ok(spawn) => spawn.build(),
+    let subagent_ctx = match crate::subagent::SubAgentSpawn::for_agent(config, agent_alias)
+        .and_then(|spawn| spawn.build(crate::subagent::SubAgentOverrides::default()))
+    {
+        Ok(ctx) => ctx,
         Err(e) => return (false, format!("subagent spawn failed: {e:#}")),
     };
 

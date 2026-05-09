@@ -27,6 +27,7 @@ pub mod model_switch;
 pub mod read_skill;
 pub mod schedule;
 pub mod security_ops;
+pub mod send_message_to_peer;
 pub mod shell;
 pub mod skill_http;
 pub mod skill_tool;
@@ -127,6 +128,7 @@ pub use model_switch::ModelSwitchTool;
 pub use read_skill::ReadSkillTool;
 pub use schedule::ScheduleTool;
 pub use security_ops::SecurityOpsTool;
+pub use send_message_to_peer::SendMessageToPeerTool;
 pub use shell::ShellTool;
 pub use skill_http::SkillHttpTool;
 pub use skill_tool::SkillShellTool;
@@ -410,6 +412,10 @@ pub fn all_tools_with_runtime(
             agent_alias,
         )),
         Arc::new(SpawnSubagentTool::new(
+            Arc::new(root_config.clone()),
+            agent_alias,
+        )),
+        Arc::new(SendMessageToPeerTool::new(
             Arc::new(root_config.clone()),
             agent_alias,
         )),

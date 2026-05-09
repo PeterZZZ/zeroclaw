@@ -176,12 +176,11 @@ impl PostgresMemory {
             .get(0);
 
         // ALTER memories ADD COLUMN agent_id, backfill, index. Postgres
-        // accepts ADD COLUMN IF NOT EXISTS (since 9.6) and the
-        // CREATE INDEX IF NOT EXISTS (since 9.5), so the whole block is
-        // safely idempotent on every supported PG version. The
-        // default-agent UUID is bound rather than inlined to dodge any
-        // SQL-injection footgun even though uuid_v4 strings are
-        // hex+hyphens.
+        // accepts ADD COLUMN IF NOT EXISTS (since 9.6) and CREATE INDEX
+        // IF NOT EXISTS (since 9.5), so the whole block is safely
+        // idempotent on every supported PG version. The default-agent
+        // UUID is bound rather than inlined to dodge any SQL-injection
+        // footgun even though uuid_v4 strings are hex+hyphens.
         client.batch_execute(&format!(
             "
             ALTER TABLE {qualified_table} ADD COLUMN IF NOT EXISTS agent_id TEXT;
@@ -191,6 +190,50 @@ impl PostgresMemory {
         client.execute(
             &format!("UPDATE {qualified_table} SET agent_id = $1 WHERE agent_id IS NULL"),
             &[&default_uuid],
+        )?;
+
+        // Promote agent_id to NOT NULL REFERENCES agents(id). Both
+        // operations are idempotent: SET NOT NULL is a no-op when the
+        // column is already NOT NULL, and the FK constraint is created
+        // inside a DO block so a re-run skips the duplicate. The DROP
+        // CONSTRAINT IF EXISTS guard handles the rare case where a
+        // previous failed migration left a half-created constraint.
+        let qualified_agents = format!("{schema_ident}.agents");
+        client.batch_execute(&format!(
+            "
+            ALTER TABLE {qualified_table} ALTER COLUMN agent_id SET NOT NULL;
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'memories_agent_id_fk'
+                ) THEN
+                    ALTER TABLE {qualified_table}
+                        ADD CONSTRAINT memories_agent_id_fk
+                        FOREIGN KEY (agent_id) REFERENCES {qualified_agents}(id);
+                END IF;
+            END$$;
+            "
+        ))?;
+
+        // Stamp the schema version so future migrations can detect
+        // on-disk shape without parsing system catalogs.
+        client.batch_execute(&format!(
+            "
+            CREATE TABLE IF NOT EXISTS {schema_ident}.schema_version (
+                component  TEXT PRIMARY KEY,
+                version    INTEGER NOT NULL,
+                applied_at TIMESTAMPTZ NOT NULL
+            );
+            "
+        ))?;
+        client.execute(
+            &format!(
+                "INSERT INTO {schema_ident}.schema_version (component, version, applied_at) \
+                 VALUES ('memories', $1, NOW()) \
+                 ON CONFLICT (component) DO UPDATE SET version = EXCLUDED.version, applied_at = EXCLUDED.applied_at"
+            ),
+            &[&1_i64],
         )?;
 
         Ok(())

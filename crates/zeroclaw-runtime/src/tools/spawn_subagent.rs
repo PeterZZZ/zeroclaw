@@ -5,7 +5,7 @@
 //! [`crate::subagent::SubAgentSpawn`] so permission inheritance,
 //! tracing-span shape, and audit attribution stay uniform.
 
-use crate::subagent::SubAgentSpawn;
+use crate::subagent::{SubAgentOverrides, SubAgentSpawn};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
@@ -68,8 +68,13 @@ impl Tool for SpawnSubagentTool {
             .ok_or_else(|| anyhow::anyhow!("Missing or empty 'prompt' parameter"))?
             .to_string();
 
-        let subagent_ctx = match SubAgentSpawn::for_agent(&self.config, &self.parent_alias) {
-            Ok(spawn) => spawn.build(),
+        // The agent-loop tool inherits the parent's identity verbatim;
+        // narrowing-override knobs land on the tool argument schema
+        // alongside the [agents.<alias>].subagent_* config block.
+        let subagent_ctx = match SubAgentSpawn::for_agent(&self.config, &self.parent_alias)
+            .and_then(|spawn| spawn.build(SubAgentOverrides::default()))
+        {
+            Ok(ctx) => ctx,
             Err(e) => {
                 return Ok(ToolResult {
                     success: false,

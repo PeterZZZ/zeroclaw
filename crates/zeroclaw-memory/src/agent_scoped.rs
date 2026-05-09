@@ -310,14 +310,23 @@ mod tests {
         inner
     }
 
+    /// Insert real agent rows for the supplied aliases and return their
+    /// UUIDs. The NOT NULL FK on `memories.agent_id` means tests that
+    /// attribute rows to a sibling must use UUIDs that actually exist
+    /// in the agents table.
+    async fn provision_agents(inner: &Arc<SqliteMemory>, aliases: &[&str]) -> Vec<String> {
+        let mut uuids = Vec::with_capacity(aliases.len());
+        for alias in aliases {
+            uuids.push(inner.ensure_agent_uuid(alias).await.unwrap());
+        }
+        uuids
+    }
+
     #[tokio::test]
     async fn store_routes_through_store_with_agent_and_persists_attribution() {
         let (_tmp, inner) = fresh_sqlite();
-        let wrapper = AgentScopedMemory::new(
-            as_dyn(inner.clone()),
-            "agent-uuid-alpha",
-            Vec::<String>::new(),
-        );
+        let alpha = inner.ensure_agent_uuid("alpha").await.unwrap();
+        let wrapper = AgentScopedMemory::new(as_dyn(inner.clone()), &alpha, Vec::<String>::new());
 
         wrapper
             .store("k1", "v1", MemoryCategory::Core, None)
@@ -335,9 +344,11 @@ mod tests {
     #[tokio::test]
     async fn recall_excludes_other_agent_rows_when_allowlist_omits_them() {
         let (_tmp, inner) = fresh_sqlite();
-        // Pre-seed with rows attributed to the OTHER agent. Use the
-        // backend's `store_with_agent` directly so we can choose the
-        // attribution.
+        let uuids = provision_agents(&inner, &["alpha", "other"]).await;
+        let alpha_uuid = &uuids[0];
+        let other_uuid = &uuids[1];
+
+        // Pre-seed with rows attributed to the OTHER agent.
         inner
             .store_with_agent(
                 "other-key",
@@ -346,15 +357,12 @@ mod tests {
                 None,
                 None,
                 None,
-                Some("agent-uuid-other"),
+                Some(other_uuid),
             )
             .await
             .unwrap();
 
-        // The wrapper's bound id is alpha and its allowlist is empty
-        // (only itself).
-        let wrapper =
-            AgentScopedMemory::new(as_dyn(inner), "agent-uuid-alpha", Vec::<String>::new());
+        let wrapper = AgentScopedMemory::new(as_dyn(inner), alpha_uuid, Vec::<String>::new());
 
         let hits = wrapper
             .recall("other-key", 10, None, None, None)
@@ -369,6 +377,10 @@ mod tests {
     #[tokio::test]
     async fn recall_includes_allowlisted_sibling_rows() {
         let (_tmp, inner) = fresh_sqlite();
+        let uuids = provision_agents(&inner, &["alpha", "beta"]).await;
+        let alpha_uuid = &uuids[0];
+        let beta_uuid = &uuids[1];
+
         inner
             .store_with_agent(
                 "sibling-key",
@@ -377,16 +389,12 @@ mod tests {
                 None,
                 None,
                 None,
-                Some("agent-uuid-beta"),
+                Some(beta_uuid),
             )
             .await
             .unwrap();
 
-        let wrapper = AgentScopedMemory::new(
-            as_dyn(inner),
-            "agent-uuid-alpha",
-            vec!["agent-uuid-beta".to_string()],
-        );
+        let wrapper = AgentScopedMemory::new(as_dyn(inner), alpha_uuid, vec![beta_uuid.clone()]);
 
         let hits = wrapper
             .recall("sibling-key", 10, None, None, None)
@@ -401,6 +409,11 @@ mod tests {
     #[tokio::test]
     async fn recall_for_agents_intersects_caller_allowlist_with_bound_allowlist() {
         let (_tmp, inner) = fresh_sqlite();
+        let uuids = provision_agents(&inner, &["alpha", "beta", "rogue"]).await;
+        let alpha_uuid = &uuids[0];
+        let beta_uuid = &uuids[1];
+        let rogue_uuid = &uuids[2];
+
         inner
             .store_with_agent(
                 "rogue-key",
@@ -409,22 +422,18 @@ mod tests {
                 None,
                 None,
                 None,
-                Some("agent-uuid-rogue"),
+                Some(rogue_uuid),
             )
             .await
             .unwrap();
 
-        let wrapper = AgentScopedMemory::new(
-            as_dyn(inner),
-            "agent-uuid-alpha",
-            vec!["agent-uuid-beta".to_string()],
-        );
+        let wrapper = AgentScopedMemory::new(as_dyn(inner), alpha_uuid, vec![beta_uuid.clone()]);
 
         // Caller asks for a rogue agent that is NOT on the wrapper's
         // bound allowlist. Intersection drops it, so the recall sees
         // no rogue rows.
         let hits = wrapper
-            .recall_for_agents(&["agent-uuid-rogue"], "rogue-key", 10, None, None, None)
+            .recall_for_agents(&[rogue_uuid.as_str()], "rogue-key", 10, None, None, None)
             .await
             .unwrap();
         assert!(

@@ -48,6 +48,32 @@ impl ResolvedPeers {
     /// already drop the bot's own messages before they reach this
     /// check; this method's contribution is the cross-agent peering
     /// shape.
+    /// Whether the bound agent recognizes `target` as a peer on
+    /// `channel` for outbound dispatch.
+    ///
+    /// Unlike [`Self::allows_inbound`], this method does not
+    /// default-accept unknown origins: outbound tool sends must address
+    /// a peer the agent has explicitly opted into (via mutual
+    /// peer-group membership for sibling agents, or via the group's
+    /// `external_peers` list for non-agent identities). A `false`
+    /// return tells `send_message_to_peer` to refuse the send rather
+    /// than dispatching at the channel layer.
+    #[must_use]
+    pub fn is_known_peer(&self, channel: &ChannelRef, target: &str) -> bool {
+        if let Some(agent_set) = self.agent_peers.get(channel)
+            && agent_set.contains(target)
+        {
+            return true;
+        }
+        if let Some(ext_set) = self.external_peers.get(channel) {
+            let normalized = target.trim_start_matches('@').to_ascii_lowercase();
+            if ext_set.contains(&normalized) {
+                return true;
+            }
+        }
+        false
+    }
+
     #[must_use]
     pub fn allows_inbound(&self, channel: &ChannelRef, origin: &str) -> bool {
         if let Some(agent_set) = self.agent_peers.get(channel)
@@ -66,6 +92,26 @@ impl ResolvedPeers {
         // channels; the peer registry is for cross-agent dispatch).
         true
     }
+}
+
+/// Defense-in-depth self-loop guard for the agent loop entry point.
+///
+/// Returns `true` when `sender` is recognizable as the bot's own
+/// outbound identity on this channel and the agent loop should refuse
+/// to spawn a turn. Mirrors `Channel::drop_self_messages`'s
+/// normalization (strip leading `@`, case-insensitive) so the two
+/// layers agree on what "self" means; the agent-loop call is a
+/// fallback for channel impls that route around the SDK guard or that
+/// expose self-identity later in their lifecycle than the
+/// orchestrator's check fires.
+#[must_use]
+pub fn should_drop_self_loop(sender: &str, self_handle: Option<&str>) -> bool {
+    let Some(handle) = self_handle else {
+        return false;
+    };
+    let handle_norm = handle.trim_start_matches('@').to_ascii_lowercase();
+    let sender_norm = sender.trim_start_matches('@').to_ascii_lowercase();
+    !handle_norm.is_empty() && handle_norm == sender_norm
 }
 
 /// Build the effective peer set for `agent_alias`.
@@ -235,5 +281,41 @@ mod tests {
             resolved.allows_inbound(&channel, "@Operator"),
             "external peer match must normalize @ prefix and case"
         );
+    }
+
+    #[test]
+    fn is_known_peer_rejects_unknown_target_unlike_allows_inbound() {
+        let cfg = make_config_with_two_agents_in_one_group();
+        let resolved = resolve_peer_set(&cfg, "alpha");
+        let channel = ChannelRef::from("telegram.prod");
+        // allows_inbound default-accepts (inbound DMs from non-peers
+        // are legitimate); is_known_peer is the stricter outbound
+        // check.
+        assert!(resolved.allows_inbound(&channel, "stranger"));
+        assert!(!resolved.is_known_peer(&channel, "stranger"));
+        // Known peer agents and external peers (with `@` normalization)
+        // are accepted on both checks.
+        assert!(resolved.is_known_peer(&channel, "beta"));
+        assert!(resolved.is_known_peer(&channel, "@Operator"));
+    }
+
+    #[test]
+    fn should_drop_self_loop_returns_false_when_handle_unknown() {
+        assert!(!should_drop_self_loop("@anyone", None));
+    }
+
+    #[test]
+    fn should_drop_self_loop_matches_normalized_handle() {
+        assert!(should_drop_self_loop("@my_bot", Some("@my_bot")));
+        assert!(should_drop_self_loop("@MY_BOT", Some("my_bot")));
+        assert!(should_drop_self_loop("my_bot", Some("@My_Bot")));
+        assert!(!should_drop_self_loop("@other_bot", Some("@my_bot")));
+    }
+
+    #[test]
+    fn should_drop_self_loop_ignores_empty_handle_after_normalization() {
+        // A handle of "@" (empty after stripping the @) must not match
+        // every inbound; the guard only fires on a real handle.
+        assert!(!should_drop_self_loop("@anyone", Some("@")));
     }
 }

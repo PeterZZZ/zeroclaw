@@ -2734,23 +2734,38 @@ async fn process_channel_message(
         })
         .cloned();
 
-    // Self-loop guard. A bot must never respond to its own messages,
-    // even when a misconfigured peer group lists the bot's handle as
-    // an external peer. Channels that expose their self-identity via
-    // Channel::self_handle() get caught here at the SDK boundary;
-    // channels that do not yet expose identity fall through
-    // (Channel::drop_self_messages defaults to false) and
-    // rely on the agent-loop fallback that compares against the
-    // outbound queue.
-    if let Some(channel) = target_channel.as_ref()
-        && channel.drop_self_messages(&msg)
-    {
-        tracing::debug!(
-            channel = %msg.channel,
-            sender = %msg.sender,
-            "dropping self-authored inbound message (self-loop guard)"
-        );
-        return;
+    // Self-loop guard, two-layer.
+    //
+    // Layer 1 — SDK side: channels that expose `Channel::self_handle()`
+    // get caught here.
+    //
+    // Layer 2 — agent-loop fallback: even when the channel returned a
+    // handle and Layer 1 ran, re-check via the shared
+    // `peers::should_drop_self_loop` helper using the same handle. The
+    // fallback exists so a channel impl that gains its
+    // self-identity later in its lifecycle (after Layer 1's check
+    // fired with `None`) still has a guard available; both layers use
+    // identical normalization so they agree on what "self" means.
+    if let Some(channel) = target_channel.as_ref() {
+        if channel.drop_self_messages(&msg) {
+            tracing::debug!(
+                channel = %msg.channel,
+                sender = %msg.sender,
+                "dropping self-authored inbound message (self-loop guard, sdk layer)"
+            );
+            return;
+        }
+        if zeroclaw_runtime::peers::should_drop_self_loop(
+            &msg.sender,
+            channel.self_handle().as_deref(),
+        ) {
+            tracing::debug!(
+                channel = %msg.channel,
+                sender = %msg.sender,
+                "dropping self-authored inbound message (self-loop guard, agent-loop fallback)"
+            );
+            return;
+        }
     }
 
     if let Err(err) = maybe_apply_runtime_config_update(ctx.as_ref()).await {

@@ -178,3 +178,117 @@ async fn two_sqlite_agents_on_one_install_have_isolated_memory() {
         "agent must always recall its own rows"
     );
 }
+
+/// Peer-group routing: two agents in a shared peer group on the same
+/// channel resolve each other as peers, see external peers in their
+/// resolved set, and reject inbound from unknown senders. The send
+/// path goes through `SendMessageToPeerTool`'s peer-set check; we
+/// don't actually deliver here (no `DELIVERY_FN` registered in the
+/// hermetic test) — the assertion is that the authorization surface
+/// admits and rejects the right shapes.
+#[tokio::test]
+async fn peer_group_routes_messages_only_within_resolved_peer_set() {
+    use serde_json::json;
+    use std::sync::Arc;
+    use zeroclaw_api::tool::Tool;
+    use zeroclaw_config::multi_agent::{AgentAlias, PeerExternal, PeerGroupConfig, PeerUsername};
+    use zeroclaw_config::providers::ChannelRef;
+    use zeroclaw_config::schema::{AliasedAgentConfig, Config, RiskProfileConfig};
+    use zeroclaw_runtime::peers::resolve_peer_set;
+    use zeroclaw_runtime::tools::SendMessageToPeerTool;
+
+    let mut cfg = Config::default();
+    cfg.risk_profiles
+        .insert("default".into(), RiskProfileConfig::default());
+    for alias in ["alpha", "beta", "gamma"] {
+        let mut agent = AliasedAgentConfig {
+            risk_profile: "default".into(),
+            ..AliasedAgentConfig::default()
+        };
+        agent.channels.push(ChannelRef::from("telegram.prod"));
+        cfg.agents.insert(alias.to_string(), agent);
+    }
+    cfg.peer_groups.insert(
+        "research".into(),
+        PeerGroupConfig {
+            channel: ChannelRef::from("telegram.prod"),
+            // Only alpha + beta are in the group; gamma listens on the
+            // channel but is not a peer.
+            agents: vec![AgentAlias::from("alpha"), AgentAlias::from("beta")],
+            external_peers: vec![PeerExternal {
+                username: PeerUsername::from("operator"),
+            }],
+            ignore: vec![],
+        },
+    );
+
+    // Resolver invariants: alpha sees beta + operator; gamma is not
+    // a recognized outbound target (not on the peer group).
+    let alpha_peers = resolve_peer_set(&cfg, "alpha");
+    let channel = ChannelRef::from("telegram.prod");
+    assert!(
+        alpha_peers.is_known_peer(&channel, "beta"),
+        "alpha must recognize peer beta for outbound dispatch"
+    );
+    assert!(
+        alpha_peers.is_known_peer(&channel, "@Operator"),
+        "alpha must recognize external peer (case + @ normalized) for outbound"
+    );
+    assert!(
+        !alpha_peers.is_known_peer(&channel, "gamma"),
+        "alpha must NOT recognize gamma for outbound — gamma is not on the peer group"
+    );
+
+    let gamma_peers = resolve_peer_set(&cfg, "gamma");
+    assert_eq!(
+        gamma_peers,
+        zeroclaw_runtime::peers::ResolvedPeers::default(),
+        "gamma is on no peer group; resolved set is empty"
+    );
+
+    // Tool side: alpha can authorize a send to beta and to the
+    // external peer; alpha cannot authorize a send to gamma (not on
+    // the peer group).
+    let cfg = Arc::new(cfg);
+    let tool = SendMessageToPeerTool::new(cfg.clone(), "alpha");
+
+    let to_gamma = tool
+        .execute(json!({
+            "channel": "telegram.prod",
+            "target": "gamma",
+            "message": "hi"
+        }))
+        .await
+        .expect("execute returns Ok with structured failure");
+    assert!(!to_gamma.success, "send to non-peer must be rejected");
+    assert!(
+        to_gamma
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not on agent"),
+        "rejection must name the peer-set check, got: {:?}",
+        to_gamma.error
+    );
+
+    // Sends to beta and to the external peer are authorized by the
+    // peer-set check; delivery itself fails (no DELIVERY_FN registered)
+    // but that's a different layer than authorization.
+    let to_beta = tool
+        .execute(json!({
+            "channel": "telegram.prod",
+            "target": "beta",
+            "message": "hi"
+        }))
+        .await
+        .expect("execute returns Ok");
+    assert!(
+        to_beta
+            .error
+            .as_deref()
+            .map(|e| !e.contains("not on agent"))
+            .unwrap_or(true),
+        "peer-set check must pass for beta; tool error (if any) must be from the delivery layer, got: {:?}",
+        to_beta.error
+    );
+}
