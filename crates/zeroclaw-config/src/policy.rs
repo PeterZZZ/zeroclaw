@@ -326,12 +326,36 @@ fn roots_contain(roots: &[PathBuf], expanded: &Path) -> bool {
     })
 }
 
+/// Subset check on two filesystem paths: returns `true` when `child`
+/// is the same as `parent` or a descendant of it. Used by the SubAgent
+/// escalation validator so a child can legitimately narrow `/srv` to
+/// `/srv/app` without the validator rejecting the narrowing as if it
+/// were a foreign path. Tries the canonical form first to handle
+/// symlinks consistently, then falls back to the literal path so
+/// not-yet-existing per-agent dirs (which do not canonicalize) still
+/// match.
+fn path_contains(parent: &Path, child: &Path) -> bool {
+    let canonical_parent = parent
+        .canonicalize()
+        .unwrap_or_else(|_| parent.to_path_buf());
+    let canonical_child = child.canonicalize().unwrap_or_else(|_| child.to_path_buf());
+    canonical_child.starts_with(&canonical_parent) || child.starts_with(parent)
+}
+
 /// Specific kind of escalation violation returned by
 /// [`SecurityPolicy::ensure_no_escalation_beyond`]. Each variant names
 /// the field that violated subset semantics so the SubAgent spawn path
 /// can produce a precise error to the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationViolation {
+    /// Child raises `autonomy` above the parent (e.g. parent
+    /// `Supervised`, child `Full`). The autonomy level gates the
+    /// entire `can_act` and approval flow, so silent escalation here
+    /// would bypass every other guard.
+    AutonomyAboveParent {
+        child: AutonomyLevel,
+        parent: AutonomyLevel,
+    },
     /// `child.allowed_roots` contains a path the parent cannot rw.
     ReadWriteRootNotInParent { path: PathBuf },
     /// `child.allowed_roots_read_only` contains a path the parent
@@ -343,24 +367,47 @@ pub enum EscalationViolation {
     /// Parent enforces workspace_only but the child override tries to
     /// turn it off.
     WorkspaceOnlyDisabledByChild,
+    /// Child drops a forbidden_paths entry the parent enforces. Subset
+    /// semantics on forbidden lists run the opposite direction from
+    /// allowlists: parent ⊆ child, so the child can ADD entries but
+    /// never DROP them.
+    ForbiddenPathDroppedByChild { path: String },
+    /// Child raises `shell_env_passthrough` to leak env vars the
+    /// parent declined to forward.
+    ShellEnvPassthroughExpanded { variable: String },
     /// Child override raises `max_actions_per_hour` above the
     /// parent's ceiling.
     MaxActionsExceeded { child: u32, parent: u32 },
     /// Child override raises `max_cost_per_day_cents` above the
     /// parent's ceiling.
     MaxCostExceeded { child: u32, parent: u32 },
+    /// Child override raises `shell_timeout_secs` above the parent's
+    /// ceiling. The shell budget is a runaway-process guard; raising
+    /// it on the child side defeats the parent's intent.
+    ShellTimeoutExceeded { child: u64, parent: u64 },
+    /// Child flips `block_high_risk_commands` from `true` (parent) to
+    /// `false`, opening the high-risk command surface the parent
+    /// closed.
+    BlockHighRiskCommandsDisabledByChild,
+    /// Child flips `require_approval_for_medium_risk` from `true`
+    /// (parent) to `false`, bypassing the human-in-the-loop step the
+    /// parent required.
+    RequireApprovalDisabledByChild,
 }
 
 impl std::fmt::Display for EscalationViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AutonomyAboveParent { child, parent } => {
+                write!(f, "subagent autonomy={child:?} exceeds parent's {parent:?}")
+            }
             Self::ReadWriteRootNotInParent { path } => write!(
                 f,
-                "subagent allowed_roots entry {path:?} is not present on the parent's allowed_roots"
+                "subagent allowed_roots entry {path:?} is not contained within any of the parent's allowed_roots entries"
             ),
             Self::ReadOnlyRootNotInParent { path } => write!(
                 f,
-                "subagent allowed_roots_read_only entry {path:?} is not present on the parent's allowed_roots or allowed_roots_read_only"
+                "subagent allowed_roots_read_only entry {path:?} is not contained within the parent's allowed_roots or allowed_roots_read_only"
             ),
             Self::CommandNotInParent { command } => write!(
                 f,
@@ -370,6 +417,14 @@ impl std::fmt::Display for EscalationViolation {
                 f,
                 "subagent attempts to disable workspace_only but the parent enforces it"
             ),
+            Self::ForbiddenPathDroppedByChild { path } => write!(
+                f,
+                "subagent drops forbidden_paths entry {path:?} that the parent enforces"
+            ),
+            Self::ShellEnvPassthroughExpanded { variable } => write!(
+                f,
+                "subagent shell_env_passthrough entry {variable:?} is not present on the parent's list"
+            ),
             Self::MaxActionsExceeded { child, parent } => write!(
                 f,
                 "subagent max_actions_per_hour={child} exceeds parent's {parent}"
@@ -377,6 +432,18 @@ impl std::fmt::Display for EscalationViolation {
             Self::MaxCostExceeded { child, parent } => write!(
                 f,
                 "subagent max_cost_per_day_cents={child} exceeds parent's {parent}"
+            ),
+            Self::ShellTimeoutExceeded { child, parent } => write!(
+                f,
+                "subagent shell_timeout_secs={child} exceeds parent's {parent}"
+            ),
+            Self::BlockHighRiskCommandsDisabledByChild => write!(
+                f,
+                "subagent attempts to set block_high_risk_commands=false but the parent enforces it"
+            ),
+            Self::RequireApprovalDisabledByChild => write!(
+                f,
+                "subagent attempts to set require_approval_for_medium_risk=false but the parent enforces it"
             ),
         }
     }
@@ -1598,9 +1665,7 @@ impl SecurityPolicy {
 
         file_name == "config.toml"
             || file_name == "config.toml.bak"
-            || file_name == "active_workspace.toml"
             || file_name.starts_with(".config.toml.tmp-")
-            || file_name.starts_with(".active_workspace.toml.tmp-")
     }
 
     pub fn runtime_config_violation_message(&self, resolved: &Path) -> String {
@@ -1769,14 +1834,31 @@ impl SecurityPolicy {
         &self,
         parent: &SecurityPolicy,
     ) -> Result<(), EscalationViolation> {
+        // Autonomy: child must not exceed parent. ReadOnly < Supervised
+        // < Full per the AutonomyLevel ordering.
+        if self.autonomy > parent.autonomy {
+            return Err(EscalationViolation::AutonomyAboveParent {
+                child: self.autonomy,
+                parent: parent.autonomy,
+            });
+        }
+
+        // Allowed roots: every child rw root must be CONTAINED in some
+        // parent rw root (so a child of `/srv/app` under a parent of
+        // `/srv` accepts; a child of `/srv` under a parent of
+        // `/srv/app` does not). Containment, not exact equality, lets
+        // the child legitimately narrow scope.
         for root in &self.allowed_roots {
-            if !parent.allowed_roots.iter().any(|p| p == root) {
+            if !parent.allowed_roots.iter().any(|p| path_contains(p, root)) {
                 return Err(EscalationViolation::ReadWriteRootNotInParent { path: root.clone() });
             }
         }
         for root in &self.allowed_roots_read_only {
-            let in_parent_rw = parent.allowed_roots.iter().any(|p| p == root);
-            let in_parent_ro = parent.allowed_roots_read_only.iter().any(|p| p == root);
+            let in_parent_rw = parent.allowed_roots.iter().any(|p| path_contains(p, root));
+            let in_parent_ro = parent
+                .allowed_roots_read_only
+                .iter()
+                .any(|p| path_contains(p, root));
             if !in_parent_rw && !in_parent_ro {
                 return Err(EscalationViolation::ReadOnlyRootNotInParent { path: root.clone() });
             }
@@ -1791,6 +1873,28 @@ impl SecurityPolicy {
         if parent.workspace_only && !self.workspace_only {
             return Err(EscalationViolation::WorkspaceOnlyDisabledByChild);
         }
+
+        // Forbidden paths run the OPPOSITE direction from allowlists:
+        // the parent's forbidden set must be a subset of the child's,
+        // i.e. the child cannot drop a parent's forbidden entry.
+        for parent_forbidden in &parent.forbidden_paths {
+            if !self.forbidden_paths.iter().any(|c| c == parent_forbidden) {
+                return Err(EscalationViolation::ForbiddenPathDroppedByChild {
+                    path: parent_forbidden.clone(),
+                });
+            }
+        }
+
+        // shell_env_passthrough is a leak surface: every child entry
+        // must already be on the parent's list.
+        for var in &self.shell_env_passthrough {
+            if !parent.shell_env_passthrough.iter().any(|p| p == var) {
+                return Err(EscalationViolation::ShellEnvPassthroughExpanded {
+                    variable: var.clone(),
+                });
+            }
+        }
+
         if self.max_actions_per_hour > parent.max_actions_per_hour {
             return Err(EscalationViolation::MaxActionsExceeded {
                 child: self.max_actions_per_hour,
@@ -1803,6 +1907,19 @@ impl SecurityPolicy {
                 parent: parent.max_cost_per_day_cents,
             });
         }
+        if self.shell_timeout_secs > parent.shell_timeout_secs {
+            return Err(EscalationViolation::ShellTimeoutExceeded {
+                child: self.shell_timeout_secs,
+                parent: parent.shell_timeout_secs,
+            });
+        }
+        if parent.block_high_risk_commands && !self.block_high_risk_commands {
+            return Err(EscalationViolation::BlockHighRiskCommandsDisabledByChild);
+        }
+        if parent.require_approval_for_medium_risk && !self.require_approval_for_medium_risk {
+            return Err(EscalationViolation::RequireApprovalDisabledByChild);
+        }
+
         Ok(())
     }
 
@@ -4021,6 +4138,134 @@ mod tests {
     }
 
     #[test]
+    fn ensure_no_escalation_rejects_higher_autonomy() {
+        let parent = SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            ..parent_policy_for_escalation_tests()
+        };
+        let child = SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            ..parent.clone()
+        };
+        let err = child
+            .ensure_no_escalation_beyond(&parent)
+            .expect_err("Full child under Supervised parent must be rejected");
+        assert!(matches!(
+            err,
+            EscalationViolation::AutonomyAboveParent { child, parent }
+            if child == AutonomyLevel::Full && parent == AutonomyLevel::Supervised
+        ));
+    }
+
+    #[test]
+    fn ensure_no_escalation_accepts_subpath_narrowing_inside_parent_root() {
+        // Parent grants /projects rw; child narrows to /projects/repo —
+        // a containment relation, not exact equality. Must accept.
+        let parent = parent_policy_for_escalation_tests();
+        let child = SecurityPolicy {
+            allowed_roots: vec![PathBuf::from("/projects/repo")],
+            allowed_roots_read_only: vec![],
+            ..parent.clone()
+        };
+        assert!(child.ensure_no_escalation_beyond(&parent).is_ok());
+    }
+
+    #[test]
+    fn ensure_no_escalation_rejects_dropped_forbidden_path() {
+        let parent = SecurityPolicy {
+            forbidden_paths: vec!["/etc/secrets".into(), "/root".into()],
+            ..parent_policy_for_escalation_tests()
+        };
+        let child = SecurityPolicy {
+            forbidden_paths: vec!["/root".into()],
+            ..parent.clone()
+        };
+        let err = child
+            .ensure_no_escalation_beyond(&parent)
+            .expect_err("child dropping a parent's forbidden_paths entry must be rejected");
+        assert!(matches!(
+            err,
+            EscalationViolation::ForbiddenPathDroppedByChild { ref path }
+            if path == "/etc/secrets"
+        ));
+    }
+
+    #[test]
+    fn ensure_no_escalation_rejects_expanded_shell_env_passthrough() {
+        let parent = SecurityPolicy {
+            shell_env_passthrough: vec!["PATH".into()],
+            ..parent_policy_for_escalation_tests()
+        };
+        let child = SecurityPolicy {
+            shell_env_passthrough: vec!["PATH".into(), "AWS_SECRET_ACCESS_KEY".into()],
+            ..parent.clone()
+        };
+        let err = child
+            .ensure_no_escalation_beyond(&parent)
+            .expect_err("child adding a shell_env_passthrough entry must be rejected");
+        assert!(matches!(
+            err,
+            EscalationViolation::ShellEnvPassthroughExpanded { ref variable }
+            if variable == "AWS_SECRET_ACCESS_KEY"
+        ));
+    }
+
+    #[test]
+    fn ensure_no_escalation_rejects_higher_shell_timeout() {
+        let parent = SecurityPolicy {
+            shell_timeout_secs: 30,
+            ..parent_policy_for_escalation_tests()
+        };
+        let child = SecurityPolicy {
+            shell_timeout_secs: 600,
+            ..parent.clone()
+        };
+        let err = child
+            .ensure_no_escalation_beyond(&parent)
+            .expect_err("higher shell_timeout_secs must be rejected");
+        assert!(matches!(
+            err,
+            EscalationViolation::ShellTimeoutExceeded { child, parent }
+            if child == 600 && parent == 30
+        ));
+    }
+
+    #[test]
+    fn ensure_no_escalation_rejects_disabled_block_high_risk_commands() {
+        let parent = SecurityPolicy {
+            block_high_risk_commands: true,
+            ..parent_policy_for_escalation_tests()
+        };
+        let child = SecurityPolicy {
+            block_high_risk_commands: false,
+            ..parent.clone()
+        };
+        let err = child
+            .ensure_no_escalation_beyond(&parent)
+            .expect_err("child flipping block_high_risk_commands off must be rejected");
+        assert_eq!(
+            err,
+            EscalationViolation::BlockHighRiskCommandsDisabledByChild
+        );
+    }
+
+    #[test]
+    fn ensure_no_escalation_rejects_disabled_require_approval() {
+        let parent = SecurityPolicy {
+            require_approval_for_medium_risk: true,
+            ..parent_policy_for_escalation_tests()
+        };
+        let child = SecurityPolicy {
+            require_approval_for_medium_risk: false,
+            ..parent.clone()
+        };
+        let err = child
+            .ensure_no_escalation_beyond(&parent)
+            .expect_err("child flipping require_approval_for_medium_risk off must be rejected");
+        assert_eq!(err, EscalationViolation::RequireApprovalDisabledByChild);
+    }
+
+    #[test]
     fn from_risk_profile_leaves_allowed_roots_read_only_empty() {
         // RiskProfileConfig has no read-only-roots concept; it's
         // populated by the multi-agent runtime when it builds the
@@ -4049,8 +4294,10 @@ mod tests {
         assert!(policy.is_runtime_config_path(&config_dir.join("config.toml")));
         assert!(policy.is_runtime_config_path(&config_dir.join("config.toml.bak")));
         assert!(policy.is_runtime_config_path(&config_dir.join(".config.toml.tmp-1234")));
-        assert!(policy.is_runtime_config_path(&config_dir.join("active_workspace.toml")));
-        assert!(policy.is_runtime_config_path(&config_dir.join(".active_workspace.toml.tmp-1234")));
+        // The active_workspace.toml marker file was retired with the
+        // [workspace] block; protection is no longer required and not
+        // claimed.
+        assert!(!policy.is_runtime_config_path(&config_dir.join("active_workspace.toml")));
     }
 
     #[test]
