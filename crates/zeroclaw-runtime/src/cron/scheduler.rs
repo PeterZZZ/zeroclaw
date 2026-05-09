@@ -289,6 +289,19 @@ async fn run_agent_job(
     agent_alias: &str,
     job: &CronJob,
 ) -> (bool, String) {
+    // Cron is one of two SubAgent spawn sites in v0.8.0; the other is
+    // the agent-loop `spawn_subagent` tool. Both funnel through
+    // `SubAgentSpawn::build` so permission inheritance, tracing span
+    // shape, and audit attribution stay uniform across spawn sites.
+    // Default `SubAgentOverrides` means "inherit verbatim" — the cron
+    // job inherits the owning agent's policy and memory allowlist.
+    let subagent_ctx = match crate::subagent::SubAgentSpawn::for_agent(config, agent_alias)
+        .and_then(|spawn| spawn.build(crate::subagent::SubAgentOverrides::default()))
+    {
+        Ok(ctx) => ctx,
+        Err(e) => return (false, format!("subagent spawn failed: {e:#}")),
+    };
+
     if !security.can_act() {
         return (
             false,
@@ -360,27 +373,40 @@ async fn run_agent_job(
 
     // Assign a unique session ID so memories written during this run can be
     // purged atomically if the run fails (prevents snowball accumulation).
+    // Doubles as the SubAgent run_id in the tracing span so a failed
+    // memory purge can be correlated with its sub-run.
     let run_session_id = uuid::Uuid::new_v4().to_string();
     let session_path = std::path::PathBuf::from(format!("cron-{run_session_id}"));
 
+    let subagent_span = tracing::info_span!(
+        "subagent",
+        parent_alias = %subagent_ctx.agent_id,
+        run_id = %run_session_id,
+        spawn_site = "cron",
+    );
+
     let run_result = match job.session_target {
         SessionTarget::Main | SessionTarget::Isolated => {
-            Box::pin(crate::agent::run(
-                cron_config,
-                agent_alias,
-                Some(prefixed_prompt),
-                None,
-                model_override,
-                config
-                    .providers
-                    .first_model_provider()
-                    .and_then(|e| e.temperature)
-                    .unwrap_or(0.7),
-                vec![],
-                false,
-                Some(session_path.clone()),
-                job.allowed_tools.clone(),
-            ))
+            use tracing::Instrument;
+            Box::pin(
+                crate::agent::run(
+                    cron_config,
+                    agent_alias,
+                    Some(prefixed_prompt),
+                    None,
+                    model_override,
+                    config
+                        .providers
+                        .first_model_provider()
+                        .and_then(|e| e.temperature)
+                        .unwrap_or(0.7),
+                    vec![],
+                    false,
+                    Some(session_path.clone()),
+                    job.allowed_tools.clone(),
+                )
+                .instrument(subagent_span),
+            )
             .await
         }
     };

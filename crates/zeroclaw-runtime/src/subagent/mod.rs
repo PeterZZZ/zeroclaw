@@ -22,11 +22,12 @@
 //! scheduler dispatch path; both call [`SubAgentSpawn::build`] to
 //! produce a validated context they hand to the loop builder.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use zeroclaw_config::policy::SecurityPolicy;
+use zeroclaw_config::schema::Config;
 
 /// Optional narrowing applied to a SubAgent at spawn time. `None` on
 /// every field means "inherit parent verbatim"; `Some(...)` narrows.
@@ -81,6 +82,7 @@ pub struct SubAgentContext {
 /// [`anyhow::Error`] with the specific violation chained, so the
 /// caller can surface a precise message to the user instead of a
 /// generic "spawn failed."
+#[derive(Debug)]
 pub struct SubAgentSpawn {
     pub parent_agent_id: String,
     pub parent_policy: Arc<SecurityPolicy>,
@@ -88,6 +90,48 @@ pub struct SubAgentSpawn {
 }
 
 impl SubAgentSpawn {
+    /// Resolve a parent's identity from the loaded config and an agent
+    /// alias, producing a [`SubAgentSpawn`] whose
+    /// `parent_allowed_agent_ids` is derived from the agent's
+    /// `[agents.<alias>.workspace.read_memory_from]` allowlist.
+    ///
+    /// The returned spawn is the shared starting point for both the
+    /// cron `JobType::Agent` dispatch and the agent-loop
+    /// `spawn_subagent` tool: each computes its own
+    /// [`SubAgentOverrides`] (often `default()` = inherit verbatim) and
+    /// hands it to [`Self::build`].
+    ///
+    /// `parent_agent_id` is the alias string in v0.8.0 because the
+    /// agents-table UUID lookup is part of the P4+P9 cliff; once the
+    /// cliff lands, this function will resolve to the persisted UUID
+    /// instead. The spawn validator's contract is unchanged either way.
+    pub fn for_agent(config: &Config, agent_alias: &str) -> Result<Self> {
+        let agent = config
+            .agents
+            .get(agent_alias)
+            .with_context(|| format!("no agent configured under alias {agent_alias:?}"))?;
+
+        let parent_policy = SecurityPolicy::for_agent(config, agent_alias)
+            .map(Arc::new)
+            .with_context(|| {
+                format!("could not resolve security policy for agent {agent_alias:?}")
+            })?;
+
+        let mut parent_allowed_agent_ids: HashSet<String> = agent
+            .workspace
+            .read_memory_from
+            .iter()
+            .map(|alias| alias.as_str().to_string())
+            .collect();
+        parent_allowed_agent_ids.insert(agent_alias.to_string());
+
+        Ok(Self {
+            parent_agent_id: agent_alias.to_string(),
+            parent_policy,
+            parent_allowed_agent_ids,
+        })
+    }
+
     /// Apply `overrides` to the parent's permissions and return a
     /// validated [`SubAgentContext`]. On any escalation, returns
     /// `Err` with the originating violation in the error chain.
@@ -237,6 +281,54 @@ mod tests {
         assert!(ctx.allowed_agent_ids.contains("agent-uuid-alpha"));
         assert!(ctx.allowed_agent_ids.contains("agent-uuid-beta"));
         assert_eq!(ctx.allowed_agent_ids.len(), 2);
+    }
+
+    #[test]
+    fn for_agent_resolves_parent_identity_from_config() {
+        use zeroclaw_config::schema::{AliasedAgentConfig, Config, RiskProfileConfig};
+
+        let mut config = Config {
+            workspace_dir: std::path::PathBuf::from("/tmp/zeroclaw-test"),
+            ..Config::default()
+        };
+        config
+            .risk_profiles
+            .insert("default".to_string(), RiskProfileConfig::default());
+        config.agents.insert(
+            "alpha".to_string(),
+            AliasedAgentConfig {
+                risk_profile: "default".to_string(),
+                ..AliasedAgentConfig::default()
+            },
+        );
+        let mut beta = AliasedAgentConfig {
+            risk_profile: "default".to_string(),
+            ..AliasedAgentConfig::default()
+        };
+        beta.workspace.read_memory_from = vec!["alpha".into()];
+        config.agents.insert("beta".to_string(), beta);
+
+        let spawn = SubAgentSpawn::for_agent(&config, "beta")
+            .expect("for_agent must succeed for a configured agent");
+        assert_eq!(spawn.parent_agent_id, "beta");
+        // Bound agent_id always re-included; the read_memory_from
+        // entry is also present.
+        assert!(spawn.parent_allowed_agent_ids.contains("beta"));
+        assert!(spawn.parent_allowed_agent_ids.contains("alpha"));
+        assert_eq!(spawn.parent_allowed_agent_ids.len(), 2);
+    }
+
+    #[test]
+    fn for_agent_errors_on_unknown_alias() {
+        use zeroclaw_config::schema::Config;
+
+        let config = Config::default();
+        let err =
+            SubAgentSpawn::for_agent(&config, "missing").expect_err("unknown alias must error");
+        assert!(
+            err.to_string().contains("missing"),
+            "expected the missing alias in the error, got: {err}"
+        );
     }
 
     #[test]
