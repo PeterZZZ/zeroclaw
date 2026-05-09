@@ -388,6 +388,15 @@ async fn run_agent_job(
         spawn_site = "cron",
     );
 
+    // Pass the validated SubAgent context as run-time overrides so the
+    // policy that came back from `SubAgentSpawn::build` reaches the
+    // agent loop. Without this the loop reconstructs from config and
+    // any future caller-supplied narrowing override would silently
+    // collapse back to the parent's verbatim policy.
+    let run_overrides = crate::agent::loop_::AgentRunOverrides {
+        security: Some(subagent_ctx.policy.clone()),
+        memory: None,
+    };
     let run_result = match job.session_target {
         SessionTarget::Main | SessionTarget::Isolated => {
             use tracing::Instrument;
@@ -407,6 +416,7 @@ async fn run_agent_job(
                     false,
                     Some(session_path.clone()),
                     job.allowed_tools.clone(),
+                    run_overrides,
                 )
                 .instrument(subagent_span),
             )

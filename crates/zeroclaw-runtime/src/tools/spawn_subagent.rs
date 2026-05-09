@@ -5,6 +5,7 @@
 //! [`crate::subagent::SubAgentSpawn`] so permission inheritance,
 //! tracing-span shape, and audit attribution stay uniform.
 
+use crate::agent::loop_::AgentRunOverrides;
 use crate::subagent::{SubAgentOverrides, SubAgentSpawn};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -60,13 +61,25 @@ impl Tool for SpawnSubagentTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        let prompt = args
+        // Argument validation surfaces as a structured `ToolResult`
+        // failure (matching the unknown-parent and run-failure shapes
+        // below) so the agent loop receives a uniform "tool reported
+        // failure" signal regardless of which step rejected the call.
+        let prompt = match args
             .get("prompt")
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Missing or empty 'prompt' parameter"))?
-            .to_string();
+        {
+            Some(p) => p.to_string(),
+            None => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Missing or empty 'prompt' parameter".into()),
+                });
+            }
+        };
 
         // The agent-loop tool inherits the parent's identity verbatim;
         // narrowing-override knobs land on the tool argument schema
@@ -100,6 +113,17 @@ impl Tool for SpawnSubagentTool {
             .unwrap_or(0.7);
         let session_path = std::path::PathBuf::from(format!("subagent-{run_id}"));
 
+        // Pass the validated SubAgent context as run-time overrides so
+        // the subset-confirmed policy reaches the agent loop instead
+        // of being silently re-derived from config. Memory override
+        // stays `None` for v0.8.0 inherits-verbatim — once the
+        // `[agents.<alias>].subagent_*` config block lands, the
+        // validated allowlist will plumb a narrowed AgentScopedMemory
+        // into this slot.
+        let run_overrides = AgentRunOverrides {
+            security: Some(subagent_ctx.policy.clone()),
+            memory: None,
+        };
         let run_result = Box::pin(
             crate::agent::run(
                 (*self.config).clone(),
@@ -112,6 +136,7 @@ impl Tool for SpawnSubagentTool {
                 false,
                 Some(session_path),
                 None,
+                run_overrides,
             )
             .instrument(span),
         )
@@ -160,11 +185,20 @@ mod tests {
     async fn empty_or_missing_prompt_is_rejected() {
         let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha");
         for args in [json!({}), json!({ "prompt": "   " })] {
-            let err = tool
+            let result = tool
                 .execute(args)
                 .await
-                .expect_err("missing-or-empty prompt must fail");
-            assert!(err.to_string().contains("prompt"));
+                .expect("execute returns Ok with structured failure");
+            assert!(!result.success);
+            assert!(
+                result
+                    .error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("prompt"),
+                "expected prompt-validation error, got: {:?}",
+                result.error
+            );
         }
     }
 
