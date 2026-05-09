@@ -142,20 +142,12 @@ impl Tool for FileReadTool {
             }
         };
 
-        let workspace_canonical = self
-            .security
-            .workspace_dir
-            .canonicalize()
-            .unwrap_or_else(|_| self.security.workspace_dir.clone());
-
-        let in_workspace = resolved_path.starts_with(&workspace_canonical);
-        let in_allowed_root = !in_workspace
-            && self.security.allowed_roots.iter().any(|root| {
-                let rc = root.canonicalize().unwrap_or_else(|_| root.clone());
-                resolved_path.starts_with(&rc)
-            });
-
-        if !in_workspace && !in_allowed_root {
+        // Read access: workspace + read-write allowlist + read-only
+        // allowlist + universal POSIX device files (/dev/null, etc.).
+        // The read-only branch closes the regression where v0.7.x
+        // configs that listed /dev/null in `allowed_roots` lost access
+        // after the v0.8.0 read/read-write split.
+        if !self.security.is_resolved_path_readable(&resolved_path) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),

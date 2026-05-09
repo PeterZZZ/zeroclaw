@@ -1490,6 +1490,49 @@ impl SecurityPolicy {
         true
     }
 
+    /// Validate that a resolved path is readable by the current
+    /// security policy. Used by read-only tools (`file_read`,
+    /// `glob_search`, `content_search`) that should honor both the
+    /// read-write `allowed_roots` AND the read-only
+    /// `allowed_roots_read_only` lists, plus the universal POSIX
+    /// device files (`/dev/null`, `/dev/zero`, `/dev/random`,
+    /// `/dev/urandom`) that operators legitimately use for shell-
+    /// idiom CLI commands and standard input/output redirection.
+    ///
+    /// Write-side tools (`file_write`, `file_edit`,
+    /// `git_operations`, `shell` write paths) call
+    /// [`Self::is_resolved_path_allowed`] instead — that method is
+    /// strict-rw and does NOT consult the read-only list or the
+    /// device-file allowlist.
+    pub fn is_resolved_path_readable(&self, resolved: &Path) -> bool {
+        // Universal POSIX device files: any operator running on Linux,
+        // macOS, or BSD expects these to be readable. Adding them to
+        // the per-agent config would be friction without security
+        // benefit (they have no agent-relevant content).
+        const POSIX_DEVICE_READS: &[&str] =
+            &["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"];
+        for device in POSIX_DEVICE_READS {
+            if resolved == Path::new(device) {
+                return true;
+            }
+        }
+
+        if self.is_resolved_path_allowed(resolved) {
+            return true;
+        }
+
+        // Read-only allowlist — paths the operator explicitly granted
+        // read access to (but not write).
+        for root in &self.allowed_roots_read_only {
+            let canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+            if resolved.starts_with(&canonical) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Validate that a resolved path is inside the workspace or an allowed root.
     /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
     pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
@@ -3225,6 +3268,52 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    // ── is_resolved_path_readable: read-only allowlist + POSIX devs ──
+
+    #[test]
+    fn readable_includes_posix_device_files() {
+        // /dev/null and friends are universally-readable system paths
+        // operators expect to work for shell-idiom CLI tooling.
+        let p = SecurityPolicy {
+            workspace_dir: PathBuf::from("/tmp/zeroclaw-test-ws"),
+            workspace_only: true,
+            ..SecurityPolicy::default()
+        };
+        for device in ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"] {
+            assert!(
+                p.is_resolved_path_readable(Path::new(device)),
+                "POSIX device file {device} must be readable"
+            );
+        }
+    }
+
+    #[test]
+    fn readable_includes_read_only_allowlist_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let read_only_root = tmp.path().join("docs");
+        std::fs::create_dir_all(&read_only_root).unwrap();
+        let inside = read_only_root.join("guide.md");
+        std::fs::write(&inside, "x").unwrap();
+
+        let canonical_inside = inside.canonicalize().unwrap();
+        let p = SecurityPolicy {
+            workspace_dir: PathBuf::from("/tmp/elsewhere"),
+            workspace_only: true,
+            allowed_roots_read_only: vec![read_only_root.clone()],
+            ..SecurityPolicy::default()
+        };
+        assert!(
+            p.is_resolved_path_readable(&canonical_inside),
+            "read-only allowlist entries must be readable"
+        );
+        // The same path is NOT writable (is_resolved_path_allowed is
+        // strict-rw and does not consult allowed_roots_read_only).
+        assert!(
+            !p.is_resolved_path_allowed(&canonical_inside),
+            "read-only allowlist entries must NOT be writable via is_resolved_path_allowed"
+        );
     }
 
     // ── Edge cases: from_config preserves tracker ────────────
