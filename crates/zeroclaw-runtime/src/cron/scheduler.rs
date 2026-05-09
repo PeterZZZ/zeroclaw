@@ -328,18 +328,22 @@ async fn run_agent_job(
     // Recall relevant memories so cron jobs have context awareness.
     // Skipped when `job.uses_memory` is false (e.g. stateless digest jobs).
     // Exclude `Conversation` memories to prevent chat context from
-    // leaking into scheduled executions (see #5415).
+    // leaking into scheduled executions (see #5415). Routes through
+    // the cron-owning agent's per-agent memory wrapper so the
+    // recall is scoped to that agent's bound + allowlisted rows.
     let memory_context = if !job.uses_memory {
         String::new()
     } else {
-        match zeroclaw_memory::create_memory(
-            &config.memory,
-            &config.workspace_dir,
+        match zeroclaw_memory::create_memory_for_agent(
+            config,
+            agent_alias,
             config
                 .providers
                 .first_model_provider()
                 .and_then(|e| e.api_key.as_deref()),
-        ) {
+        )
+        .await
+        {
             Ok(mem) => match mem.recall(&prompt, 5, None, None, None).await {
                 Ok(entries) if !entries.is_empty() => {
                     let ctx: String = entries
@@ -422,16 +426,20 @@ async fn run_agent_job(
         ),
         Err(e) => {
             // Purge memories written during this failed run so they don't
-            // pollute future recall and cause context snowball.
+            // pollute future recall and cause context snowball. Routes
+            // through the cron-owning agent's per-agent memory wrapper
+            // so the purge stays scoped to the agent that wrote them.
             let mem_session_key = format!("cli:{}", session_path.display());
-            if let Ok(mem) = zeroclaw_memory::create_memory(
-                &config.memory,
-                &config.workspace_dir,
+            if let Ok(mem) = zeroclaw_memory::create_memory_for_agent(
+                config,
+                agent_alias,
                 config
                     .providers
                     .first_model_provider()
                     .and_then(|e| e.api_key.as_deref()),
-            ) {
+            )
+            .await
+            {
                 let _ = mem.purge_session(&mem_session_key).await;
             }
             (false, format!("agent job failed: {e}"))

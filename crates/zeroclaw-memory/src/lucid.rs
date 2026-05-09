@@ -472,6 +472,12 @@ impl Memory for LucidMemory {
             .recall_for_agents(allowed_agent_ids, query, limit, session_id, since, until)
             .await
     }
+
+    async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
+        // Lucid's remote daemon has no agents table in v0.8.0; the
+        // local SQLite mirror is the canonical agents-table store.
+        self.local.ensure_agent_uuid(alias).await
+    }
 }
 
 #[cfg(all(test, unix))]

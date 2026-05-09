@@ -477,6 +477,120 @@ pub fn create_memory_for_migration(
     )
 }
 
+/// Resolve the per-agent workspace directory for `alias` from the
+/// configured agent's `[agents.<alias>.workspace.path]` override, or
+/// derive `<install>/agents/<alias>/workspace/` from the install root
+/// (the directory containing `config.toml`).
+///
+/// v0.8.0 ships per-agent workspaces under
+/// `<install>/agents/<alias>/workspace/`; the legacy
+/// `<install>/workspace/` is migrated into the default agent's slot
+/// at first init. Markdown agents store their `MEMORY.md` and daily
+/// logs here directly; SQL agents share a single install-wide store
+/// (the agent_id column distinguishes rows) but their other on-disk
+/// state (identity files, scheduled-task DBs) still lives in this
+/// per-agent dir.
+#[must_use]
+pub fn agent_workspace_dir(
+    config: &zeroclaw_config::schema::Config,
+    alias: &str,
+) -> std::path::PathBuf {
+    if let Some(cfg) = config.agents.get(alias)
+        && let Some(custom) = cfg.workspace.path.as_ref()
+    {
+        return custom.clone();
+    }
+    let install_root = config
+        .config_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    install_root.join("agents").join(alias).join("workspace")
+}
+
+/// Build the per-agent memory wrapper for `agent_alias`.
+///
+/// Wraps the appropriate inner backend with `AgentScopedMemory` (for
+/// SQL- and Qdrant-backed agents — single shared backend, agent_id
+/// column distinguishes rows) or `AgentScopedMarkdownMemory` (for
+/// Markdown-backed agents — per-agent dirs, peer set composed from
+/// the resolved `read_memory_from` allowlist). `NoneMemory` agents
+/// pass through unwrapped.
+///
+/// Cross-backend allowlist entries are rejected at config-load (P3),
+/// so by the time we get here every entry on
+/// `agents.<alias>.workspace.read_memory_from` is guaranteed to point
+/// at a sibling on the same backend kind. v0.8.0 does not support
+/// cross-backend cross-agent memory access; that's deferred to v0.8.1
+/// alongside agent rename and backend switching.
+pub async fn create_memory_for_agent(
+    config: &zeroclaw_config::schema::Config,
+    agent_alias: &str,
+    api_key: Option<&str>,
+) -> anyhow::Result<Arc<dyn Memory>> {
+    use zeroclaw_config::multi_agent::MemoryBackendKind as ConfigBackend;
+    let agent_cfg = config
+        .agents
+        .get(agent_alias)
+        .with_context(|| format!("agents.{agent_alias} is not configured"))?;
+    let backend_kind = agent_cfg.memory.backend;
+
+    // Markdown branch: the wrapper composes per-agent dirs, not a
+    // shared backend. Skip the inner-backend factory entirely.
+    if matches!(backend_kind, ConfigBackend::Markdown) {
+        let own_workspace = agent_workspace_dir(config, agent_alias);
+        let own = MarkdownMemory::new(&own_workspace);
+        let mut peers: Vec<agent_scoped_markdown::MarkdownPeer> = Vec::new();
+        for peer in &agent_cfg.workspace.read_memory_from {
+            let peer_alias = peer.as_str();
+            let peer_workspace = agent_workspace_dir(config, peer_alias);
+            peers.push(agent_scoped_markdown::MarkdownPeer {
+                alias: peer_alias.to_string(),
+                memory: MarkdownMemory::new(&peer_workspace),
+            });
+        }
+        let scoped = AgentScopedMarkdownMemory::new(agent_alias, own, peers);
+        return Ok(Arc::new(scoped));
+    }
+
+    // None branch: nothing to scope, no agents-table lookup needed.
+    if matches!(backend_kind, ConfigBackend::None) {
+        return Ok(Arc::new(NoneMemory::new()));
+    }
+
+    // SQL / Qdrant / Lucid: single install-wide backend; the
+    // agent_id column (or payload field) carries the per-agent
+    // attribution. We synthesize the inner backend from the existing
+    // install-wide factory using the install workspace_dir, then wrap
+    // with AgentScopedMemory holding the agent's UUID + resolved
+    // allowlist UUIDs.
+    let inner = create_memory_with_storage_and_routes(
+        &config.memory,
+        &config.providers.embedding_routes,
+        config.resolve_active_storage(),
+        &config.workspace_dir,
+        api_key,
+    )?;
+    let inner_arc: Arc<dyn Memory> = Arc::from(inner);
+
+    // Resolve the bound agent's identifier + the allowlist
+    // identifiers via the trait method `ensure_agent_uuid`. SQL
+    // backends override to look up agents-table UUIDs; Markdown,
+    // Qdrant, None use the trait default that returns the alias
+    // verbatim (alias-keyed; no UUID indirection at the storage
+    // layer). The factory is therefore backend-agnostic past the
+    // Markdown branch above.
+    let bound_id = inner_arc.ensure_agent_uuid(agent_alias).await?;
+    let mut allowlist_ids = Vec::with_capacity(agent_cfg.workspace.read_memory_from.len());
+    for peer in &agent_cfg.workspace.read_memory_from {
+        let uuid = inner_arc.ensure_agent_uuid(peer.as_str()).await?;
+        allowlist_ids.push(uuid);
+    }
+
+    let scoped = AgentScopedMemory::new(inner_arc, bound_id, allowlist_ids);
+    Ok(Arc::new(scoped))
+}
+
 /// Factory: create an optional response cache from config.
 pub fn create_response_cache(config: &MemoryConfig, workspace_dir: &Path) -> Option<ResponseCache> {
     if !config.response_cache_enabled {

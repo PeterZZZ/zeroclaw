@@ -330,18 +330,22 @@ impl SqliteMemory {
     }
 
     fn ensure_default_agent_uuid(conn: &Connection) -> anyhow::Result<String> {
+        Self::ensure_agent_uuid_inner(conn, "default")
+    }
+
+    fn ensure_agent_uuid_inner(conn: &Connection, alias: &str) -> anyhow::Result<String> {
         let new_id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT OR IGNORE INTO agents (id, alias, created_at) VALUES (?1, 'default', ?2)",
-            params![new_id, now],
+            "INSERT OR IGNORE INTO agents (id, alias, created_at) VALUES (?1, ?2, ?3)",
+            params![new_id, alias, now],
         )?;
         // Re-query so we return the row that actually persisted, not
         // the candidate we just tried to insert (which may have lost
         // to an existing entry on a re-run).
         let final_id: String = conn.query_row(
-            "SELECT id FROM agents WHERE alias = 'default' LIMIT 1",
-            [],
+            "SELECT id FROM agents WHERE alias = ?1 LIMIT 1",
+            params![alias],
             |row| row.get(0),
         )?;
         Ok(final_id)
@@ -1474,6 +1478,16 @@ impl Memory for SqliteMemory {
             })
             .take(limit)
             .collect())
+    }
+
+    async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
+        let conn = self.conn.clone();
+        let alias = alias.to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+            let conn = conn.lock();
+            Self::ensure_agent_uuid_inner(&conn, &alias)
+        })
+        .await?
     }
 }
 

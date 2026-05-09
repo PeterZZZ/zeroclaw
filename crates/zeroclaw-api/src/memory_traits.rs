@@ -340,6 +340,20 @@ pub trait Memory: Send + Sync {
         since: Option<&str>,
         until: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>>;
+
+    /// Look up (or create) the identifier the backend uses to refer
+    /// to the agent named by `alias` (#6272 multi-agent runtime).
+    ///
+    /// Backends with an `agents` table (SqliteMemory, PostgresMemory,
+    /// LucidMemory) return the row's UUID, inserting if absent.
+    /// Backends without (MarkdownMemory, QdrantMemory, NoneMemory)
+    /// return the alias verbatim — there is no UUID indirection at
+    /// the storage layer, so the alias serves as the agent_id.
+    /// Default impl returns the alias unchanged; SQL backends
+    /// override to do the real lookup.
+    async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
+        Ok(alias.to_string())
+    }
 }
 
 #[cfg(test)]

@@ -268,6 +268,10 @@ impl<M: Memory> Memory for AuditedMemory<M> {
             .recall_for_agents(allowed_agent_ids, query, limit, session_id, since, until)
             .await
     }
+
+    async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
+        self.inner.ensure_agent_uuid(alias).await
+    }
 }
 
 #[cfg(test)]

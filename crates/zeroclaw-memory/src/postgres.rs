@@ -32,6 +32,7 @@ const POSTGRES_CONNECT_TIMEOUT_CAP_SECS: u64 = 300;
 pub struct PostgresMemory {
     client: Arc<Mutex<Client>>,
     qualified_table: String,
+    qualified_agents: String,
 }
 
 impl PostgresMemory {
@@ -49,6 +50,7 @@ impl PostgresMemory {
         let schema_ident = quote_identifier(schema);
         let table_ident = quote_identifier(table);
         let qualified_table = format!("{schema_ident}.{table_ident}");
+        let qualified_agents = format!("{schema_ident}.agents");
 
         let client = Self::initialize_client(
             db_url.to_string(),
@@ -74,11 +76,13 @@ impl PostgresMemory {
             Ok(Self {
                 client: client_ref,
                 qualified_table,
+                qualified_agents,
             })
         } else {
             Ok(Self {
                 client: Arc::new(Mutex::new(client)),
                 qualified_table,
+                qualified_agents,
             })
         }
     }
@@ -634,6 +638,32 @@ impl Memory for PostgresMemory {
             })
             .take(limit)
             .collect())
+    }
+
+    async fn ensure_agent_uuid(&self, alias: &str) -> Result<String> {
+        let client = self.client.clone();
+        let qualified_agents = self.qualified_agents.clone();
+        let alias = alias.to_string();
+        run_on_os_thread(move || -> Result<String> {
+            let mut client = client.lock();
+            let candidate = Uuid::new_v4().to_string();
+            client.execute(
+                &format!(
+                    "INSERT INTO {qualified_agents} (id, alias, created_at)
+                     VALUES ($1, $2, NOW())
+                     ON CONFLICT (alias) DO NOTHING"
+                ),
+                &[&candidate, &alias],
+            )?;
+            let row: String = client
+                .query_one(
+                    &format!("SELECT id FROM {qualified_agents} WHERE alias = $1 LIMIT 1"),
+                    &[&alias],
+                )?
+                .get(0);
+            Ok(row)
+        })
+        .await
     }
 }
 

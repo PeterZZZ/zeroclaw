@@ -1,4 +1,4 @@
-//! `AgentScopedMemory<M>` — runtime memory wrapper bound to one agent
+//! `AgentScopedMemory` — runtime memory wrapper bound to one agent
 //! (#6272 multi-agent runtime).
 //!
 //! Each agent in a v0.8.0 install holds its own per-agent backend
@@ -33,12 +33,14 @@ use std::sync::Arc;
 /// UUID + a resolved cross-agent allowlist.
 ///
 /// Construct via [`AgentScopedMemory::new`] at agent-loop entry. The
-/// runtime holds one per agent.
-pub struct AgentScopedMemory<M: Memory> {
-    /// The wrapped backend. `Arc<M>` to allow cloning into async tasks
-    /// without losing the bound identity, and to stay compatible with
-    /// the existing `Arc<dyn Memory>` plumbing in the runtime.
-    inner: Arc<M>,
+/// runtime holds one per agent. Non-generic over the inner backend
+/// (holds `Arc<dyn Memory>`) so the per-agent factory can hand back a
+/// single concrete type regardless of the agent's chosen backend kind.
+pub struct AgentScopedMemory {
+    /// The wrapped backend. `Arc<dyn Memory>` to slot into the existing
+    /// per-install plumbing while the runtime factory hands out one
+    /// instance per agent.
+    inner: Arc<dyn Memory>,
     /// The bound agent's UUID (from `agents.id`). Stamped on every
     /// write through this wrapper.
     agent_id: String,
@@ -49,7 +51,7 @@ pub struct AgentScopedMemory<M: Memory> {
     allowed_agent_ids: HashSet<String>,
 }
 
-impl<M: Memory> AgentScopedMemory<M> {
+impl AgentScopedMemory {
     /// Build a new agent-scoped wrapper around `inner`.
     ///
     /// `agent_id` is the bound agent's UUID (looked up from the
@@ -60,7 +62,7 @@ impl<M: Memory> AgentScopedMemory<M> {
     /// callers do not need to remember to include themselves.
     #[must_use]
     pub fn new(
-        inner: Arc<M>,
+        inner: Arc<dyn Memory>,
         agent_id: impl Into<String>,
         allowed_sibling_agent_ids: impl IntoIterator<Item = String>,
     ) -> Self {
@@ -98,7 +100,7 @@ impl<M: Memory> AgentScopedMemory<M> {
 }
 
 #[async_trait]
-impl<M: Memory> Memory for AgentScopedMemory<M> {
+impl Memory for AgentScopedMemory {
     fn name(&self) -> &str {
         // Kept identical to the inner backend so existing log lines
         // and dashboards keep working; the wrapper's existence is
@@ -306,6 +308,10 @@ impl<M: Memory> Memory for AgentScopedMemory<M> {
     async fn export(&self, filter: &ExportFilter) -> Result<Vec<MemoryEntry>> {
         self.inner.export(filter).await
     }
+
+    async fn ensure_agent_uuid(&self, alias: &str) -> Result<String> {
+        self.inner.ensure_agent_uuid(alias).await
+    }
 }
 
 #[cfg(test)]
@@ -320,11 +326,18 @@ mod tests {
         (tmp, Arc::new(mem))
     }
 
+    fn as_dyn(inner: Arc<SqliteMemory>) -> Arc<dyn Memory> {
+        inner
+    }
+
     #[tokio::test]
     async fn store_routes_through_store_with_agent_and_persists_attribution() {
         let (_tmp, inner) = fresh_sqlite();
-        let wrapper =
-            AgentScopedMemory::new(inner.clone(), "agent-uuid-alpha", Vec::<String>::new());
+        let wrapper = AgentScopedMemory::new(
+            as_dyn(inner.clone()),
+            "agent-uuid-alpha",
+            Vec::<String>::new(),
+        );
 
         wrapper
             .store("k1", "v1", MemoryCategory::Core, None)
@@ -360,7 +373,8 @@ mod tests {
 
         // The wrapper's bound id is alpha and its allowlist is empty
         // (only itself).
-        let wrapper = AgentScopedMemory::new(inner, "agent-uuid-alpha", Vec::<String>::new());
+        let wrapper =
+            AgentScopedMemory::new(as_dyn(inner), "agent-uuid-alpha", Vec::<String>::new());
 
         let hits = wrapper
             .recall("other-key", 10, None, None, None)
@@ -389,7 +403,7 @@ mod tests {
             .unwrap();
 
         let wrapper = AgentScopedMemory::new(
-            inner,
+            as_dyn(inner),
             "agent-uuid-alpha",
             vec!["agent-uuid-beta".to_string()],
         );
@@ -421,7 +435,7 @@ mod tests {
             .unwrap();
 
         let wrapper = AgentScopedMemory::new(
-            inner,
+            as_dyn(inner),
             "agent-uuid-alpha",
             vec!["agent-uuid-beta".to_string()],
         );

@@ -498,14 +498,12 @@ impl Agent {
         ));
 
         let primary_model_provider = config.providers.first_model_provider();
-        let memory: Arc<dyn Memory> =
-            Arc::from(zeroclaw_memory::create_memory_with_storage_and_routes(
-                &config.memory,
-                &config.providers.embedding_routes,
-                config.resolve_active_storage(),
-                &config.workspace_dir,
-                primary_model_provider.and_then(|e| e.api_key.as_deref()),
-            )?);
+        let memory: Arc<dyn Memory> = zeroclaw_memory::create_memory_for_agent(
+            config,
+            agent_alias,
+            primary_model_provider.and_then(|e| e.api_key.as_deref()),
+        )
+        .await?;
 
         let composio_key = if config.composio.enabled {
             config.composio.api_key.as_deref()

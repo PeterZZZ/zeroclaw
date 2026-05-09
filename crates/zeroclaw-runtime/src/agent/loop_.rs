@@ -2130,13 +2130,17 @@ pub async fn run(
     let primary_model_provider = config.providers.first_model_provider();
 
     // ── Memory (the brain) ────────────────────────────────────────
-    let mem: Arc<dyn Memory> = Arc::from(zeroclaw_memory::create_memory_with_storage_and_routes(
-        &config.memory,
-        &config.providers.embedding_routes,
-        config.resolve_active_storage(),
-        &config.workspace_dir,
+    // Per-agent memory: the inner backend is the install-wide store
+    // (or, for Markdown agents, the agent's own dir composed with
+    // peer dirs); the wrapper stamps every store with the bound
+    // agent's UUID and filters every recall by the resolved
+    // `read_memory_from` allowlist.
+    let mem: Arc<dyn Memory> = zeroclaw_memory::create_memory_for_agent(
+        &config,
+        agent_alias,
         primary_model_provider.and_then(|e| e.api_key.as_deref()),
-    )?);
+    )
+    .await?;
     tracing::info!(backend = mem.name(), "Memory initialized");
 
     // ── Peripherals (merge peripheral tools into registry) ─
@@ -3162,13 +3166,12 @@ pub async fn process_message(
     let security = Arc::new(SecurityPolicy::for_agent(&config, agent_alias)?);
     let primary_model_provider = config.providers.first_model_provider();
     let approval_manager = ApprovalManager::for_non_interactive(&risk_profile);
-    let mem: Arc<dyn Memory> = Arc::from(zeroclaw_memory::create_memory_with_storage_and_routes(
-        &config.memory,
-        &config.providers.embedding_routes,
-        config.resolve_active_storage(),
-        &config.workspace_dir,
+    let mem: Arc<dyn Memory> = zeroclaw_memory::create_memory_for_agent(
+        &config,
+        agent_alias,
         primary_model_provider.and_then(|e| e.api_key.as_deref()),
-    )?);
+    )
+    .await?;
 
     let (composio_key, composio_entity_id) = if config.composio.enabled {
         (
