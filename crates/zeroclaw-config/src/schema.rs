@@ -326,8 +326,8 @@ pub struct Config {
 
     /// Aliased agents in this install. Each entry under `[agents.<alias>]`
     /// is one user-facing agent with its own identity, channels, model
-    /// provider, risk profile, and (post-#6272) workspace and memory
-    /// scope. `DelegateTool` consults this map when one agent delegates a
+    /// provider, risk profile, workspace, and memory scope.
+    /// `DelegateTool` consults this map when one agent delegates a
     /// subtask to another.
     #[serde(default)]
     #[nested]
@@ -2815,13 +2815,13 @@ impl Config {
     /// `<install>/agents/<alias>/workspace/` from the install root
     /// (the directory containing `config.toml`).
     ///
-    /// v0.8.0 ships per-agent workspaces under
+    /// Per-agent workspaces live under
     /// `<install>/agents/<alias>/workspace/`; the legacy
     /// `<install>/workspace/` is migrated into the default agent's
-    /// slot once at v0.7.x→v0.8.0 upgrade. Per-agent code paths
-    /// (identity-file load, `SecurityPolicy::for_agent`, the memory
-    /// factory) consult this method rather than `config.workspace_dir`,
-    /// which stays as the install's legacy primary workspace anchor.
+    /// slot on first boot. Per-agent code paths (identity-file load,
+    /// `SecurityPolicy::for_agent`, the memory factory) consult this
+    /// method rather than `config.workspace_dir`, which stays as the
+    /// install's legacy primary workspace anchor.
     #[must_use]
     pub fn agent_workspace_dir(&self, agent_alias: &str) -> std::path::PathBuf {
         if let Some(cfg) = self.agents.get(agent_alias)
@@ -12060,11 +12060,11 @@ impl Default for Config {
 fn default_config_and_workspace_dirs() -> Result<(PathBuf, PathBuf)> {
     let config_dir = default_config_dir()?;
     // `config.workspace_dir` is the install's primary workspace dir.
-    // On v0.7.x and below this held everything; on v0.8.0+ per-agent
-    // workspaces live at `<install>/agents/<alias>/workspace/` and
-    // are resolved on demand by `zeroclaw_memory::agent_workspace_dir`,
-    // not from this function. The legacy path stays as a stable
-    // install-wide anchor for tools that aren't yet agent-aware.
+    // Per-agent workspaces live at `<install>/agents/<alias>/workspace/`
+    // and are resolved on demand by
+    // `Config::agent_workspace_dir(alias)`, not from this function.
+    // The legacy path stays as a stable install-wide anchor for tools
+    // that aren't yet agent-aware.
     Ok((config_dir.clone(), config_dir.join("workspace")))
 }
 
@@ -12410,23 +12410,22 @@ impl Config {
     pub async fn load_or_init() -> Result<Self> {
         let (default_zeroclaw_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
 
-        // v0.8.0 filesystem migration: a one-time, upgrade-only move
-        // of `<install>/workspace/` into
-        // `<install>/agents/default/workspace/` so v0.7.x installs land
-        // in the v0.8.0 per-agent layout. The "default" alias here is
-        // a deliberate v0.7.x→v0.8.0 transition bridge — V3 schema
+        // One-time, upgrade-only move of `<install>/workspace/` into
+        // `<install>/agents/default/workspace/` so legacy single-
+        // workspace installs land in the per-agent layout. The
+        // "default" alias is the transition bridge — V3 schema
         // migration synthesizes the matching `agents.default` config
         // entry, so the moved dir always lines up with a real agent.
         // Idempotent: no-op on fresh installs and on already-migrated
         // installs. Per-agent runtime code paths resolve their own
-        // workspace dir via `zeroclaw_memory::agent_workspace_dir`,
-        // not from `config.workspace_dir`.
+        // workspace dir via `Config::agent_workspace_dir(alias)`, not
+        // from `config.workspace_dir`.
         if default_zeroclaw_dir.is_dir()
             && let Err(e) =
                 crate::migration::migrate_legacy_workspace_to_default_agent(&default_zeroclaw_dir)
         {
             tracing::warn!(
-                "[system] v0.8.0 filesystem migration failed (continuing with legacy layout): {e}"
+                "[system] filesystem migration failed (continuing with legacy layout): {e}"
             );
         }
 
@@ -12484,10 +12483,9 @@ impl Config {
             // current `Config` shape.
             //
             // Detect the on-disk version up-front so we can emit one WARN
-            // line (per the v0.8.0 schema rollout plan) when the daemon
-            // auto-migrates an older config in memory: the disk file is left
-            // untouched and the user is advised to lock the migration in
-            // with `zeroclaw config migrate`.
+            // line when the daemon auto-migrates an older config in memory:
+            // the disk file is left untouched and the user is advised to lock
+            // the migration in with `zeroclaw config migrate`.
             let stale_version = toml::from_str::<toml::Value>(&contents)
                 .ok()
                 .as_ref()
@@ -13504,7 +13502,7 @@ impl Config {
             }
 
             // workspace.access: keys must point at OTHER agents, never
-            // self, and every target must be a configured agent. #6272 P3.
+            // self, and every target must be a configured agent.
             for (target, mode) in &agent.workspace.access {
                 let target_str = target.as_str();
                 if target_str == alias.as_str() {
@@ -13525,11 +13523,9 @@ impl Config {
 
             // workspace.read_memory_from: every alias must exist as a
             // configured agent and must use the same MemoryBackendKind
-            // as the declaring agent. Cross-backend memory sharing is
-            // deferred to v0.8.1; until then, mismatched backends fail
-            // at config load rather than producing a runtime error
-            // when the per-agent memory plumbing eventually consumes
-            // the allowlist. #6272 P3.
+            // as the declaring agent. Mismatched backends fail at
+            // config load rather than producing a runtime error when
+            // the per-agent memory plumbing consumes the allowlist.
             let agent_backend = agent.memory.backend;
             for (i, target) in agent.workspace.read_memory_from.iter().enumerate() {
                 let target_str = target.as_str();
@@ -13552,7 +13548,7 @@ impl Config {
                     validation_bail!(
                         InvalidFormat,
                         format!("agents.{alias}.workspace.read_memory_from[{i}]"),
-                        "agents.{alias}.workspace.read_memory_from[{i}] points at agents.{target_str} which uses memory backend {target_backend:?}, but agents.{alias} uses {agent_backend:?}; cross-backend memory sharing is deferred to v0.8.1, so the allowlist must point at same-backend siblings only",
+                        "agents.{alias}.workspace.read_memory_from[{i}] points at agents.{target_str} which uses memory backend {target_backend:?}, but agents.{alias} uses {agent_backend:?}; the allowlist must point at same-backend siblings only",
                     );
                 }
             }
@@ -13560,10 +13556,10 @@ impl Config {
 
         // Peer groups: every member alias must exist as a configured
         // agent, and the group's channel must be in each member's
-        // channels list. Mutual opt-in resolution happens at runtime
-        // (P11); the cross-reference check here keeps misconfigured
-        // group members from looking like real peer relationships at
-        // load time. #6272 P3.
+        // channels list. Mutual opt-in resolution happens at runtime;
+        // this cross-reference check keeps misconfigured group
+        // members from looking like real peer relationships at load
+        // time.
         let mut peer_group_names: Vec<&String> = self.peer_groups.keys().collect();
         peer_group_names.sort();
         for group_name in peer_group_names {
@@ -19869,7 +19865,7 @@ allowed_users = []
         assert_eq!(whatsapp.approval_timeout_secs, 180);
     }
 
-    // ── Multi-agent (#6272 P3): cross-reference validators ─────────
+    // ── Multi-agent cross-reference validators ─────────────────────
 
     /// Build a minimal valid Config with one agent on a configured
     /// channel + risk profile + model provider. Each test mutates a
@@ -19996,7 +19992,7 @@ allowed_users = []
             .expect_err("cross-backend allowlist must fail validation");
         let msg = err.to_string();
         assert!(
-            msg.contains("cross-backend memory sharing is deferred to v0.8.1"),
+            msg.contains("same-backend siblings only"),
             "expected cross-backend explanation, got: {msg}"
         );
     }

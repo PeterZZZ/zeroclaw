@@ -263,8 +263,8 @@ pub struct MigrateReport {
 }
 
 /// Move a legacy `<install>/workspace/` into
-/// `<install>/agents/default/workspace/` (#6272 P9 filesystem
-/// migration).
+/// `<install>/agents/default/workspace/` (one-time migration from the
+/// pre-multi-agent layout).
 ///
 /// Idempotent: on a fresh install (no legacy dir) this is a no-op;
 /// on an already-migrated install (legacy dir gone, new dir
@@ -302,7 +302,7 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
             tracing::info!(
                 target = %new_default.display(),
                 legacy = %legacy.display(),
-                "v0.8.0 filesystem migration: target already populated; skipping move. \
+                "filesystem migration: target already populated; skipping move. \
                  Legacy dir can be removed manually after verifying the migration."
             );
             return Ok(false);
@@ -319,7 +319,7 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
         .join("legacy-workspace");
     std::fs::create_dir_all(&backup_dir).with_context(|| {
         format!(
-            "[system] failed to create v0.8.0 migration backup dir at {}",
+            "[system] failed to create migration backup dir at {}",
             backup_dir.display()
         )
     })?;
@@ -332,7 +332,7 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
     })?;
     tracing::info!(
         target = %backup_dir.display(),
-        "[system] v0.8.0 filesystem migration: legacy workspace backed up"
+        "[system] filesystem migration: legacy workspace backed up"
     );
 
     // Build the agents/default/ tree, then move the legacy workspace
@@ -379,7 +379,7 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
         legacy = %legacy.display(),
         target = %new_default.display(),
         backup = %backup_dir.display(),
-        "[system] v0.8.0 filesystem migration: legacy workspace moved into default agent slot"
+        "[system] filesystem migration: legacy workspace moved into default agent slot"
     );
     Ok(true)
 }
@@ -689,7 +689,7 @@ mod tests {
         );
     }
 
-    // ── v0.8.0 filesystem migration tests (#6272 P9) ─────────────
+    // ── Legacy workspace → per-agent migration tests ─────────────
 
     #[test]
     fn fs_migration_no_op_on_fresh_install() {

@@ -54,7 +54,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 /// `agent_alias` field is present anywhere in the span scope, the
 /// line is prefixed with `[system]` so boot, migration, and other
 /// install-wide messages are visually distinct from per-agent
-/// activity (#6272).
+/// activity.
 struct AgentAliasFormatter {
     inner: tracing_subscriber::fmt::format::Format<
         tracing_subscriber::fmt::format::Full,
@@ -1080,11 +1080,10 @@ enum EstopSubcommands {
     },
 }
 
-/// Subcommands for `zeroclaw agents` (#6272).
+/// Subcommands for `zeroclaw agents`.
 ///
 /// `zeroclaw agent` (singular) RUNS an agent; `zeroclaw agents` (plural)
-/// manages the set of configured agents on this install. Three operations
-/// land in v0.8.0:
+/// manages the set of configured agents on this install:
 ///
 /// - `agents create <alias>` — write a new `[agents.<alias>]` block, create
 ///   `<install>/agents/<alias>/workspace/`, seed the bootstrap files. Refuses
@@ -3594,7 +3593,7 @@ fn format_expiry(profile: &auth::profiles::AuthProfile) -> String {
     }
 }
 
-/// Dispatcher for `zeroclaw agents <subcommand>` (#6272).
+/// Dispatcher for `zeroclaw agents <subcommand>`.
 async fn handle_agents_command(cmd: AgentsCommands, mut config: Config) -> Result<()> {
     match cmd {
         AgentsCommands::Create {

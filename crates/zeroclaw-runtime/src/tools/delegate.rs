@@ -2418,12 +2418,11 @@ mod tests {
             prompt.contains("## CRITICAL CONTEXT: CURRENT DATE & TIME"),
             "should contain datetime section"
         );
-        // The retired `system_prompt` field on AliasedAgentConfig used to
-        // append operator copy here; v0.8.0 reads identity files from the
-        // target sub-agent's per-agent workspace dir instead. The test's
-        // install_root is unset, so no identity files exist for the
-        // dummy alias — the prompt still contains the structural sections
-        // verified above, which is the load-bearing assertion.
+        // Identity files come from the target sub-agent's per-agent
+        // workspace dir. The test's install_root is unset, so no
+        // identity files exist for the dummy alias — the prompt still
+        // contains the structural sections verified above, which is
+        // the load-bearing assertion.
 
         let _ = std::fs::remove_dir_all(workspace);
     }

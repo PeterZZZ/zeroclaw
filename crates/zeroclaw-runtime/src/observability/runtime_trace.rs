@@ -47,10 +47,10 @@ pub struct RuntimeTraceEvent {
     pub success: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Owning agent's alias for #6272 multi-agent runs. `None` on
-    /// pre-v0.8.0 entries and on system-level traces (boot, migration,
-    /// scheduler ticks not bound to any specific agent). Populated by
-    /// the agent loop when P10 binds a per-agent alias at run() entry.
+    /// Owning agent's alias. `None` on system-level traces (boot,
+    /// migration, scheduler ticks not bound to any specific agent) and
+    /// on legacy entries written before the alias field existed. The
+    /// agent loop binds the alias at run() entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_alias: Option<String>,
     #[serde(default)]
@@ -200,10 +200,9 @@ pub fn init_from_config(config: &ObservabilityConfig, workspace_dir: &Path) {
 
 /// Record a runtime trace event.
 ///
-/// Forwards to [`record_event_with_agent`] with `agent_alias = None` so
-/// existing call sites stay unchanged. Sites that have a bound agent
-/// alias in scope (post-P10) should call [`record_event_with_agent`]
-/// directly for proper attribution.
+/// Forwards to [`record_event_with_agent`] with `agent_alias = None`.
+/// Sites that have a bound agent alias in scope should call
+/// [`record_event_with_agent`] directly for proper attribution.
 pub fn record_event(
     event_type: &str,
     channel: Option<&str>,
@@ -227,10 +226,10 @@ pub fn record_event(
     );
 }
 
-/// Record a runtime trace event with an explicit owning agent alias
-/// (#6272 P12). The alias appears as a structured field on the
-/// emitted event so multi-agent runs are grep-filterable by alias and
-/// otel/dora/prometheus exports carry the attribution.
+/// Record a runtime trace event with an explicit owning agent alias.
+/// The alias appears as a structured field on the emitted event so
+/// multi-agent runs are grep-filterable by alias and otel/dora/
+/// prometheus exports carry the attribution.
 #[allow(clippy::too_many_arguments)]
 pub fn record_event_with_agent(
     event_type: &str,

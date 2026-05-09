@@ -289,12 +289,11 @@ async fn run_agent_job(
     agent_alias: &str,
     job: &CronJob,
 ) -> (bool, String) {
-    // Cron is one of two SubAgent spawn sites in v0.8.0; the other is
-    // the agent-loop `spawn_subagent` tool. Both funnel through
+    // Cron is one of two SubAgent spawn sites; the other is the
+    // agent-loop `spawn_subagent` tool. Both funnel through
     // `SubAgentSpawn::for_agent` so permission inheritance, tracing
     // span shape, and audit attribution stay uniform across spawn
-    // sites. v0.8.0 inherits the owning agent's identity verbatim;
-    // narrowing overrides land in v0.8.1.
+    // sites.
     let subagent_ctx = match crate::subagent::SubAgentSpawn::for_agent(config, agent_alias) {
         Ok(spawn) => spawn.build(),
         Err(e) => return (false, format!("subagent spawn failed: {e:#}")),

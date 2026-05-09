@@ -1,25 +1,6 @@
-//! Multi-agent runtime types: alias newtypes, access-mode enum, and peer
-//! external entries. Backs Issue #6272.
-//!
-//! These types are the schema-as-law primitives for the multi-agent
-//! features landing in v0.8.0:
-//!
-//! - [`AgentAlias`], [`PeerGroupName`], [`PeerUsername`] are typed string
-//!   newtypes that carry their meaning at the type level. They use the
-//!   shared `define_provider_ref!` macro defined in [`crate::providers`]
-//!   so the on-disk TOML shape stays plain-string while consumers see a
-//!   typed value.
-//! - [`AccessMode`] is the cross-agent filesystem grant. Read-only,
-//!   write-only, or read-write. Default for cross-agent access maps is
-//!   "key absent = no grant"; this enum encodes only the granted modes.
-//! - [`MemoryBackendKind`] is the per-agent backend selector. Closed set,
-//!   no string literals at consumer sites.
-//! - [`PeerExternal`] is a single non-agent member of a peer group
-//!   (humans, external bots) on the group's channel.
-//! - [`AgentWorkspaceConfig`] / [`AgentMemoryConfig`] / [`PeerGroupConfig`]
-//!   are the nested config structs the [`crate::schema`] module wires
-//!   into [`crate::schema::AliasedAgentConfig`] and the top-level
-//!   [`crate::schema::Config`].
+//! Multi-agent runtime types: alias newtypes, access-mode enum, peer
+//! external entries, and the nested config structs that wire into
+//! [`crate::schema::AliasedAgentConfig`] and [`crate::schema::Config`].
 //!
 //! Cross-agent semantics, peer-group resolution, and SubAgent permission
 //! inheritance live in the runtime crate; this module only carries the
@@ -69,16 +50,13 @@ pub struct PeerExternal {
 
 /// Per-agent memory backend selector.
 ///
-/// Closed set; the schema is law. Use this enum at every consumer site
-/// instead of pattern-matching on the dotted-alias string in the legacy
-/// `Config.memory.backend` field. The enum mirrors the storage-instance
+/// Closed set; the schema is law. The enum mirrors the storage-instance
 /// outer keys under `Config.storage.<kind>.<alias>`: `sqlite`, `postgres`,
 /// `qdrant`, `markdown`, `lucid`, plus `none` for the no-storage case.
 ///
-/// Per the multi-agent plan, an agent's backend is locked at agent
-/// creation and immutable on subsequent loads. `Config::validate()` is
-/// the gate that enforces immutability against the persisted-on-disk
-/// state.
+/// An agent's backend is locked at agent creation and immutable on
+/// subsequent loads. `Config::validate()` enforces immutability against
+/// the persisted on-disk state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -116,11 +94,8 @@ pub enum MemoryBackendKind {
 /// per-agent scope; off by default and audited.
 ///
 /// `read_memory_from` is the cross-agent memory allowlist (parallel to
-/// `access` but for the memory layer). The runtime-side enforcement
-/// that consumes this list lands in v0.8.1 alongside the per-agent
-/// memory plumbing in `Agent::from_config`; the schema field validates
-/// today (cross-references and same-backend invariants), so configs
-/// stay stable across the version boundary.
+/// `access` but for the memory layer). The schema validates entries
+/// for cross-reference and same-backend invariants at config load.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent-workspace"]
@@ -139,8 +114,8 @@ pub struct AgentWorkspaceConfig {
     /// auditable.
     pub unrestricted_filesystem: bool,
     /// Cross-agent memory allowlist (inbound declaration). Each alias
-    /// listed here is the v0.8.1-target set of sibling agents this
-    /// agent may recall memory rows from. Empty = own only.
+    /// listed here is a sibling agent this agent may recall memory
+    /// rows from. Empty = own only.
     pub read_memory_from: Vec<AgentAlias>,
 }
 
@@ -150,9 +125,8 @@ pub struct AgentWorkspaceConfig {
 /// The `backend` field is locked at agent creation and immutable on
 /// subsequent loads (`Config::validate()` enforces this against the
 /// persisted on-disk state). Cross-backend memory sharing across the
-/// per-agent `read_memory_from` allowlist is deferred to v0.8.1; in
-/// v0.8.0 the validator rejects allowlist entries that target a
-/// different backend than the declaring agent.
+/// per-agent `read_memory_from` allowlist is rejected at validation:
+/// allowlist entries must point at same-backend siblings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent-memory"]

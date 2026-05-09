@@ -1,4 +1,4 @@
-//! Integration tests for the v0.8.0 multi-agent DB migration (#6272 P6).
+//! Integration tests for the SQLite multi-agent DB migration.
 //!
 //! Each test exercises the real `SqliteMemory::new` init path against a
 //! fresh `tempfile::TempDir`, which is what the runtime walks in
@@ -13,9 +13,6 @@
 //! - Idempotent re-run: invoking the init path twice on an
 //!   already-migrated DB is a true no-op (no extra agents row, no new
 //!   backup file, the default agent's UUID is preserved).
-//! - Cross-DB parity: the markdown backend (which has no schema) is
-//!   tested separately; this file focuses on SQLite. Postgres + Lucid
-//!   land in P6b/P6c.
 
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
@@ -138,8 +135,8 @@ async fn pre_migration_rows_get_backfilled_to_default_agent_with_backup() {
 
     // Build a pre-multi-agent DB by writing the legacy schema directly,
     // populating it with a row, then closing. This is the shape an
-    // operator upgrading from 0.7.x would have on disk before v0.8.0
-    // first runs.
+    // operator upgrading from a single-workspace install would have on
+    // disk before the multi-agent runtime first runs.
     let memory_dir = workspace.path().join("memory");
     std::fs::create_dir_all(&memory_dir).expect("memory dir");
     {
@@ -150,7 +147,7 @@ async fn pre_migration_rows_get_backfilled_to_default_agent_with_backup() {
         // is a true no-op and nothing about FTS pre-existing trips
         // the migration. The only difference vs current head is the
         // missing `agents` table and the missing `agent_id` column on
-        // memories, which is exactly what migrate_v0_8_0_multi_agent
+        // memories, which is exactly what migrate_multi_agent
         // adds.
         conn.execute_batch(
             "CREATE TABLE memories (

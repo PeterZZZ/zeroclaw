@@ -1,32 +1,22 @@
-//! End-to-end tests for the multi-agent runtime (#6272 P14).
+//! End-to-end tests for the multi-agent runtime.
 //!
 //! Covers install-level upgrade and per-agent lifecycle paths that
 //! cross multiple subsystems (config schema, filesystem migration,
 //! per-agent memory, agents-table machinery). Tests run against a
 //! TempDir-rooted install so they're hermetic and can be run in
 //! parallel.
-//!
-//! Out of v0.8.0 scope (deferred to follow-ups):
-//!
-//! - Live multi-agent peer-group message exchange — requires a real
-//!   channel orchestrator + real model-provider; covered by manual
-//!   test plan in the PR body and the unit tests on
-//!   `zeroclaw_runtime::peers::resolve_peer_set`.
-//! - Active-session refusal on `agents delete` — the runtime doesn't
-//!   yet expose a session registry the CLI can poll; the
-//!   `--yes`/`--dry-run` guardrails are the v0.8.0 protection.
 
 use tempfile::TempDir;
 
-/// v0.7.x → v0.8.0 filesystem migration: legacy `<install>/workspace/`
-/// gets moved into `<install>/agents/default/workspace/` on first
-/// boot, with a timestamped backup and idempotent re-run semantics.
+/// Filesystem migration: a legacy `<install>/workspace/` gets moved
+/// into `<install>/agents/default/workspace/` on first boot, with a
+/// timestamped backup and idempotent re-run semantics.
 #[test]
 fn legacy_install_upgrades_cleanly_with_backup() {
     let tmp = TempDir::new().unwrap();
     let install_root = tmp.path();
 
-    // Seed the v0.7.x layout: a populated `<install>/workspace/`.
+    // Seed the legacy single-workspace layout.
     let legacy = install_root.join("workspace");
     std::fs::create_dir_all(&legacy).unwrap();
     std::fs::write(
@@ -96,9 +86,9 @@ fn legacy_install_upgrades_cleanly_with_backup() {
 
 /// Multi-agent install: two agents on different memory backends
 /// don't interfere. The schema validator rejects cross-backend
-/// `read_memory_from` entries at config load (P3); the runtime
-/// only ever sees same-backend allowlists by the time the per-agent
-/// memory factory builds its wrappers.
+/// `read_memory_from` entries at config load; the runtime only ever
+/// sees same-backend allowlists by the time the per-agent memory
+/// factory builds its wrappers.
 #[tokio::test]
 async fn two_sqlite_agents_on_one_install_have_isolated_memory() {
     use zeroclaw_config::schema::{AliasedAgentConfig, Config, RiskProfileConfig};

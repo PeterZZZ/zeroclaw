@@ -1,10 +1,8 @@
-//! `AgentScopedMemory` — runtime memory wrapper bound to one agent
-//! (#6272 multi-agent runtime).
+//! Runtime memory wrapper bound to one agent.
 //!
-//! Each agent in a v0.8.0 install holds its own per-agent backend
-//! instance (selected at agent creation via
-//! `[agents.<alias>.memory.backend]`, immutable thereafter). The
-//! wrapper sits directly on top of that instance and:
+//! Each agent holds its own per-agent backend instance (selected at
+//! agent creation via `[agents.<alias>.memory.backend]`, immutable
+//! thereafter). The wrapper sits directly on top of that instance and:
 //!
 //! - Stamps the bound agent's UUID on every store via the inner
 //!   backend's `store_with_agent` trait method (real implementations
@@ -18,10 +16,9 @@
 //!   allowlist so a caller can never widen scope past what the agent's
 //!   config permits.
 //!
-//! Cross-backend allowlist entries are rejected at config-load (P3
-//! validator); v0.8.0 does not support cross-backend cross-agent
-//! memory access. The wrapper therefore only ever sees same-backend
-//! sibling UUIDs in its `allowed_agent_ids` set.
+//! Cross-backend allowlist entries are rejected at config load. The
+//! wrapper only ever sees same-backend sibling UUIDs in its
+//! `allowed_agent_ids` set.
 
 use super::traits::{ExportFilter, Memory, MemoryCategory, MemoryEntry, ProceduralMessage};
 use anyhow::Result;
@@ -230,11 +227,9 @@ impl Memory for AgentScopedMemory {
     }
 
     async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
-        // `get` is keyed lookup — the trait does not yet expose an
-        // agent-scoped form. v0.8.0 leaves this on the inner backend;
-        // a key collision across agents is already prevented by the
-        // unique-key DB index, so v0.8.1 can extend the trait without
-        // changing semantics.
+        // Keyed lookup — the trait does not yet expose an agent-scoped
+        // form. Cross-agent key collisions are prevented by the
+        // unique-key DB index, so passthrough is safe.
         self.inner.get(key).await
     }
 
@@ -243,9 +238,8 @@ impl Memory for AgentScopedMemory {
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
     ) -> Result<Vec<MemoryEntry>> {
-        // `list` is admin-shaped and does not currently filter on
-        // agent_id at the trait. Pass through; the v0.8.1 follow-up
-        // adds an agent-scoped variant.
+        // Admin-shaped; the trait does not currently filter on
+        // agent_id. Passthrough.
         self.inner.list(category, session_id).await
     }
 

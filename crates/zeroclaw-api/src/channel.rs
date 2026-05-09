@@ -144,7 +144,7 @@ pub trait Channel: Send + Sync {
         false
     }
 
-    /// Self-loop guard for #6272 multi-agent runs.
+    /// Self-loop guard for multi-agent runs.
     ///
     /// Returns the bot's own handle/identity on this channel
     /// (e.g. `@my_bot` for Telegram, the bot's user ID for Discord)
@@ -152,12 +152,6 @@ pub trait Channel: Send + Sync {
     /// `sender` matches: a bot must never respond to its own
     /// messages, even if a misconfigured peer group lists the bot's
     /// handle as an external peer.
-    ///
-    /// `None` means "this channel doesn't expose its self-identity
-    /// to the orchestrator yet" — the agent-loop self-loop guard
-    /// (P11 fallback, separate from this SDK-side check) provides a
-    /// second layer that catches the case where
-    /// `sender == self_outbound_handle`.
     ///
     /// Override this in channel implementations that have access to
     /// their own bot identity at runtime (e.g. after authenticating
@@ -169,7 +163,7 @@ pub trait Channel: Send + Sync {
     }
 
     /// Whether the orchestrator should drop an inbound message as
-    /// self-authored (#6272 multi-agent self-loop guard).
+    /// self-authored (multi-agent self-loop guard).
     ///
     /// Default implementation compares `msg.sender` against
     /// [`Self::self_handle`] case-insensitively, after stripping a
@@ -334,8 +328,7 @@ mod tests {
     use super::*;
 
     /// Stub channel that overrides `self_handle` so the default
-    /// `drop_self_messages` implementation can be exercised. Mirrors
-    /// the shape a real channel impl will take post-#6272 P11.
+    /// `drop_self_messages` implementation can be exercised.
     struct StubChannel {
         handle: Option<String>,
     }

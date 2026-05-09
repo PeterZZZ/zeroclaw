@@ -681,8 +681,8 @@ impl Memory for QdrantMemory {
 
         // Over-fetch and post-filter on the payload's agent_id field.
         // Pushing the filter into the Qdrant query as a `must` clause
-        // is the architectural target; v0.8.0 ships post-filter so the
-        // existing recall path stays single-source.
+        // is the architectural target; this implementation ships
+        // post-filter so the existing recall path stays single-source.
         let raw = self
             .recall(query, limit.saturating_mul(4), session_id, since, until)
             .await?;
@@ -695,8 +695,8 @@ impl Memory for QdrantMemory {
 
         // The recall path's MemoryEntry doesn't surface agent_id, so
         // re-fetch the payloads via a scroll restricted to the candidate
-        // ids. v0.8.0 acceptable: Qdrant scroll on a small id set is one
-        // round-trip; v0.8.1 will push the filter into the search call.
+        // ids. Qdrant scroll on a small id set is one round-trip;
+        // pushing the filter into the search call is a follow-up.
         let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
         let scroll_body = serde_json::json!({
             "filter": {

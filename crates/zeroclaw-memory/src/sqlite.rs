@@ -66,7 +66,7 @@ impl SqliteMemory {
              PRAGMA temp_store   = MEMORY;",
         )?;
         Self::init_schema(&conn)?;
-        Self::migrate_v0_8_0_multi_agent(&db_path, &conn)?;
+        Self::migrate_multi_agent(&db_path, &conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             db_path,
@@ -115,7 +115,7 @@ impl SqliteMemory {
         )?;
 
         Self::init_schema(&conn)?;
-        Self::migrate_v0_8_0_multi_agent(&db_path, &conn)?;
+        Self::migrate_multi_agent(&db_path, &conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -239,7 +239,7 @@ impl SqliteMemory {
         Ok(())
     }
 
-    /// v0.8.0 multi-agent DB migration (#6272 P6).
+    /// Multi-agent DB migration.
     ///
     /// Adds the `agents` table, the `agent_id` column on `memories`, and
     /// backfills existing rows to a synthesized `default` agent. All
@@ -249,13 +249,11 @@ impl SqliteMemory {
     /// existing rows that would be touched, so a crashed migration is
     /// recoverable.
     ///
-    /// `agent_id` is left nullable at the SQLite layer because SQLite
-    /// cannot add a NOT NULL FK column to an existing populated table
-    /// without a full table rebuild. The application-layer wrapper
-    /// that enforces non-null at write time (and pushes the
-    /// allowlist filter into SQL on recall) lands in v0.8.1 alongside
-    /// `Agent::from_config`'s switch to a per-agent memory backend.
-    fn migrate_v0_8_0_multi_agent(db_path: &Path, conn: &Connection) -> anyhow::Result<()> {
+    /// `agent_id` is nullable at the SQLite layer because SQLite cannot
+    /// add a NOT NULL FK column to an existing populated table without
+    /// a full table rebuild. The application-layer wrapper
+    /// (`AgentScopedMemory`) enforces non-null at write time.
+    fn migrate_multi_agent(db_path: &Path, conn: &Connection) -> anyhow::Result<()> {
         if Self::memories_has_agent_id_column(conn)? {
             return Ok(());
         }
@@ -286,10 +284,9 @@ impl SqliteMemory {
         let default_uuid = Self::ensure_default_agent_uuid(conn)?;
 
         // 3. ALTER TABLE memories ADD COLUMN agent_id, then backfill
-        //    every existing row to the default agent. The column stays
+        //    every existing row to the default agent. The column is
         //    nullable at the DB layer (see doc-comment above); the
-        //    application-layer enforcement of non-null on writes lands
-        //    in v0.8.1 alongside the per-agent memory plumbing.
+        //    `AgentScopedMemory` wrapper enforces non-null on writes.
         conn.execute_batch(
             "ALTER TABLE memories ADD COLUMN agent_id TEXT;
              CREATE INDEX IF NOT EXISTS idx_memories_agent_id ON memories(agent_id);",
@@ -362,14 +359,14 @@ impl SqliteMemory {
         ));
         std::fs::copy(db_path, &backup_path).with_context(|| {
             format!(
-                "failed to copy {} to {} before v0.8.0 multi-agent migration",
+                "failed to copy {} to {} before multi-agent migration",
                 db_path.display(),
                 backup_path.display(),
             )
         })?;
         tracing::info!(
             backup = %backup_path.display(),
-            "v0.8.0 multi-agent migration: backed up SQLite memory DB before adding agents table and agent_id column"
+            "multi-agent migration: backed up SQLite memory DB before adding agents table and agent_id column"
         );
         Ok(())
     }
@@ -1466,9 +1463,9 @@ impl Memory for SqliteMemory {
         .await??;
 
         // Filter: keep entries whose agent_id is on the allowlist, plus
-        // legacy NULL-agent_id rows (pre-v0.8.0 backfill leftovers — the
-        // backfill stamps them as the default agent so they only show up
-        // here when an install pre-dates this PR's migration entirely).
+        // legacy NULL-agent_id rows. The backfill stamps existing rows
+        // as the default agent, so NULLs only appear on installs that
+        // pre-date the multi-agent migration entirely.
         Ok(raw
             .into_iter()
             .filter(|e| match agent_id_map.get(&e.id) {

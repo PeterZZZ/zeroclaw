@@ -110,7 +110,7 @@ impl PostgresMemory {
                     .context("failed to connect to PostgreSQL memory backend")?;
 
                 Self::init_schema(&mut client, &schema_ident, &qualified_table)?;
-                Self::migrate_v0_8_0_multi_agent(&mut client, &schema_ident, &qualified_table)?;
+                Self::migrate_multi_agent(&mut client, &schema_ident, &qualified_table)?;
                 Ok(client)
             })
             .context("failed to spawn PostgreSQL initializer thread")?;
@@ -120,7 +120,7 @@ impl PostgresMemory {
             .map_err(|_| anyhow::anyhow!("PostgreSQL initializer thread panicked"))?
     }
 
-    /// v0.8.0 multi-agent DB migration for the Postgres backend (#6272 P6).
+    /// Multi-agent DB migration for the Postgres backend.
     ///
     /// Adds the `agents` table and the `agent_id` column on the
     /// memories table, with a default-agent backfill. Idempotent: every
@@ -132,7 +132,7 @@ impl PostgresMemory {
     /// network to dump a managed cluster from inside the binary.
     /// The default-agent UUID is generated in Rust so it has the same
     /// shape as SQLite/Lucid (TEXT, lowercase hyphenated).
-    fn migrate_v0_8_0_multi_agent(
+    fn migrate_multi_agent(
         client: &mut Client,
         schema_ident: &str,
         qualified_table: &str,
@@ -628,7 +628,7 @@ impl Memory for PostgresMemory {
         .await?;
 
         // Filter: keep entries whose agent_id is on the allowlist, plus
-        // legacy NULL-agent_id rows (pre-v0.8.0 backfill leftovers).
+        // legacy NULL-agent_id rows that pre-date the migration.
         Ok(raw
             .into_iter()
             .filter(|e| match agent_id_map.get(&e.id) {

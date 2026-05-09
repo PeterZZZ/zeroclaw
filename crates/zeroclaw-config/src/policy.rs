@@ -166,8 +166,8 @@ impl Default for PerSenderTracker {
 /// `allowed_roots` is the list of directories the agent can read AND
 /// write under (in addition to its own workspace). `allowed_roots_read_only`
 /// is the list it can only read from. Both are absolute, tilde-expanded
-/// paths populated when the policy is built. The two lists power the
-/// #6272 multi-agent cross-agent allowlist: when agent A grants
+/// paths populated when the policy is built. The two lists drive the
+/// multi-agent cross-agent allowlist: when agent A grants
 /// `AccessMode::Read` to agent B over B's workspace, B's workspace
 /// path lands in A's `allowed_roots_read_only`; `AccessMode::Write` and
 /// `AccessMode::ReadWrite` land in A's `allowed_roots`. file_read tools
@@ -1660,9 +1660,9 @@ impl SecurityPolicy {
     /// root. Returns false for the read-write list; callers that want
     /// the union should use [`Self::is_under_any_allowed_root`].
     ///
-    /// Populated for #6272 multi-agent: an agent's
-    /// `workspace.access` entries with `AccessMode::Read` become
-    /// read-only roots on the policy.
+    /// Populated for multi-agent: an agent's `workspace.access`
+    /// entries with `AccessMode::Read` become read-only roots on the
+    /// policy.
     #[must_use]
     pub fn is_under_read_only_allowed_root(&self, path: &str) -> bool {
         let expanded = expand_user_path(path);
@@ -1727,7 +1727,7 @@ impl SecurityPolicy {
                 .collect(),
             // RiskProfileConfig has no read-only-roots concept; the
             // multi-agent runtime populates this list when it builds
-            // a per-agent policy from the workspace.access map (P10/P11),
+            // a per-agent policy from the workspace.access map,
             // turning AccessMode::Read entries into read-only roots.
             allowed_roots_read_only: Vec::new(),
             max_actions_per_hour: risk_profile.max_actions_per_hour,
@@ -3699,7 +3699,7 @@ mod tests {
         assert!(!p.is_under_allowed_root("/any/path"));
     }
 
-    // ── #6272 P8: SecurityPolicy read/read-write split ──────────────
+    // ── SecurityPolicy read/read-write split ────────────────────────
 
     #[test]
     fn is_under_read_only_allowed_root_matches_only_read_only_list() {
@@ -3755,7 +3755,7 @@ mod tests {
     fn from_risk_profile_leaves_allowed_roots_read_only_empty() {
         // RiskProfileConfig has no read-only-roots concept; it's
         // populated by the multi-agent runtime when it builds the
-        // per-agent policy from workspace.access (P10/P11).
+        // per-agent policy from workspace.access.
         let profile = crate::schema::RiskProfileConfig {
             allowed_roots: vec!["/projects".to_string()],
             ..crate::schema::RiskProfileConfig::default()

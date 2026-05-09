@@ -144,9 +144,6 @@ impl Tool for FileReadTool {
 
         // Read access: workspace + read-write allowlist + read-only
         // allowlist + universal POSIX device files (/dev/null, etc.).
-        // The read-only branch closes the regression where v0.7.x
-        // configs that listed /dev/null in `allowed_roots` lost access
-        // after the v0.8.0 read/read-write split.
         if !self.security.is_resolved_path_readable(&resolved_path) {
             return Ok(ToolResult {
                 success: false,

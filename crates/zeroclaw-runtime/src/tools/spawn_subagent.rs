@@ -1,15 +1,9 @@
-//! `spawn_subagent` agent-loop tool (#6272).
-//!
-//! Lets a parent agent spawn an ephemeral SubAgent that inherits the
+//! Agent-loop tool that spawns an ephemeral SubAgent inheriting the
 //! parent's identity, security policy, and memory allowlist, runs a
 //! focused prompt, and returns the response. Cron's `JobType::Agent`
 //! dispatch is the other SubAgent spawn site; both funnel through
 //! [`crate::subagent::SubAgentSpawn`] so permission inheritance,
 //! tracing-span shape, and audit attribution stay uniform.
-//!
-//! v0.8.0 surface accepts only a `prompt`. The narrowing-override path
-//! lands in v0.8.1 alongside the `[agents.<alias>].subagent_*` config
-//! block.
 
 use crate::subagent::SubAgentSpawn;
 use anyhow::Result;

@@ -87,7 +87,7 @@ impl HasPropKind for Vec<crate::providers::ChannelRef> {
     const PROP_KIND: PropKind = PropKind::StringArray;
 }
 
-// Multi-agent (#6272) typed primitives. AgentAlias / PeerGroupName /
+// Multi-agent typed primitives. AgentAlias / PeerGroupName /
 // PeerUsername round-trip as plain strings; AccessMode and
 // MemoryBackendKind are enums; PeerExternal is a struct (object) that
 // serializes as a single-field TOML table.

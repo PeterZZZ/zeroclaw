@@ -1,18 +1,17 @@
-//! Peer-group runtime resolution (#6272).
+//! Peer-group runtime resolution.
 //!
 //! Given a `Config` and an `agent_alias`, produces the effective set
 //! of peers that agent should accept inbound messages from on its
 //! configured channels. The schema-side primitive is the
-//! `[peer_groups.<name>]` block in `zeroclaw-config`'s `multi_agent`
-//! module; this module is the read-side resolver that walks the
-//! configured groups, applies the mutual-membership rule, unions
-//! external peers, subtracts the per-group ignore lists, and returns
-//! the result keyed by channel.
+//! `[peer_groups.<name>]` block in `zeroclaw-config::multi_agent`;
+//! this module is the read-side resolver that walks the configured
+//! groups, applies the mutual-membership rule, unions external peers,
+//! subtracts the per-group ignore lists, and returns the result keyed
+//! by channel.
 //!
-//! Validation invariants are upheld at config load (P3): peer-group
-//! members exist as configured agents; the group's channel is in
-//! every member's `channels` list; cross-references that would
-//! dangle are rejected. By the time the runtime calls
+//! Cross-reference invariants (peer-group members are configured
+//! agents, the group's channel is on each member's `channels` list)
+//! are upheld at config load. By the time the runtime calls
 //! [`resolve_peer_set`], every input is internally consistent.
 
 use std::collections::{BTreeMap, BTreeSet};

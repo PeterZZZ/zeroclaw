@@ -1,43 +1,26 @@
-//! SubAgent runtime (#6272).
+//! Runtime-spawned ephemeral sub-agents that inherit their parent
+//! agent's identity verbatim: same UUID, same `SecurityPolicy`, same
+//! memory allowlist. A SubAgent run is auditable as a child of the
+//! parent and stays inside the parent's permissions envelope.
 //!
-//! A SubAgent is a runtime-spawned ephemeral sub-agent that inherits
-//! its parent agent's identity verbatim. The parent's UUID,
-//! `SecurityPolicy`, and memory-allowlist set carry through to the
-//! SubAgent so a SubAgent run is auditable as a child of the parent
-//! and stays inside the parent's permissions envelope.
-//!
-//! Two spawn sites in v0.8.0 use the [`SubAgentSpawn`] surface:
-//!
-//! - The agent-loop tool `spawn_subagent`, which lets a parent agent
-//!   delegate a focused task at runtime.
-//! - The cron scheduler's `JobType::Agent` dispatch, which runs the
-//!   configured prompt under the owning agent's identity at the
-//!   cron-fire moment. Both share the SubAgent infrastructure so
-//!   permission inheritance, tracing-span shape, and audit
-//!   attribution stay uniform across spawn sites.
-//!
-//! v0.8.0 inherits-verbatim only. The narrowing-override surface
-//! (`SubAgentOverrides` + `SecurityPolicy::ensure_no_escalation_beyond`
-//! validator) lands in v0.8.1 alongside the
-//! `[agents.<alias>].subagent_*` config block that supplies the
-//! overrides; the validator is in `crates/zeroclaw-config/src/policy.rs`
-//! ready for that wiring.
+//! Two spawn sites converge on [`SubAgentSpawn`]: the agent-loop
+//! tool `spawn_subagent` and the cron scheduler's `JobType::Agent`
+//! dispatch. Sharing the surface keeps permission inheritance,
+//! tracing-span shape, and audit attribution uniform.
 
 use anyhow::{Context, Result};
 
 use zeroclaw_config::schema::Config;
 
-/// A constructed SubAgent context: the parent agent's identity, used
+/// Constructed SubAgent context: the parent agent's identity, used
 /// by spawn-site code to populate the `subagent` tracing span and
 /// route audit log entries.
 #[derive(Debug, Clone)]
 pub struct SubAgentContext {
-    /// The parent agent's identifier (alias in v0.8.0; agents-table
-    /// UUID once the runtime cuts over to UUID-keyed identity).
-    /// SubAgents share the parent's identity at the data layer (no
-    /// separate row in the agents table); the distinction between
-    /// parent and sub-run is captured at the tracing-span level
-    /// (`agent.<alias>.subagent.<run_id>`).
+    /// The parent agent's identifier. SubAgents share the parent's
+    /// identity at the data layer (no separate row in the agents
+    /// table); the distinction between parent and sub-run is captured
+    /// at the tracing-span level (`agent.<alias>.subagent.<run_id>`).
     pub agent_id: String,
 }
 

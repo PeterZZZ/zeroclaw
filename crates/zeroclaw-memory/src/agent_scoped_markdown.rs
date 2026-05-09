@@ -1,7 +1,6 @@
-//! `AgentScopedMarkdownMemory` — cross-agent path-walk variant for
-//! Markdown-backed agents (#6272 multi-agent runtime).
+//! Cross-agent path-walk variant for Markdown-backed agents.
 //!
-//! The generic [`AgentScopedMemory<M>`](crate::agent_scoped::AgentScopedMemory)
+//! The generic [`AgentScopedMemory`](crate::agent_scoped::AgentScopedMemory)
 //! relies on the inner backend filtering rows by `agent_id` at the
 //! storage layer. Markdown has no shared store: each agent's
 //! attribution IS its on-disk path
@@ -9,12 +8,12 @@
 //! `memory/YYYY-MM-DD.md`). Cross-agent recall therefore composes
 //! multiple `MarkdownMemory` instances rather than filtering rows.
 //!
-//! This module ships `AgentScopedMarkdownMemory`, which holds the
-//! bound agent's `MarkdownMemory` plus a peer set of
-//! `(alias, MarkdownMemory)` pairs resolved at construction from the
-//! `read_memory_from` allowlist. Stores go to the bound agent only;
-//! recalls union across all peers and stamp each merged entry's `key`
-//! with a `[<alias>] ` prefix so callers can attribute the row.
+//! `AgentScopedMarkdownMemory` holds the bound agent's
+//! `MarkdownMemory` plus a peer set of `(alias, MarkdownMemory)` pairs
+//! resolved at construction from the `read_memory_from` allowlist.
+//! Stores go to the bound agent only; recalls union across all peers
+//! and stamp each merged entry's `key` with a `[<alias>] ` prefix so
+//! callers can attribute the row.
 
 use super::markdown::MarkdownMemory;
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
@@ -40,9 +39,9 @@ pub struct AgentScopedMarkdownMemory {
     own: MarkdownMemory,
     /// Resolved sibling agents this wrapper recalls from. Empty means
     /// jailed — the agent only sees its own rows. Same-backend
-    /// invariant: every peer here is also Markdown-backed (the P3
+    /// invariant: every peer here is also Markdown-backed (the
     /// cross-reference validator rejects mismatched-backend allowlist
-    /// entries at config-load).
+    /// entries at config load).
     peers: Vec<MarkdownPeer>,
 }
 

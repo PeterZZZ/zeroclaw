@@ -486,12 +486,10 @@ pub fn create_memory_for_migration(
 /// the resolved `read_memory_from` allowlist). `NoneMemory` agents
 /// pass through unwrapped.
 ///
-/// Cross-backend allowlist entries are rejected at config-load (P3),
-/// so by the time we get here every entry on
+/// Cross-backend allowlist entries are rejected at config load, so by
+/// the time we get here every entry on
 /// `agents.<alias>.workspace.read_memory_from` is guaranteed to point
-/// at a sibling on the same backend kind. v0.8.0 does not support
-/// cross-backend cross-agent memory access; that's deferred to v0.8.1
-/// alongside agent rename and backend switching.
+/// at a sibling on the same backend kind.
 pub async fn create_memory_for_agent(
     config: &zeroclaw_config::schema::Config,
     agent_alias: &str,

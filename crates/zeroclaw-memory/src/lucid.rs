@@ -464,18 +464,18 @@ impl Memory for LucidMemory {
         since: Option<&str>,
         until: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        // Lucid's remote-daemon recall has no agent_id awareness in v0.8.0;
-        // the cross-agent allowlist is enforced on the local SQLite mirror
-        // only. If the local hits clear the threshold the remote leg never
-        // runs (matching `recall`'s short-circuit semantics).
+        // Lucid's remote-daemon recall has no agent_id awareness; the
+        // cross-agent allowlist is enforced on the local SQLite mirror
+        // only. If the local hits clear the threshold the remote leg
+        // never runs (matching `recall`'s short-circuit semantics).
         self.local
             .recall_for_agents(allowed_agent_ids, query, limit, session_id, since, until)
             .await
     }
 
     async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
-        // Lucid's remote daemon has no agents table in v0.8.0; the
-        // local SQLite mirror is the canonical agents-table store.
+        // Lucid's remote daemon has no agents table; the local SQLite
+        // mirror is the canonical agents-table store.
         self.local.ensure_agent_uuid(alias).await
     }
 }
