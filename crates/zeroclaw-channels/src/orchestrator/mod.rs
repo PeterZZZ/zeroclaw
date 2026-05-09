@@ -343,7 +343,7 @@ struct ChannelRuntimeContext {
     channels_by_name: Arc<HashMap<String, Arc<dyn Channel>>>,
     model_provider: Arc<dyn ModelProvider>,
     default_model_provider: Arc<String>,
-    /// Resolved delegate-agent config for the agent owning this
+    /// Resolved aliased-agent config for the agent owning this
     /// runtime context. Per-channel agent dispatch (one agent per
     /// channel.<type>.<alias>) is a follow-up.
     agent_cfg: Arc<zeroclaw_config::schema::AliasedAgentConfig>,

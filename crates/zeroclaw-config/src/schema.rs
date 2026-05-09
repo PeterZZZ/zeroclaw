@@ -324,7 +324,11 @@ pub struct Config {
     #[nested]
     pub delegate: DelegateToolConfig,
 
-    /// Delegate agent configurations for multi-agent workflows.
+    /// Aliased agents in this install. Each entry under `[agents.<alias>]`
+    /// is one user-facing agent with its own identity, channels, model
+    /// provider, risk profile, and (post-#6272) workspace and memory
+    /// scope. `DelegateTool` consults this map when one agent delegates a
+    /// subtask to another.
     #[serde(default)]
     #[nested]
     pub agents: HashMap<String, AliasedAgentConfig>,
@@ -2575,9 +2579,11 @@ impl Default for DelegateToolConfig {
     }
 }
 
-// ── Delegate Agents ──────────────────────────────────────────────
+// ── Aliased Agents ───────────────────────────────────────────────
 
-/// Configuration for a delegate sub-agent used by the `delegate` tool.
+/// Configuration for an aliased agent. Each `[agents.<alias>]` TOML
+/// block deserializes into one of these. The `DelegateTool` looks up
+/// entries here to dispatch a subtask to a named sibling agent.
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "delegate-agent"]
@@ -2799,7 +2805,7 @@ impl Config {
     /// under the same model_provider family to whichever entry happens to be
     /// first. The matching split logic lives in
     /// `crates/zeroclaw-runtime/src/tools/delegate.rs::resolve_brain` for
-    /// delegate sub-agents; this helper exposes the same contract for the
+    /// the delegation path; this helper exposes the same contract for the
     /// channel-server startup path.
     #[must_use]
     pub fn model_provider_for_agent(&self, agent_alias: &str) -> Option<&ModelProviderConfig> {
@@ -2837,8 +2843,8 @@ impl Config {
             .map(|(alias, _)| alias.as_str())
     }
 
-    /// Resolve a delegate-agent config by alias. `None` when the alias
-    /// isn't configured — callers should treat this as a config error
+    /// Resolve an aliased-agent config by alias. `None` when the alias
+    /// isn't configured; callers should treat this as a config error
     /// rather than synthesizing a default.
     #[must_use]
     pub fn agent(&self, agent_alias: &str) -> Option<&AliasedAgentConfig> {
