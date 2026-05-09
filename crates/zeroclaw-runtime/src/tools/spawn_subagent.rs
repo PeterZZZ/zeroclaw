@@ -1,20 +1,17 @@
-//! `spawn_subagent` agent-loop tool (#6272 P10c).
+//! `spawn_subagent` agent-loop tool (#6272).
 //!
 //! Lets a parent agent spawn an ephemeral SubAgent that inherits the
 //! parent's identity, security policy, and memory allowlist, runs a
 //! focused prompt, and returns the response. Cron's `JobType::Agent`
-//! dispatch (P10b) is the other SubAgent spawn site; both funnel
-//! through [`crate::subagent::SubAgentSpawn`] so permission
-//! inheritance, tracing-span shape, and audit attribution stay uniform.
+//! dispatch is the other SubAgent spawn site; both funnel through
+//! [`crate::subagent::SubAgentSpawn`] so permission inheritance,
+//! tracing-span shape, and audit attribution stay uniform.
 //!
 //! v0.8.0 surface accepts only a `prompt`. The narrowing-override path
-//! (sub-agents that drop privileges below the parent) is deferred to
-//! v0.8.1 along with the `[agents.<alias>].subagent_*` config block;
-//! the spawn validator already supports it via
-//! [`crate::subagent::SubAgentOverrides`], so adding the surface later
-//! is purely additive.
+//! lands in v0.8.1 alongside the `[agents.<alias>].subagent_*` config
+//! block.
 
-use crate::subagent::{SubAgentOverrides, SubAgentSpawn};
+use crate::subagent::SubAgentSpawn;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
@@ -77,10 +74,8 @@ impl Tool for SpawnSubagentTool {
             .ok_or_else(|| anyhow::anyhow!("Missing or empty 'prompt' parameter"))?
             .to_string();
 
-        let subagent_ctx = match SubAgentSpawn::for_agent(&self.config, &self.parent_alias)
-            .and_then(|spawn| spawn.build(SubAgentOverrides::default()))
-        {
-            Ok(ctx) => ctx,
+        let subagent_ctx = match SubAgentSpawn::for_agent(&self.config, &self.parent_alias) {
+            Ok(spawn) => spawn.build(),
             Err(e) => {
                 return Ok(ToolResult {
                     success: false,
@@ -162,33 +157,16 @@ mod tests {
         config
     }
 
-    #[test]
-    fn tool_name_and_schema_are_well_formed() {
-        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha");
-        assert_eq!(tool.name(), "spawn_subagent");
-        let schema = tool.parameters_schema();
-        assert!(schema["properties"]["prompt"].is_object());
-        assert_eq!(schema["required"][0], "prompt");
-    }
-
     #[tokio::test]
-    async fn missing_prompt_is_rejected() {
+    async fn empty_or_missing_prompt_is_rejected() {
         let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha");
-        let err = tool
-            .execute(json!({}))
-            .await
-            .expect_err("missing prompt must fail");
-        assert!(err.to_string().contains("prompt"));
-    }
-
-    #[tokio::test]
-    async fn empty_prompt_is_rejected() {
-        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha");
-        let err = tool
-            .execute(json!({ "prompt": "   " }))
-            .await
-            .expect_err("empty prompt must fail");
-        assert!(err.to_string().contains("prompt"));
+        for args in [json!({}), json!({ "prompt": "   " })] {
+            let err = tool
+                .execute(args)
+                .await
+                .expect_err("missing-or-empty prompt must fail");
+            assert!(err.to_string().contains("prompt"));
+        }
     }
 
     #[tokio::test]

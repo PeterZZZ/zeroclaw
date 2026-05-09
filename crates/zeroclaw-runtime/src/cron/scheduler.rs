@@ -291,14 +291,12 @@ async fn run_agent_job(
 ) -> (bool, String) {
     // Cron is one of two SubAgent spawn sites in v0.8.0; the other is
     // the agent-loop `spawn_subagent` tool. Both funnel through
-    // `SubAgentSpawn::build` so permission inheritance, tracing span
-    // shape, and audit attribution stay uniform across spawn sites.
-    // Default `SubAgentOverrides` means "inherit verbatim" — the cron
-    // job inherits the owning agent's policy and memory allowlist.
-    let subagent_ctx = match crate::subagent::SubAgentSpawn::for_agent(config, agent_alias)
-        .and_then(|spawn| spawn.build(crate::subagent::SubAgentOverrides::default()))
-    {
-        Ok(ctx) => ctx,
+    // `SubAgentSpawn::for_agent` so permission inheritance, tracing
+    // span shape, and audit attribution stay uniform across spawn
+    // sites. v0.8.0 inherits the owning agent's identity verbatim;
+    // narrowing overrides land in v0.8.1.
+    let subagent_ctx = match crate::subagent::SubAgentSpawn::for_agent(config, agent_alias) {
+        Ok(spawn) => spawn.build(),
         Err(e) => return (false, format!("subagent spawn failed: {e:#}")),
     };
 
