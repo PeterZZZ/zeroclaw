@@ -69,11 +69,11 @@ export interface Integration {
   name: string;
   description: string;
   category: string;
-  status: 'Available' | 'Active';
+  status: "Available" | "Active";
 }
 
 export interface DiagResult {
-  severity: 'ok' | 'warn' | 'error';
+  severity: "ok" | "warn" | "error";
   category: string;
   message: string;
 }
@@ -123,10 +123,10 @@ export interface ChannelDetail {
   name: string;
   type: string;
   enabled: boolean;
-  status: 'active' | 'inactive' | 'error';
+  status: "active" | "inactive" | "error";
   message_count: number;
   last_message_at: string | null;
-  health: 'healthy' | 'degraded' | 'down';
+  health: "healthy" | "degraded" | "down";
 }
 
 export interface SSEEvent {
@@ -137,17 +137,17 @@ export interface SSEEvent {
 
 export interface WsMessage {
   type:
-    | 'message'
-    | 'chunk'
-    | 'chunk_reset'
-    | 'thinking'
-    | 'tool_call'
-    | 'tool_result'
-    | 'done'
-    | 'error'
-    | 'session_start'
-    | 'connected'
-    | 'cron_result';
+    | "message"
+    | "chunk"
+    | "chunk_reset"
+    | "thinking"
+    | "tool_call"
+    | "tool_result"
+    | "done"
+    | "error"
+    | "session_start"
+    | "connected"
+    | "cron_result";
   content?: string;
   full_response?: string;
   name?: string;

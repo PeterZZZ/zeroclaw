@@ -7,6 +7,7 @@ pub mod otel;
 #[cfg(feature = "observability-prometheus")]
 pub mod prometheus;
 pub mod runtime_trace;
+pub mod sse_broadcast;
 pub mod traits;
 pub mod verbose;
 
@@ -19,6 +20,7 @@ pub use noop::NoopObserver;
 pub use otel::OtelObserver;
 #[cfg(feature = "observability-prometheus")]
 pub use prometheus::PrometheusObserver;
+pub use sse_broadcast::SseBroadcastObserver;
 pub use traits::{Observer, ObserverEvent};
 #[allow(unused_imports)]
 pub use verbose::VerboseObserver;

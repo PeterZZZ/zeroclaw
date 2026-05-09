@@ -140,6 +140,20 @@ impl zeroclaw_runtime::observability::Observer for BroadcastObserver {
                 "model": model,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
+            zeroclaw_runtime::observability::ObserverEvent::LlmResponse {
+                provider,
+                model,
+                duration,
+                success,
+                ..
+            } => serde_json::json!({
+                "type": "llm_response",
+                "provider": provider,
+                "model": model,
+                "duration_ms": duration.as_millis(),
+                "success": success,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }),
             zeroclaw_runtime::observability::ObserverEvent::ToolCall {
                 tool,
                 duration,
@@ -155,6 +169,27 @@ impl zeroclaw_runtime::observability::Observer for BroadcastObserver {
                 serde_json::json!({
                     "type": "tool_call_start",
                     "tool": tool,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                })
+            }
+            zeroclaw_runtime::observability::ObserverEvent::TurnComplete => {
+                serde_json::json!({
+                    "type": "turn_complete",
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                })
+            }
+            zeroclaw_runtime::observability::ObserverEvent::ChannelMessage {
+                channel,
+                direction,
+            } => serde_json::json!({
+                "type": "channel_message",
+                "channel": channel,
+                "direction": direction,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }),
+            zeroclaw_runtime::observability::ObserverEvent::HeartbeatTick => {
+                serde_json::json!({
+                    "type": "heartbeat_tick",
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                 })
             }

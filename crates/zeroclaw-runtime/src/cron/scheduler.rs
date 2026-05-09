@@ -79,8 +79,15 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
     //    if the machine was off for a while. The catch-up phase fetches
     //    without the `max_tasks` limit so every missed job fires once.
     //    Controlled by `[cron] catch_up_on_startup` (default: true).
+    // Create a broadcast observer from event_tx so agent jobs emit to SSE.
+    let cron_observer: Option<Arc<dyn crate::observability::Observer>> =
+        event_tx.as_ref().map(|tx| {
+            Arc::new(crate::observability::SseBroadcastObserver::new(tx.clone()))
+                as Arc<dyn crate::observability::Observer>
+        });
+
     if config.cron.catch_up_on_startup {
-        catch_up_overdue_jobs(&config, &security, &event_tx).await;
+        catch_up_overdue_jobs(&config, &security, &event_tx, cron_observer.clone()).await;
     } else {
         tracing::info!("Scheduler startup: catch-up disabled by config");
     }
@@ -99,7 +106,15 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
             }
         };
 
-        process_due_jobs(&config, &security, jobs, SCHEDULER_COMPONENT, &event_tx).await;
+        process_due_jobs(
+            &config,
+            &security,
+            jobs,
+            SCHEDULER_COMPONENT,
+            &event_tx,
+            cron_observer.clone(),
+        )
+        .await;
     }
 }
 
@@ -111,6 +126,7 @@ async fn catch_up_overdue_jobs(
     config: &Config,
     security: &Arc<SecurityPolicy>,
     event_tx: &EventBroadcast,
+    observer: Option<Arc<dyn crate::observability::Observer>>,
 ) {
     let now = Utc::now();
     let jobs = match all_overdue_jobs(config, now) {
@@ -131,20 +147,33 @@ async fn catch_up_overdue_jobs(
         "Scheduler startup: catching up overdue jobs"
     );
 
-    process_due_jobs(config, security, jobs, SCHEDULER_COMPONENT, event_tx).await;
+    process_due_jobs(
+        config,
+        security,
+        jobs,
+        SCHEDULER_COMPONENT,
+        event_tx,
+        observer,
+    )
+    .await;
 
     tracing::info!("Scheduler startup: catch-up complete");
 }
 
-pub async fn execute_job_now(config: &Config, job: &CronJob) -> (bool, String) {
+pub async fn execute_job_now(
+    config: &Config,
+    job: &CronJob,
+    observer: Option<Arc<dyn crate::observability::Observer>>,
+) -> (bool, String) {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
-    Box::pin(execute_job_with_retry(config, &security, job)).await
+    Box::pin(execute_job_with_retry(config, &security, job, observer)).await
 }
 
 async fn execute_job_with_retry(
     config: &Config,
     security: &SecurityPolicy,
     job: &CronJob,
+    observer: Option<Arc<dyn crate::observability::Observer>>,
 ) -> (bool, String) {
     let mut last_output = String::new();
     let retries = config.reliability.scheduler_retries;
@@ -153,7 +182,9 @@ async fn execute_job_with_retry(
     for attempt in 0..=retries {
         let (success, output) = match job.job_type {
             JobType::Shell => run_job_command(config, security, job).await,
-            JobType::Agent => Box::pin(run_agent_job(config, security, job)).await,
+            JobType::Agent => {
+                Box::pin(run_agent_job(config, security, job, observer.clone())).await
+            }
         };
         last_output = output;
 
@@ -182,6 +213,7 @@ async fn process_due_jobs(
     jobs: Vec<CronJob>,
     component: &str,
     event_tx: &EventBroadcast,
+    observer: Option<Arc<dyn crate::observability::Observer>>,
 ) {
     // Refresh scheduler health on every successful poll cycle, including idle cycles.
     crate::health::mark_component_ok(component);
@@ -191,12 +223,14 @@ async fn process_due_jobs(
         let config = config.clone();
         let security = Arc::clone(security);
         let component = component.to_owned();
+        let observer = observer.clone();
         async move {
             Box::pin(execute_and_persist_job(
                 &config,
                 security.as_ref(),
                 &job,
                 &component,
+                observer,
             ))
             .await
         }
@@ -225,12 +259,13 @@ async fn execute_and_persist_job(
     security: &SecurityPolicy,
     job: &CronJob,
     component: &str,
+    observer: Option<Arc<dyn crate::observability::Observer>>,
 ) -> (String, bool, String) {
     crate::health::mark_component_ok(component);
     warn_if_high_frequency_agent_job(job);
 
     let started_at = Utc::now();
-    let (success, output) = Box::pin(execute_job_with_retry(config, security, job)).await;
+    let (success, output) = Box::pin(execute_job_with_retry(config, security, job, observer)).await;
     let finished_at = Utc::now();
     let success = Box::pin(persist_job_result(
         config,
@@ -249,6 +284,7 @@ async fn run_agent_job(
     config: &Config,
     security: &SecurityPolicy,
     job: &CronJob,
+    observer: Option<Arc<dyn crate::observability::Observer>>,
 ) -> (bool, String) {
     if !security.can_act() {
         return (
@@ -340,6 +376,7 @@ async fn run_agent_job(
                 false,
                 Some(session_path.clone()),
                 job.allowed_tools.clone(),
+                observer.clone(),
             ))
             .await
         }
@@ -973,7 +1010,8 @@ mod tests {
         .unwrap();
         let job = test_job("sh ./retry-once.sh");
 
-        let (success, output) = Box::pin(execute_job_with_retry(&config, &security, &job)).await;
+        let (success, output) =
+            Box::pin(execute_job_with_retry(&config, &security, &job, None)).await;
         assert!(success);
         assert!(output.contains("recovered"));
     }
@@ -988,7 +1026,8 @@ mod tests {
 
         let job = test_job("ls always_missing_for_retry_test");
 
-        let (success, output) = Box::pin(execute_job_with_retry(&config, &security, &job)).await;
+        let (success, output) =
+            Box::pin(execute_job_with_retry(&config, &security, &job, None)).await;
         assert!(!success);
         assert!(output.contains("always_missing_for_retry_test"));
     }
@@ -1002,7 +1041,7 @@ mod tests {
         job.prompt = Some("Say hello".into());
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-        let (success, output) = Box::pin(run_agent_job(&config, &security, &job)).await;
+        let (success, output) = Box::pin(run_agent_job(&config, &security, &job, None)).await;
         assert!(!success);
         assert!(output.contains("agent job failed:"));
     }
@@ -1017,7 +1056,7 @@ mod tests {
         job.prompt = Some("Say hello".into());
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-        let (success, output) = Box::pin(run_agent_job(&config, &security, &job)).await;
+        let (success, output) = Box::pin(run_agent_job(&config, &security, &job, None)).await;
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
         assert!(output.contains("read-only"));
@@ -1033,7 +1072,7 @@ mod tests {
         job.prompt = Some("Say hello".into());
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-        let (success, output) = Box::pin(run_agent_job(&config, &security, &job)).await;
+        let (success, output) = Box::pin(run_agent_job(&config, &security, &job, None)).await;
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
         assert!(output.contains("rate limit exceeded"));
@@ -1050,7 +1089,7 @@ mod tests {
         let component = unique_component("scheduler-idle");
 
         crate::health::mark_component_error(&component, "pre-existing error");
-        process_due_jobs(&config, &security, Vec::new(), &component, &None).await;
+        process_due_jobs(&config, &security, Vec::new(), &component, &None, None).await;
 
         let snapshot = crate::health::snapshot_json();
         let entry = &snapshot["components"][component.as_str()];
@@ -1071,7 +1110,7 @@ mod tests {
         let component = unique_component("scheduler-fail");
 
         crate::health::mark_component_ok(&component);
-        process_due_jobs(&config, &security, vec![job], &component, &None).await;
+        process_due_jobs(&config, &security, vec![job], &component, &None, None).await;
 
         let snapshot = crate::health::snapshot_json();
         let entry = &snapshot["components"][component.as_str()];
@@ -1384,7 +1423,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel::<serde_json::Value>(16);
         let event_tx: EventBroadcast = Some(tx);
 
-        process_due_jobs(&config, &security, vec![job], &component, &event_tx).await;
+        process_due_jobs(&config, &security, vec![job], &component, &event_tx, None).await;
 
         let event = rx.try_recv().expect("should receive a broadcast event");
         assert_eq!(event["type"], "cron_result");
@@ -1408,7 +1447,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel::<serde_json::Value>(16);
         let event_tx: EventBroadcast = Some(tx);
 
-        process_due_jobs(&config, &security, vec![job], &component, &event_tx).await;
+        process_due_jobs(&config, &security, vec![job], &component, &event_tx, None).await;
 
         let event = rx.try_recv().expect("should receive a broadcast event");
         assert_eq!(event["type"], "cron_result");
@@ -1429,7 +1468,7 @@ mod tests {
         let component = unique_component("broadcast-none");
 
         // event_tx = None — should complete without panic.
-        process_due_jobs(&config, &security, vec![job], &component, &None).await;
+        process_due_jobs(&config, &security, vec![job], &component, &None, None).await;
     }
 
     #[tokio::test]
@@ -1448,7 +1487,7 @@ mod tests {
         // process_due_jobs must not panic when there are no subscribers.
         let event_tx: EventBroadcast = Some(tx);
 
-        process_due_jobs(&config, &security, vec![job], &component, &event_tx).await;
+        process_due_jobs(&config, &security, vec![job], &component, &event_tx, None).await;
         // If we got here without panic, the test passes.
     }
 }
