@@ -270,6 +270,44 @@ impl Memory for MarkdownMemory {
     async fn health_check(&self) -> bool {
         self.workspace_dir.exists()
     }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        _namespace: Option<&str>,
+        _importance: Option<f64>,
+        _agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        // Markdown's per-agent attribution is the on-disk path: the
+        // backend writes into `<workspace_dir>/MEMORY.md` and the
+        // workspace_dir is the agent's own under v0.8.0's per-agent
+        // factory. The agent_id parameter is therefore redundant and
+        // intentionally ignored at the trait boundary; cross-agent
+        // reads merge multiple MarkdownMemory instances at the
+        // wrapper layer (`AgentScopedMarkdownMemory`).
+        self.store(key, content, category, session_id).await
+    }
+
+    async fn recall_for_agents(
+        &self,
+        _allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        // Same per-agent-path attribution model as `store_with_agent`:
+        // a single MarkdownMemory instance reads only its own
+        // workspace_dir. Cross-agent recall is composed by
+        // `AgentScopedMarkdownMemory`, which holds an own
+        // MarkdownMemory plus a Vec<(alias, MarkdownMemory)> peer set
+        // and unions their results with attribution.
+        self.recall(query, limit, session_id, since, until).await
+    }
 }
 
 #[cfg(test)]

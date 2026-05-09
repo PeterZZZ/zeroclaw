@@ -64,6 +64,31 @@ impl Memory for NoneMemory {
     async fn health_check(&self) -> bool {
         true
     }
+
+    async fn store_with_agent(
+        &self,
+        _key: &str,
+        _content: &str,
+        _category: MemoryCategory,
+        _session_id: Option<&str>,
+        _namespace: Option<&str>,
+        _importance: Option<f64>,
+        _agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn recall_for_agents(
+        &self,
+        _allowed_agent_ids: &[&str],
+        _query: &str,
+        _limit: usize,
+        _session_id: Option<&str>,
+        _since: Option<&str>,
+        _until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]

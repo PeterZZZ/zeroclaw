@@ -289,6 +289,57 @@ pub trait Memory: Send + Sync {
     ) -> anyhow::Result<()> {
         self.store(key, content, category, session_id).await
     }
+
+    /// Store a memory entry attributed to an explicit agent UUID
+    /// (#6272 multi-agent runtime). Required: every backend must
+    /// implement this explicitly so the agent_id is never silently
+    /// dropped at storage time. Backends with native agent_id columns
+    /// (SqliteMemory, PostgresMemory, LucidMemory) persist the
+    /// attribution in SQL; backends with no shared store
+    /// (MarkdownMemory uses per-agent directories) attribute via the
+    /// path; QdrantMemory persists in the vector payload; NoneMemory
+    /// is a no-op stub. The wrapper that calls this on every store
+    /// is `AgentScopedMemory<M>` in zeroclaw-memory.
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        namespace: Option<&str>,
+        importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()>;
+
+    /// Recall memory entries scoped to a specific set of agent UUIDs
+    /// (#6272 multi-agent runtime). When `allowed_agent_ids` is
+    /// non-empty, the backend filters its result set to rows whose
+    /// `agent_id` matches one of the listed UUIDs (or is NULL, which
+    /// represents legacy rows that pre-date the v0.8.0 migration).
+    /// Required: every backend must implement this explicitly so the
+    /// allowlist is never silently dropped at read time.
+    ///
+    /// For SQL-backed stores the filter is `WHERE agent_id IN (...)`.
+    /// For Markdown the implementation walks the allowed agents'
+    /// per-agent directories. For Qdrant it's a payload filter on
+    /// the `agent_id` field. For None it returns an empty list.
+    /// `AgentScopedMemory<M>` is the canonical caller; direct
+    /// invocation is also valid for read-only cross-agent queries
+    /// that bypass the wrapper.
+    ///
+    /// Cross-backend allowlist entries are rejected at config-load
+    /// (`agents.<alias>.workspace.read_memory_from` cannot point at
+    /// a sibling on a different memory backend in v0.8.0); backends
+    /// therefore never need to handle a cross-backend recall.
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>>;
 }
 
 #[cfg(test)]

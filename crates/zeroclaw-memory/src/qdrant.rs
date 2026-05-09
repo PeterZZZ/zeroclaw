@@ -188,6 +188,8 @@ struct MemoryPayload {
     timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
 }
 
 /// Qdrant search result
@@ -252,6 +254,7 @@ impl Memory for QdrantMemory {
             category: Self::category_to_str(&category),
             timestamp,
             session_id: session_id.map(str::to_string),
+            agent_id: None,
         };
 
         // Delete any existing point with the same key first
@@ -600,6 +603,152 @@ impl Memory for QdrantMemory {
 
         matches!(resp, Ok(r) if r.status().is_success())
     }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        _namespace: Option<&str>,
+        _importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        self.ensure_initialized().await?;
+
+        let combined_text = format!("{}\n{}", key, content);
+        let embedding = self.embedder.embed_one(&combined_text).await?;
+        if embedding.is_empty() {
+            anyhow::bail!("Qdrant requires non-zero dimensional embeddings");
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let timestamp = Utc::now().to_rfc3339();
+
+        let payload = MemoryPayload {
+            key: key.to_string(),
+            content: content.to_string(),
+            category: Self::category_to_str(&category),
+            timestamp,
+            session_id: session_id.map(str::to_string),
+            agent_id: agent_id.map(str::to_string),
+        };
+
+        let _ = self.forget(key).await;
+
+        let upsert_body = serde_json::json!({
+            "points": [{
+                "id": id,
+                "vector": embedding,
+                "payload": payload
+            }]
+        });
+
+        let resp = self
+            .request(
+                reqwest::Method::PUT,
+                &format!("/collections/{}/points", self.collection),
+            )
+            .query(&[("wait", "true")])
+            .json(&upsert_body)
+            .send()
+            .await
+            .context("failed to upsert point to Qdrant")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Qdrant upsert failed ({status}): {text}");
+        }
+
+        Ok(())
+    }
+
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
+        // Empty allowlist = no agent filter (matches the wrapper's
+        // semantics; see the SQL backends).
+        if allowed_agent_ids.is_empty() {
+            return self.recall(query, limit, session_id, since, until).await;
+        }
+
+        // Over-fetch and post-filter on the payload's agent_id field.
+        // Pushing the filter into the Qdrant query as a `must` clause
+        // is the architectural target; v0.8.0 ships post-filter so the
+        // existing recall path stays single-source.
+        let raw = self
+            .recall(query, limit.saturating_mul(4), session_id, since, until)
+            .await?;
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let allowed: std::collections::HashSet<String> =
+            allowed_agent_ids.iter().map(|s| (*s).to_string()).collect();
+
+        // The recall path's MemoryEntry doesn't surface agent_id, so
+        // re-fetch the payloads via a scroll restricted to the candidate
+        // ids. v0.8.0 acceptable: Qdrant scroll on a small id set is one
+        // round-trip; v0.8.1 will push the filter into the search call.
+        let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
+        let scroll_body = serde_json::json!({
+            "filter": {
+                "must": [{
+                    "has_id": ids
+                }]
+            },
+            "limit": ids.len(),
+            "with_payload": true
+        });
+        let resp = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/collections/{}/points/scroll", self.collection),
+            )
+            .json(&scroll_body)
+            .send()
+            .await
+            .context("failed to scroll Qdrant for agent_id filter")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Qdrant scroll failed ({status}): {text}");
+        }
+
+        let scroll: QdrantScrollResult = resp
+            .json()
+            .await
+            .context("failed to deserialize Qdrant scroll result")?;
+
+        let agent_id_map: std::collections::HashMap<String, Option<String>> = scroll
+            .result
+            .points
+            .into_iter()
+            .filter_map(|point| {
+                let id_str = point.id.as_str().map(ToOwned::to_owned)?;
+                let aid = point.payload.and_then(|p| p.agent_id);
+                Some((id_str, aid))
+            })
+            .collect();
+
+        Ok(raw
+            .into_iter()
+            .filter(|e| match agent_id_map.get(&e.id) {
+                Some(Some(aid)) => allowed.contains(aid),
+                Some(None) => true,
+                None => false,
+            })
+            .take(limit)
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -645,6 +794,7 @@ mod tests {
             category: "core".into(),
             timestamp: "2026-02-20T00:00:00Z".into(),
             session_id: Some("session-1".into()),
+            agent_id: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -661,9 +811,11 @@ mod tests {
             category: "core".into(),
             timestamp: "2026-02-20T00:00:00Z".into(),
             session_id: None,
+            agent_id: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
         assert!(!json.contains("session_id"));
+        assert!(!json.contains("agent_id"));
     }
 }

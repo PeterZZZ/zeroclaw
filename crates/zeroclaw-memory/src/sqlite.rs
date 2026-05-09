@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1350,6 +1351,129 @@ impl Memory for SqliteMemory {
             Ok(())
         })
         .await?
+    }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        namespace: Option<&str>,
+        importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let embedding_bytes = self
+            .get_or_compute_embedding(content)
+            .await?
+            .map(|emb| vector::vec_to_bytes(&emb));
+
+        let conn = self.conn.clone();
+        let key = key.to_string();
+        let content = content.to_string();
+        let sid = session_id.map(String::from);
+        let ns = namespace.unwrap_or("default").to_string();
+        let imp = importance.unwrap_or(0.5);
+        let aid = agent_id.map(String::from);
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let conn = conn.lock();
+            let now = Local::now().to_rfc3339();
+            let cat = Self::category_to_str(&category);
+            let id = Uuid::new_v4().to_string();
+
+            conn.execute(
+                "INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at, session_id, namespace, importance, agent_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(key) DO UPDATE SET
+                    content = excluded.content,
+                    category = excluded.category,
+                    embedding = excluded.embedding,
+                    updated_at = excluded.updated_at,
+                    session_id = excluded.session_id,
+                    namespace = excluded.namespace,
+                    importance = excluded.importance,
+                    agent_id = excluded.agent_id",
+                params![id, key, content, cat, embedding_bytes, now, now, sid, ns, imp, aid],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        // Empty allowlist means "no agent filter" — fall back to plain
+        // recall without the WHERE agent_id IN clause. (The wrapper
+        // always includes the bound agent's UUID, so a non-empty
+        // allowlist is the live-runtime case.)
+        if allowed_agent_ids.is_empty() {
+            return self.recall(query, limit, session_id, since, until).await;
+        }
+
+        // Over-fetch so the agent_id filter doesn't undercount the
+        // requested limit. The lookup that follows is a single round-
+        // trip indexed query, so the extra rows are cheap.
+        let raw = self
+            .recall(query, limit.saturating_mul(4), session_id, since, until)
+            .await?;
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let allowed: HashSet<String> = allowed_agent_ids.iter().map(|s| (*s).to_string()).collect();
+        let conn = self.conn.clone();
+        let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
+
+        let agent_id_map: HashMap<String, Option<String>> = tokio::task::spawn_blocking(
+            move || -> anyhow::Result<HashMap<String, Option<String>>> {
+                let conn = conn.lock();
+                let placeholders: String = (1..=ids.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!("SELECT id, agent_id FROM memories WHERE id IN ({placeholders})");
+                let mut stmt = conn.prepare(&sql)?;
+                let id_params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
+                    .iter()
+                    .cloned()
+                    .map(|i| Box::new(i) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                    id_params.iter().map(AsRef::as_ref).collect();
+                let rows = stmt.query_map(params_ref.as_slice(), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?;
+                let mut map = HashMap::new();
+                for row in rows {
+                    let (id, aid) = row?;
+                    map.insert(id, aid);
+                }
+                Ok(map)
+            },
+        )
+        .await??;
+
+        // Filter: keep entries whose agent_id is on the allowlist, plus
+        // legacy NULL-agent_id rows (pre-v0.8.0 backfill leftovers — the
+        // backfill stamps them as the default agent so they only show up
+        // here when an install pre-dates this PR's migration entirely).
+        Ok(raw
+            .into_iter()
+            .filter(|e| match agent_id_map.get(&e.id) {
+                Some(Some(aid)) => allowed.contains(aid),
+                Some(None) => true,
+                None => false,
+            })
+            .take(limit)
+            .collect())
     }
 }
 

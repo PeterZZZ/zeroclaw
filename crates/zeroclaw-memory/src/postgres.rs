@@ -528,6 +528,113 @@ impl Memory for PostgresMemory {
             .await
             .unwrap_or(false)
     }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        _namespace: Option<&str>,
+        _importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        let client = self.client.clone();
+        let qualified_table = self.qualified_table.clone();
+        let key = key.to_string();
+        let content = content.to_string();
+        let category = Self::category_to_str(&category);
+        let sid = session_id.map(str::to_string);
+        let aid = agent_id.map(str::to_string);
+
+        run_on_os_thread(move || -> Result<()> {
+            let now = Utc::now();
+            let mut client = client.lock();
+            let stmt = format!(
+                "
+                INSERT INTO {qualified_table}
+                    (id, key, content, category, created_at, updated_at, session_id, agent_id)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (key) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    category = EXCLUDED.category,
+                    updated_at = EXCLUDED.updated_at,
+                    session_id = EXCLUDED.session_id,
+                    agent_id = EXCLUDED.agent_id
+                "
+            );
+
+            let id = Uuid::new_v4().to_string();
+            client.execute(
+                &stmt,
+                &[&id, &key, &content, &category, &now, &now, &sid, &aid],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
+        // Empty allowlist means "no agent filter" — fall back to plain
+        // recall. The wrapper always includes the bound agent's UUID, so
+        // a non-empty allowlist is the live-runtime case.
+        if allowed_agent_ids.is_empty() {
+            return self.recall(query, limit, session_id, since, until).await;
+        }
+
+        // Over-fetch so the agent_id filter doesn't undercount the
+        // requested limit. The lookup that follows is a single round-
+        // trip indexed query.
+        let raw = self
+            .recall(query, limit.saturating_mul(4), session_id, since, until)
+            .await?;
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let allowed: std::collections::HashSet<String> =
+            allowed_agent_ids.iter().map(|s| (*s).to_string()).collect();
+        let client = self.client.clone();
+        let qualified_table = self.qualified_table.clone();
+        let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
+
+        let agent_id_map: std::collections::HashMap<String, Option<String>> = run_on_os_thread(
+            move || -> Result<std::collections::HashMap<String, Option<String>>> {
+                let mut client = client.lock();
+                let stmt = format!("SELECT id, agent_id FROM {qualified_table} WHERE id = ANY($1)");
+                let rows = client.query(&stmt, &[&ids])?;
+                let mut map = std::collections::HashMap::with_capacity(rows.len());
+                for row in rows {
+                    let id: String = row.get(0);
+                    let aid: Option<String> = row.get(1);
+                    map.insert(id, aid);
+                }
+                Ok(map)
+            },
+        )
+        .await?;
+
+        // Filter: keep entries whose agent_id is on the allowlist, plus
+        // legacy NULL-agent_id rows (pre-v0.8.0 backfill leftovers).
+        Ok(raw
+            .into_iter()
+            .filter(|e| match agent_id_map.get(&e.id) {
+                Some(Some(aid)) => allowed.contains(aid),
+                Some(None) => true,
+                None => false,
+            })
+            .take(limit)
+            .collect())
+    }
 }
 
 #[cfg(test)]

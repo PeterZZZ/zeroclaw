@@ -229,6 +229,45 @@ impl<M: Memory> Memory for AuditedMemory<M> {
             .store_with_metadata(key, content, category, session_id, namespace, importance)
             .await
     }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        namespace: Option<&str>,
+        importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.log_audit(AuditOp::Store, Some(key), namespace, session_id, None);
+        self.inner
+            .store_with_agent(
+                key, content, category, session_id, namespace, importance, agent_id,
+            )
+            .await
+    }
+
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        self.log_audit(
+            AuditOp::Recall,
+            None,
+            None,
+            session_id,
+            Some(&format!("query={query}")),
+        );
+        self.inner
+            .recall_for_agents(allowed_agent_ids, query, limit, session_id, since, until)
+            .await
+    }
 }
 
 #[cfg(test)]

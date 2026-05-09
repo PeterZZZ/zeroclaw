@@ -425,6 +425,53 @@ impl Memory for LucidMemory {
     async fn health_check(&self) -> bool {
         self.local.health_check().await
     }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        namespace: Option<&str>,
+        importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        // Lucid composes a local SqliteMemory + a remote Lucid daemon; the
+        // remote side has no agent_id concept, so the attribution lives
+        // only on the local SQLite mirror. The async sync to the daemon
+        // continues unchanged.
+        self.local
+            .store_with_agent(
+                key,
+                content,
+                category.clone(),
+                session_id,
+                namespace,
+                importance,
+                agent_id,
+            )
+            .await?;
+        self.sync_to_lucid_async(key, content, &category).await;
+        Ok(())
+    }
+
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        // Lucid's remote-daemon recall has no agent_id awareness in v0.8.0;
+        // the cross-agent allowlist is enforced on the local SQLite mirror
+        // only. If the local hits clear the threshold the remote leg never
+        // runs (matching `recall`'s short-circuit semantics).
+        self.local
+            .recall_for_agents(allowed_agent_ids, query, limit, session_id, since, until)
+            .await
+    }
 }
 
 #[cfg(all(test, unix))]
