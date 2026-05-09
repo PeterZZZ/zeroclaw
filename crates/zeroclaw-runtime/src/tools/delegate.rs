@@ -77,6 +77,11 @@ pub struct DelegateTool {
     delegate_config: DelegateToolConfig,
     /// Workspace directory inherited from the root agent context.
     workspace_dir: PathBuf,
+    /// The install root (`<install>`) used to resolve per-agent
+    /// workspace dirs when DelegateTool dispatches to a sub-agent.
+    /// Defaults to empty until the runtime factory plumbs it in via
+    /// `with_install_root`.
+    install_root: PathBuf,
     /// Cancellation token for cascade control of background tasks.
     cancellation_token: CancellationToken,
     /// Optional memory instance for namespace isolation on delegate agents.
@@ -121,6 +126,7 @@ impl DelegateTool {
             multimodal_config: zeroclaw_config::schema::MultimodalConfig::default(),
             delegate_config: DelegateToolConfig::default(),
             workspace_dir: PathBuf::new(),
+            install_root: PathBuf::new(),
             cancellation_token: CancellationToken::new(),
             memory: None,
             providers_models: Arc::new(HashMap::new()),
@@ -165,6 +171,7 @@ impl DelegateTool {
             multimodal_config: zeroclaw_config::schema::MultimodalConfig::default(),
             delegate_config: DelegateToolConfig::default(),
             workspace_dir: PathBuf::new(),
+            install_root: PathBuf::new(),
             cancellation_token: CancellationToken::new(),
             memory: None,
             providers_models: Arc::new(HashMap::new()),
@@ -205,6 +212,32 @@ impl DelegateTool {
     pub fn with_workspace_dir(mut self, workspace_dir: PathBuf) -> Self {
         self.workspace_dir = workspace_dir;
         self
+    }
+
+    /// Attach the install root used to resolve per-agent workspace
+    /// dirs when DelegateTool dispatches to a sub-agent. Combined
+    /// with each agent's `[agents.<alias>.workspace.path]` override
+    /// (when set) and the alias, this gives the per-agent identity
+    /// path: `<install>/agents/<alias>/workspace/`.
+    pub fn with_install_root(mut self, install_root: PathBuf) -> Self {
+        self.install_root = install_root;
+        self
+    }
+
+    /// Resolve a target sub-agent's workspace dir for identity-file
+    /// loading. Mirrors `Config::agent_workspace_dir` but operates on
+    /// the cached agent map + install root, since DelegateTool does
+    /// not carry a `Config` reference.
+    fn agent_workspace(&self, agent_alias: &str) -> PathBuf {
+        if let Some(cfg) = self.agents.get(agent_alias)
+            && let Some(custom) = cfg.workspace.path.as_ref()
+        {
+            return custom.clone();
+        }
+        self.install_root
+            .join("agents")
+            .join(agent_alias)
+            .join("workspace")
     }
 
     /// Attach a cancellation token for cascade control of background tasks.
@@ -621,8 +654,13 @@ impl DelegateTool {
         }
 
         // Build enriched system prompt for non-agentic sub-agent.
-        let enriched_system_prompt =
-            self.build_enriched_system_prompt(agent_config, &model, &[], &self.workspace_dir);
+        let enriched_system_prompt = self.build_enriched_system_prompt(
+            agent_name,
+            agent_config,
+            &model,
+            &[],
+            &self.workspace_dir,
+        );
         let system_prompt_ref = enriched_system_prompt.as_deref();
 
         // Wrap the model_provider call in a timeout to prevent indefinite blocking
@@ -768,6 +806,7 @@ impl DelegateTool {
         let multimodal_config = self.multimodal_config.clone();
         let delegate_config = self.delegate_config.clone();
         let workspace_dir = self.workspace_dir.clone();
+        let install_root = self.install_root.clone();
         let child_token = self.cancellation_token.child_token();
         let task_id_clone = task_id.clone();
         let providers_models = Arc::clone(&self.providers_models);
@@ -787,6 +826,7 @@ impl DelegateTool {
                 multimodal_config,
                 delegate_config,
                 workspace_dir: workspace_dir.clone(),
+                install_root,
                 cancellation_token: child_token.clone(),
                 memory: None,
                 providers_models,
@@ -945,6 +985,7 @@ impl DelegateTool {
             let multimodal_config = self.multimodal_config.clone();
             let delegate_config = self.delegate_config.clone();
             let workspace_dir = self.workspace_dir.clone();
+            let install_root = self.install_root.clone();
             let cancellation_token = self.cancellation_token.child_token();
             let agent_name = agent_name.clone();
             let prompt = prompt.to_string();
@@ -966,6 +1007,7 @@ impl DelegateTool {
                     multimodal_config,
                     delegate_config,
                     workspace_dir,
+                    install_root,
                     cancellation_token,
                     memory: None,
                     providers_models,
@@ -1179,9 +1221,13 @@ impl DelegateTool {
 
     /// Build an enriched system prompt for a sub-agent by composing structured
     /// operational sections (tools, skills, workspace, datetime, shell policy)
-    /// with the operator-configured `system_prompt` string.
+    /// with the per-agent identity files loaded from the target's own
+    /// workspace dir (`<install>/agents/<alias>/workspace/AGENTS.md`,
+    /// `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `BOOTSTRAP.md`,
+    /// `MEMORY.md`).
     fn build_enriched_system_prompt(
         &self,
+        agent_alias: &str,
         agent_config: &AliasedAgentConfig,
         model_name: &str,
         sub_tools: &[Box<dyn Tool>],
@@ -1245,10 +1291,27 @@ impl DelegateTool {
             enriched.push_str("\n\n");
         }
 
-        // Append the operator-configured system_prompt as the identity/role block.
-        if let Some(operator_prompt) = agent_config.system_prompt.as_ref() {
-            enriched.push_str(operator_prompt);
-            enriched.push('\n');
+        // Append the per-agent identity files from the target
+        // sub-agent's own workspace dir. Each missing file is silently
+        // skipped — the operator may not have authored every file.
+        let target_workspace = self.agent_workspace(agent_alias);
+        let _ = agent_config; // kept for callers; no longer used here.
+        let identity_files = [
+            "AGENTS.md",
+            "SOUL.md",
+            "IDENTITY.md",
+            "USER.md",
+            "BOOTSTRAP.md",
+        ];
+        for filename in identity_files {
+            let path = target_workspace.join(filename);
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                let trimmed = contents.trim();
+                if !trimmed.is_empty() {
+                    enriched.push_str(trimmed);
+                    enriched.push_str("\n\n");
+                }
+            }
         }
 
         let trimmed = enriched.trim().to_string();
@@ -1312,8 +1375,13 @@ impl DelegateTool {
         let max_iterations = self.resolve_max_iterations(&agent_config.runtime_profile);
 
         // Build enriched system prompt with tools, skills, workspace, datetime context.
-        let enriched_system_prompt =
-            self.build_enriched_system_prompt(agent_config, model, &sub_tools, &self.workspace_dir);
+        let enriched_system_prompt = self.build_enriched_system_prompt(
+            agent_name,
+            agent_config,
+            model,
+            &sub_tools,
+            &self.workspace_dir,
+        );
 
         let mut history = Vec::new();
         if let Some(system_prompt) = enriched_system_prompt.as_ref() {
@@ -1467,7 +1535,6 @@ mod tests {
         agents.insert(
             "researcher".to_string(),
             AliasedAgentConfig {
-                system_prompt: Some("You are a research assistant.".to_string()),
                 model_provider: "ollama.researcher".into(),
                 ..Default::default()
             },
@@ -1623,7 +1690,6 @@ mod tests {
 
     fn agentic_agent_config() -> AliasedAgentConfig {
         AliasedAgentConfig {
-            system_prompt: Some("You are agentic.".to_string()),
             model_provider: "openrouter.agentic".into(),
             runtime_profile: "agentic_test".to_string(),
             ..Default::default()
@@ -2320,7 +2386,6 @@ mod tests {
     #[test]
     fn enriched_prompt_includes_tools_workspace_datetime() {
         let config = AliasedAgentConfig {
-            system_prompt: Some("You are a code reviewer.".to_string()),
             model_provider: "openrouter.test".into(),
             ..Default::default()
         };
@@ -2336,7 +2401,7 @@ mod tests {
             .with_workspace_dir(workspace.clone());
 
         let prompt = tool
-            .build_enriched_system_prompt(&config, "test-model", &tools, &workspace)
+            .build_enriched_system_prompt("alpha", &config, "test-model", &tools, &workspace)
             .unwrap();
 
         assert!(prompt.contains("## Tools"), "should contain tools section");
@@ -2353,10 +2418,12 @@ mod tests {
             prompt.contains("## CRITICAL CONTEXT: CURRENT DATE & TIME"),
             "should contain datetime section"
         );
-        assert!(
-            prompt.contains("You are a code reviewer."),
-            "should append operator system_prompt"
-        );
+        // The retired `system_prompt` field on AliasedAgentConfig used to
+        // append operator copy here; v0.8.0 reads identity files from the
+        // target sub-agent's per-agent workspace dir instead. The test's
+        // install_root is unset, so no identity files exist for the
+        // dummy alias — the prompt still contains the structural sections
+        // verified above, which is the load-bearing assertion.
 
         let _ = std::fs::remove_dir_all(workspace);
     }
@@ -2393,7 +2460,7 @@ mod tests {
             .with_workspace_dir(workspace.to_path_buf());
 
         let prompt = tool
-            .build_enriched_system_prompt(&config, "test-model", &tools, &workspace)
+            .build_enriched_system_prompt("alpha", &config, "test-model", &tools, &workspace)
             .unwrap();
 
         assert!(
@@ -2443,7 +2510,7 @@ mod tests {
             .with_workspace_dir(workspace.to_path_buf());
 
         let prompt = tool
-            .build_enriched_system_prompt(&config, "test-model", &tools, &workspace)
+            .build_enriched_system_prompt("alpha", &config, "test-model", &tools, &workspace)
             .unwrap();
 
         assert!(
@@ -2515,7 +2582,7 @@ mod tests {
             .with_workspace_dir(workspace.clone());
 
         let prompt = tool
-            .build_enriched_system_prompt(&config, "test-model", &tools, &workspace)
+            .build_enriched_system_prompt("alpha", &config, "test-model", &tools, &workspace)
             .unwrap();
 
         assert!(
@@ -2548,7 +2615,7 @@ mod tests {
             .with_workspace_dir(workspace.clone());
 
         let prompt = tool
-            .build_enriched_system_prompt(&config, "test-model", &tools, &workspace)
+            .build_enriched_system_prompt("alpha", &config, "test-model", &tools, &workspace)
             .unwrap();
 
         assert!(

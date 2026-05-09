@@ -2546,9 +2546,6 @@ pub struct AliasedAgentConfig {
     /// Whether this agent is active. Set false to disable without removing the definition.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Optional system prompt. Prefer placing prose in `agents/<alias>/AGENTS.md`.
-    #[serde(default)]
-    pub system_prompt: Option<String>,
     /// Channel aliases this agent handles (e.g. `["telegram.<alias>", "discord.<alias>"]`).
     /// Each entry is a `ChannelRef` resolving through `[channels.<type>.<alias>]`;
     /// `Config::validate()` fails loud on dangling references.
@@ -2708,7 +2705,6 @@ impl Default for AliasedAgentConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            system_prompt: None,
             channels: Vec::new(),
             model_provider: crate::providers::ModelProviderRef::default(),
             risk_profile: String::new(),

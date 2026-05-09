@@ -267,7 +267,6 @@ impl ModelRoutingConfigTool {
                     "model_provider": agent.model_provider,
                     "risk_profile": agent.risk_profile,
                     "runtime_profile": agent.runtime_profile,
-                    "system_prompt": agent.system_prompt,
                     "max_delegation_depth": risk.map(|r| r.max_delegation_depth),
                     "agentic": runtime.map(|r| r.agentic),
                     "allowed_tools": runtime.map(|r| &r.allowed_tools),
@@ -729,7 +728,6 @@ impl ModelRoutingConfigTool {
         let model_provider = Self::parse_non_empty_string(args, "model_provider")?;
         let model = Self::parse_non_empty_string(args, "model")?;
 
-        let system_prompt_update = Self::parse_optional_string_update(args, "system_prompt")?;
         let api_key_update = Self::parse_optional_string_update(args, "api_key")?;
         let temperature_update = Self::parse_optional_f64_update(args, "temperature")?;
         let max_depth_update = Self::parse_optional_u32_update(args, "max_depth")?;
@@ -817,11 +815,6 @@ impl ModelRoutingConfigTool {
         next_agent.model_provider = agent_model_provider_ref.into();
         next_agent.risk_profile = name.clone();
         next_agent.runtime_profile = name.clone();
-        match system_prompt_update {
-            MaybeSet::Set(value) => next_agent.system_prompt = Some(value),
-            MaybeSet::Null => next_agent.system_prompt = None,
-            MaybeSet::Unset => {}
-        }
 
         cfg.save().await?;
 
@@ -944,10 +937,6 @@ impl Tool for ModelRoutingConfigTool {
                 "name": {
                     "type": "string",
                     "description": "Aliased agent name for upsert_agent/remove_agent"
-                },
-                "system_prompt": {
-                    "type": ["string", "null"],
-                    "description": "Optional system prompt override for aliased agent"
                 },
                 "max_depth": {
                     "type": ["integer", "null"],

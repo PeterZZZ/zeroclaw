@@ -966,7 +966,14 @@ pub fn all_tools_with_runtime(
         })
         .with_risk_profiles(root_config.risk_profiles.clone())
         .with_runtime_profiles(root_config.runtime_profiles.clone())
-        .with_skill_bundles(root_config.skill_bundles.clone());
+        .with_skill_bundles(root_config.skill_bundles.clone())
+        .with_install_root(
+            root_config
+                .config_path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default(),
+        );
         tool_arcs.push(Arc::new(delegate_tool));
         Some(parent_tools)
     };
