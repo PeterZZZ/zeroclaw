@@ -12,8 +12,19 @@
 //! [`SubAgentOverrides`]; [`SubAgentSpawn::build`] validates each
 //! override as a subset of the parent (using
 //! [`SecurityPolicy::ensure_no_escalation_beyond`] for the policy and
-//! a UUID-set containment check for the memory allowlist) and returns
-//! `Err` with the originating violation chained on any escalation.
+//! an alias-set containment check for the memory allowlist) and
+//! returns `Err` with the originating violation chained on any
+//! escalation.
+//!
+//! The memory allowlist is carried as a set of agent **aliases** (the
+//! `[agents.<alias>]` config keys), not backend storage identifiers.
+//! Consumers that build an [`AgentScopedMemory`] must resolve aliases
+//! to backend identifiers via
+//! [`zeroclaw_memory::Memory::ensure_agent_uuid`] first — SQL-backed
+//! stores use UUIDs from the `agents` table; Markdown / Qdrant / None
+//! use the alias verbatim per the trait default. Holding aliases at
+//! this layer means [`SubAgentSpawn::for_agent`] does not need a
+//! backend handle to construct.
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;
@@ -36,31 +47,47 @@ pub struct SubAgentOverrides {
     /// [`SecurityPolicy::ensure_no_escalation_beyond`].
     pub policy: Option<SecurityPolicy>,
     /// Override the SubAgent's memory allowlist (the set of sibling
-    /// agent UUIDs the SubAgent may recall from). Validated as a
-    /// subset of the parent's allowlist; any UUID present here that
-    /// is not on the parent's list is rejected.
-    pub allowed_agent_ids: Option<HashSet<String>>,
+    /// agent **aliases** the SubAgent may recall from, as written in
+    /// `[agents.<alias>]` keys). Validated as a subset of the
+    /// parent's allowlist; any alias here that is not on the parent's
+    /// list is rejected.
+    ///
+    /// These are config-layer aliases, not backend storage
+    /// identifiers. Consumers that build an [`AgentScopedMemory`]
+    /// must resolve aliases to backend identifiers via
+    /// [`zeroclaw_memory::Memory::ensure_agent_uuid`] before passing
+    /// them to the wrapper (SQL backends use UUIDs; Markdown / Qdrant
+    /// / None use the alias verbatim per the trait default). The
+    /// in-tree consumer today is `zeroclaw_memory::create_memory_for_agent`,
+    /// which performs the resolution.
+    pub allowed_agent_aliases: Option<HashSet<String>>,
 }
 
 /// Constructed SubAgent context: bound parent identity, validated
 /// child policy, and the resolved memory allowlist.
 #[derive(Debug, Clone)]
 pub struct SubAgentContext {
-    /// The parent agent's identifier. SubAgents share the parent's
-    /// identity at the data layer (no separate row in the agents
-    /// table); the distinction between parent and sub-run is captured
-    /// at the tracing-span level (`agent.<alias>.subagent.<run_id>`).
-    pub agent_id: String,
+    /// The parent agent's alias (e.g. `"researcher"`). SubAgents share
+    /// the parent's identity at the data layer (no separate row in the
+    /// `agents` table); the distinction between parent and sub-run is
+    /// captured at the tracing-span level
+    /// (`agent.<alias>.subagent.<run_id>`).
+    pub parent_alias: String,
     /// The validated [`SecurityPolicy`] this SubAgent operates under.
     /// Identical to the parent's when `SubAgentOverrides::policy` is
     /// `None`; otherwise a narrowed copy that passed
     /// [`SecurityPolicy::ensure_no_escalation_beyond`].
     pub policy: Arc<SecurityPolicy>,
-    /// Resolved memory allowlist. The bound `agent_id` is always
-    /// included so the SubAgent always sees the parent's own rows;
-    /// the rest is either the parent's allowlist verbatim or a
-    /// validated subset.
-    pub allowed_agent_ids: HashSet<String>,
+    /// Resolved memory allowlist as a set of agent **aliases**. The
+    /// bound `parent_alias` is always included so the SubAgent always
+    /// sees the parent's own rows; the rest is either the parent's
+    /// allowlist verbatim or a validated subset.
+    ///
+    /// See [`SubAgentOverrides::allowed_agent_aliases`] for the
+    /// alias-vs-backend-identifier distinction; consumers that build
+    /// an [`AgentScopedMemory`] must resolve to backend identifiers
+    /// before passing the set to the wrapper.
+    pub allowed_agent_aliases: HashSet<String>,
 }
 
 /// Builder for a SubAgent spawn. The caller resolves a parent agent
@@ -68,9 +95,9 @@ pub struct SubAgentContext {
 /// overrides and validates the result.
 #[derive(Debug)]
 pub struct SubAgentSpawn {
-    pub parent_agent_id: String,
+    pub parent_alias: String,
     pub parent_policy: Arc<SecurityPolicy>,
-    pub parent_allowed_agent_ids: HashSet<String>,
+    pub parent_allowed_agent_aliases: HashSet<String>,
 }
 
 impl SubAgentSpawn {
@@ -91,18 +118,18 @@ impl SubAgentSpawn {
                 format!("could not resolve security policy for agent {agent_alias:?}")
             })?;
 
-        let mut parent_allowed_agent_ids: HashSet<String> = agent
+        let mut parent_allowed_agent_aliases: HashSet<String> = agent
             .workspace
             .read_memory_from
             .iter()
             .map(|alias| alias.as_str().to_string())
             .collect();
-        parent_allowed_agent_ids.insert(agent_alias.to_string());
+        parent_allowed_agent_aliases.insert(agent_alias.to_string());
 
         Ok(Self {
-            parent_agent_id: agent_alias.to_string(),
+            parent_alias: agent_alias.to_string(),
             parent_policy,
-            parent_allowed_agent_ids,
+            parent_allowed_agent_aliases,
         })
     }
 
@@ -137,26 +164,26 @@ impl SubAgentSpawn {
             self.parent_policy.clone()
         };
 
-        let allowed_agent_ids = if let Some(child_allowed) = overrides.allowed_agent_ids {
-            for id in &child_allowed {
-                if !self.parent_allowed_agent_ids.contains(id) {
+        let allowed_agent_aliases = if let Some(child_allowed) = overrides.allowed_agent_aliases {
+            for alias in &child_allowed {
+                if !self.parent_allowed_agent_aliases.contains(alias) {
                     anyhow::bail!(
-                        "subagent allowlist override contains agent_id {id:?} not present on \
+                        "subagent allowlist override contains alias {alias:?} not present on \
                          parent's memory allowlist; SubAgent overrides may only narrow"
                     );
                 }
             }
             let mut resolved = child_allowed;
-            resolved.insert(self.parent_agent_id.clone());
+            resolved.insert(self.parent_alias.clone());
             resolved
         } else {
-            self.parent_allowed_agent_ids
+            self.parent_allowed_agent_aliases
         };
 
         Ok(SubAgentContext {
-            agent_id: self.parent_agent_id,
+            parent_alias: self.parent_alias,
             policy,
-            allowed_agent_ids,
+            allowed_agent_aliases,
         })
     }
 }
@@ -189,9 +216,9 @@ mod tests {
             .expect("for_agent must succeed for a configured agent")
             .build(SubAgentOverrides::default())
             .expect("inherits-verbatim build must succeed");
-        assert_eq!(ctx.agent_id, "alpha");
+        assert_eq!(ctx.parent_alias, "alpha");
         assert!(
-            ctx.allowed_agent_ids.contains("alpha"),
+            ctx.allowed_agent_aliases.contains("alpha"),
             "an agent always sees its own rows"
         );
     }
@@ -211,11 +238,11 @@ mod tests {
         let config = config_with_agent("alpha");
         let spawn = SubAgentSpawn::for_agent(&config, "alpha").unwrap();
         let parent_policy = spawn.parent_policy.clone();
-        let parent_allowlist = spawn.parent_allowed_agent_ids.clone();
+        let parent_allowlist = spawn.parent_allowed_agent_aliases.clone();
 
         let ctx = spawn.build(SubAgentOverrides::default()).unwrap();
         assert!(Arc::ptr_eq(&ctx.policy, &parent_policy));
-        assert_eq!(ctx.allowed_agent_ids, parent_allowlist);
+        assert_eq!(ctx.allowed_agent_aliases, parent_allowlist);
     }
 
     #[test]
@@ -240,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn build_rejects_allowlist_override_with_id_not_on_parent() {
+    fn build_rejects_allowlist_override_with_alias_not_on_parent() {
         let config = config_with_agent("alpha");
         let spawn = SubAgentSpawn::for_agent(&config, "alpha").unwrap();
 
@@ -249,13 +276,13 @@ mod tests {
 
         let err = spawn
             .build(SubAgentOverrides {
-                allowed_agent_ids: Some(rogue),
+                allowed_agent_aliases: Some(rogue),
                 ..SubAgentOverrides::default()
             })
-            .expect_err("allowlist override with foreign UUID must be rejected");
+            .expect_err("allowlist override with foreign alias must be rejected");
         assert!(
             err.to_string().contains("rogue-agent"),
-            "expected the rogue UUID in the error chain, got: {err}"
+            "expected the rogue alias in the error chain, got: {err}"
         );
     }
 
@@ -264,15 +291,15 @@ mod tests {
         let config = config_with_agent("alpha");
         let spawn = SubAgentSpawn::for_agent(&config, "alpha").unwrap();
 
-        // Empty subset is still allowed; the bound agent_id is added back.
+        // Empty subset is still allowed; the bound parent alias is added back.
         let ctx = spawn
             .build(SubAgentOverrides {
-                allowed_agent_ids: Some(HashSet::new()),
+                allowed_agent_aliases: Some(HashSet::new()),
                 ..SubAgentOverrides::default()
             })
             .expect("narrowing to {} is a valid subset");
-        assert_eq!(ctx.allowed_agent_ids.len(), 1);
-        assert!(ctx.allowed_agent_ids.contains("alpha"));
+        assert_eq!(ctx.allowed_agent_aliases.len(), 1);
+        assert!(ctx.allowed_agent_aliases.contains("alpha"));
     }
 
     #[test]

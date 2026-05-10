@@ -100,7 +100,7 @@ impl Tool for SpawnSubagentTool {
         let run_id = uuid::Uuid::new_v4().to_string();
         let span = tracing::info_span!(
             "subagent",
-            parent_alias = %subagent_ctx.agent_id,
+            parent_alias = %subagent_ctx.parent_alias,
             run_id = %run_id,
             spawn_site = "tool",
         );

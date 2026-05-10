@@ -306,19 +306,31 @@ impl DelegateTool {
     }
 
     /// Build a `SecurityPolicy` for the delegated target agent
-    /// validated as a subset of the caller's policy with shared
-    /// action / cost tracker.
+    /// validated as **mutually equivalent** to the caller's policy
+    /// (neither escalates nor narrows), with the caller's action /
+    /// cost tracker shared into the returned policy.
     ///
     /// Returns:
     /// - `Ok(target_policy)` when `root_config` is set, the target
-    ///   resolves, and its policy is a subset of the caller's
-    ///   (`ensure_no_escalation_beyond`). The returned policy's
-    ///   `tracker` field is the caller's `Arc`-shared tracker so
-    ///   delegated actions count against the caller's
-    ///   `max_actions_per_hour` / `max_cost_per_day_cents`.
+    ///   resolves, and the target's policy is equivalent to the
+    ///   caller's under [`SecurityPolicy::ensure_no_escalation_beyond`]
+    ///   in both directions. The returned policy's `tracker` field is
+    ///   the caller's `Arc`-shared tracker so delegated actions count
+    ///   against the caller's `max_actions_per_hour` /
+    ///   `max_cost_per_day_cents`.
     /// - `Err(_)` on escalation: the target's risk profile or
     ///   workspace.access map would widen permissions beyond the
     ///   caller. The originating `EscalationViolation` is chained.
+    /// - `Err(_)` on narrowing: the target's policy is strictly
+    ///   tighter than the caller's. `DelegateTool` reuses the
+    ///   caller's `parent_tools` registry whose tools each hold the
+    ///   caller's `Arc<SecurityPolicy>` from registration time, so a
+    ///   narrower target would silently inherit the caller's broader
+    ///   allowlist — an over-grant the validator catches loudly here
+    ///   instead of letting it ship as an enforcement gap. The error
+    ///   message names `spawn_subagent` as the supported path for
+    ///   narrowed runs (it re-enters `agent::run`, which rebuilds the
+    ///   tool registry under the validated child policy).
     /// - `Ok(self.security)` (caller's policy) when `root_config`
     ///   is `None`. This branch only fires for the legacy unit-test
     ///   constructors that don't plumb root config.
@@ -336,6 +348,28 @@ impl DelegateTool {
             .map_err(|violation| {
                 anyhow::anyhow!(
                     "delegate target {target_alias:?} policy escalates beyond caller: {violation}"
+                )
+            })?;
+        // Refuse strict narrowing. `DelegateTool::execute_agentic`
+        // reuses the caller's `parent_tools` registry (every tool
+        // there holds the caller's `Arc<SecurityPolicy>` from
+        // registration time); a narrower target policy would not
+        // reach those tools, so the target would silently inherit
+        // the caller's broader allowlist. Catching the narrowing
+        // here turns a silent over-grant into a loud refusal.
+        // Operators with truly narrowed sub-agents should use
+        // `spawn_subagent`, which re-enters `agent::run` with the
+        // validated child policy and rebuilds the tool registry
+        // under it.
+        self.security
+            .ensure_no_escalation_beyond(&target_policy)
+            .map_err(|violation| {
+                anyhow::anyhow!(
+                    "delegate target {target_alias:?} policy narrows the caller's ({violation}); \
+                     DelegateTool reuses the caller's tool registry, so narrowing is not enforced \
+                     by the spawned tool calls. Either align caller and target risk_profile / \
+                     workspace.access so the policies are equivalent, or use `spawn_subagent` for \
+                     a narrowed run."
                 )
             })?;
         target_policy.tracker = self.security.tracker.clone();
@@ -1393,7 +1427,6 @@ impl DelegateTool {
         // sub-agent's own workspace dir. Each missing file is silently
         // skipped — the operator may not have authored every file.
         let target_workspace = self.agent_workspace(agent_alias);
-        let _ = agent_config; // kept for callers; no longer used here.
         let identity_files = [
             "AGENTS.md",
             "SOUL.md",
@@ -3268,6 +3301,76 @@ mod tests {
         assert!(
             Arc::ptr_eq(&resolved, &tool.security),
             "without root_config the helper returns the caller's Arc verbatim"
+        );
+    }
+
+    /// Build a config where `caller` has a strictly broader policy
+    /// than `target`. The caller-only command is the narrowing axis
+    /// the validator should catch.
+    fn config_with_narrowed_target() -> Arc<zeroclaw_config::schema::Config> {
+        use zeroclaw_config::schema::{AliasedAgentConfig, Config, RiskProfileConfig};
+        let mut config = Config::default();
+        config.risk_profiles.insert(
+            "broad".to_string(),
+            RiskProfileConfig {
+                allowed_commands: vec!["git".into(), "cargo".into()],
+                ..RiskProfileConfig::default()
+            },
+        );
+        config.risk_profiles.insert(
+            "narrow".to_string(),
+            RiskProfileConfig {
+                allowed_commands: vec!["git".into()],
+                ..RiskProfileConfig::default()
+            },
+        );
+        config.agents.insert(
+            "caller".to_string(),
+            AliasedAgentConfig {
+                risk_profile: "broad".to_string(),
+                model_provider: "ollama.caller".into(),
+                ..AliasedAgentConfig::default()
+            },
+        );
+        config.agents.insert(
+            "target".to_string(),
+            AliasedAgentConfig {
+                risk_profile: "narrow".to_string(),
+                model_provider: "ollama.target".into(),
+                ..AliasedAgentConfig::default()
+            },
+        );
+        Arc::new(config)
+    }
+
+    #[tokio::test]
+    async fn delegate_rejects_target_whose_policy_narrows_caller() {
+        // DelegateTool's spawned agentic loop reuses the caller's
+        // parent_tools registry — a narrower target would silently
+        // inherit the caller's broader allowlist. The validator
+        // must catch the narrowing at the delegate boundary and
+        // refuse to dispatch.
+        let config = config_with_narrowed_target();
+        let caller_policy =
+            Arc::new(SecurityPolicy::for_agent(&config, "caller").expect("caller policy resolves"));
+        let mut delegate_agents = HashMap::new();
+        for (name, agent) in &config.agents {
+            delegate_agents.insert(name.clone(), agent.clone());
+        }
+        let tool = DelegateTool::new(delegate_agents, None, caller_policy)
+            .with_root_config(config.clone());
+
+        let err = tool
+            .policy_for_target("target")
+            .expect_err("narrowing target must be rejected at delegate boundary");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("narrows the caller"),
+            "expected narrowing error, got: {chain}"
+        );
+        assert!(
+            chain.contains("spawn_subagent"),
+            "error must point operators at spawn_subagent for narrowed runs, got: {chain}"
         );
     }
 }
