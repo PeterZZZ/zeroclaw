@@ -724,6 +724,9 @@ export interface SectionInfo {
   completed: boolean;
   /** Display group for the sidebar (`Onboarding`, `Agent`, `Tools`, ...). */
   group: string;
+  /** True when this section is part of the `/onboard` wizard (driven by
+   *  the canonical const in `zeroclaw_config::onboarding`). */
+  is_onboarding: boolean;
 }
 
 export interface SectionsResponse {

@@ -154,6 +154,11 @@ pub struct SectionInfo {
     /// `Tools`, etc.). Curated server-side until v3 / #5947 lands a schema
     /// attribute that encodes the grouping declaratively.
     pub group: String,
+    /// `true` when this section is part of the `/onboard` wizard
+    /// (`zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS`). Frontends
+    /// filter on this flag so the wizard's section list is server-derived
+    /// rather than duplicated on every client.
+    pub is_onboarding: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -312,7 +317,33 @@ pub async fn handle_sections(State(state): State<AppState>, headers: HeaderMap) 
         roots.insert(prefix.to_string());
     }
 
-    let sections: Vec<SectionInfo> = roots
+    // Synthetic onboarding sections — keys that aren't fields on Config
+    // but are part of the wizard flow (personality lives as markdown
+    // files, not TOML). Inject so the canonical-order sort places them
+    // correctly and frontends don't need to know which ones to splice.
+    for key in zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS {
+        roots.insert((*key).to_string());
+    }
+
+    // Sort: onboarding-wizard sections first in their canonical order
+    // (single source of truth in `zeroclaw_config::onboarding`), then
+    // everything else alphabetically. This is what makes /onboard's wizard
+    // order and /config's foundation grouping derive from one Rust const
+    // — frontends consume the response order directly.
+    let mut ordered: Vec<String> = roots.into_iter().collect();
+    ordered.sort_by(|a, b| {
+        match (
+            zeroclaw_config::onboarding::onboarding_section_index(a),
+            zeroclaw_config::onboarding::onboarding_section_index(b),
+        ) {
+            (Some(ai), Some(bi)) => ai.cmp(&bi),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(b),
+        }
+    });
+
+    let sections: Vec<SectionInfo> = ordered
         .into_iter()
         .map(|key| {
             let has_picker = SECTIONS_WITH_PICKER.contains(&key.as_str())
@@ -323,6 +354,7 @@ pub async fn handle_sections(State(state): State<AppState>, headers: HeaderMap) 
                 help: section_help(&key).to_string(),
                 has_picker,
                 group: section_group(&key).to_string(),
+                is_onboarding: zeroclaw_config::onboarding::is_onboarding_section(&key),
                 key,
             }
         })
@@ -338,8 +370,15 @@ const HIDDEN_TOP_LEVEL: &[&str] = &["schema-version", "onboard-state"];
 /// Sections whose picker semantics are non-generic and live in the
 /// per-section dispatch in `handle_section_picker` (catalog of model_providers,
 /// memory backend list, tunnel-with-none, channel sub-table walk).
-const SECTIONS_WITH_PICKER: &[&str] =
-    &["model_providers", "channels", "memory", "tunnel", "agents"];
+const SECTIONS_WITH_PICKER: &[&str] = &[
+    "model_providers",
+    "tts_providers",
+    "transcription_providers",
+    "channels",
+    "memory",
+    "tunnel",
+    "agents",
+];
 
 /// Humanize a section key for display (`google_workspace` → `Google workspace`).
 /// Keeps things simple and predictable; specific wording overrides go in

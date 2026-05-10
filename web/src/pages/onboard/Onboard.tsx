@@ -47,42 +47,11 @@ const PersonalityEditor = lazy(
 // is wrong and produces `path_not_found` from set_prop.
 const COMPLETED_SECTIONS_PATH = 'onboard_state.completed-sections';
 
-// Wizard sections in TUI order (`zeroclaw onboard`'s `Section::as_path_prefix`
-// dispatch in `crates/zeroclaw-runtime/src/onboard/mod.rs`). The dashboard
-// wizard mirrors the CLI/TUI flow exactly — only these 6 sections, walked
-// in this order. The Config explorer at `/config` and the per-section
-// editors at `/setup/<section>` are the surfaces for everything else;
-// `/onboard` stays a focused setup-completion flow.
-const ONBOARD_SECTION_ORDER = [
-  'workspace',
-  'model_providers',
-  'channels',
-  'memory',
-  'hardware',
-  'tunnel',
-  // Personality is intentionally before Agents — structural sections are
-  // answered first so the markdown files can reference whatever was just
-  // configured. Mirrors the CLI/TUI run_all() loop.
-  'personality',
-  // Agents last: binds channel aliases, model providers, and profiles
-  // together. Requires the sections above to be configured first.
-  'agents',
-] as const;
-
-// Sections handled by a dedicated component instead of the schema-driven
-// FieldForm. The gateway's /api/onboard/sections doesn't enumerate
-// these — they're synthesized client-side and slotted into the same
-// sidebar/breadcrumb/Next/Finish flow as the schema-backed sections.
-const SYNTHETIC_SECTIONS: Record<string, SectionInfo> = {
-  personality: {
-    key: 'personality',
-    label: 'Personality',
-    help: 'Edit the markdown files that shape your agent — SOUL, IDENTITY, USER, etc.',
-    has_picker: false,
-    completed: false,
-    group: 'Onboarding',
-  },
-};
+// Wizard sections + their canonical order both come from the gateway,
+// which derives them from `zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS`
+// (single source of truth, also used by the CLI runtime). The frontend
+// filters by `is_onboarding` and trusts response order — no client-side
+// list to drift out of sync with the Rust canonical const.
 
 export default function Onboard() {
   const navigate = useNavigate();
@@ -106,15 +75,8 @@ export default function Onboard() {
     getSections()
       .then((resp) => {
         if (cancelled) return;
-        // Mirror the TUI flow: only the 6 onboarding sections, in their
-        // canonical order. The gateway returns every top-level config
-        // section now (#6175 schema-driven discovery) — we filter +
-        // re-order here to keep `/onboard` focused on setup completion.
-        const byKey = new Map(resp.sections.map((s) => [s.key, s] as const));
-        const ordered = ONBOARD_SECTION_ORDER.flatMap((k) => {
-          const s = byKey.get(k) ?? SYNTHETIC_SECTIONS[k];
-          return s ? [s] : [];
-        });
+        // Filter to wizard sections; trust gateway-provided order.
+        const ordered = resp.sections.filter((s) => s.is_onboarding);
         setSections(ordered);
         // Open the first not-yet-completed section.
         const next = ordered.find((s) => !s.completed);

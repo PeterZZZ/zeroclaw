@@ -71,24 +71,10 @@ const GROUP_ORDER = [
   'Other',
 ] as const;
 
-// Within the Foundation group we want a dependency-driven order rather
-// than alphabetical: agents reference everything above them, so they
-// land last. Mirrors the wizard order in
-// `crates/zeroclaw-runtime/src/onboard/mod.rs::run_all` and
-// `web/src/pages/onboard/Onboard.tsx`'s ONBOARD_SECTION_ORDER. Sections
-// not in this list fall back to alphabetical sort.
-const FOUNDATION_ORDER: Record<string, number> = {
-  workspace: 0,
-  model_providers: 1,
-  tts_providers: 2,
-  transcription_providers: 3,
-  channels: 4,
-  memory: 5,
-  hardware: 6,
-  tunnel: 7,
-  personality: 8,
-  agents: 9,
-};
+// Foundation order is gateway-provided: the server returns sections
+// pre-ordered by `zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS`
+// (single canonical source). The dashboard preserves response order for
+// the Foundation group instead of carrying its own copy of the list.
 
 export default function Config() {
   // URL params drive the view. No internal mode state for picker/form —
@@ -438,10 +424,11 @@ export default function Config() {
                     : s.group === groupName,
                 )
                 .sort((a, b) => {
+                  // Foundation: preserve server-provided canonical order
+                  // (driven by `ONBOARDING_WIZARD_SECTIONS` in the Rust
+                  // config crate). Other groups: alphabetize by label.
                   if (groupName === 'Foundation') {
-                    const ai = FOUNDATION_ORDER[a.key] ?? Number.MAX_SAFE_INTEGER;
-                    const bi = FOUNDATION_ORDER[b.key] ?? Number.MAX_SAFE_INTEGER;
-                    if (ai !== bi) return ai - bi;
+                    return sections.indexOf(a) - sections.indexOf(b);
                   }
                   return a.label.localeCompare(b.label);
                 });

@@ -856,8 +856,9 @@ Examples:
 /// Section selector for `zeroclaw onboard <section>`.
 #[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
 enum OnboardSection {
-    /// ModelProvider selection, credentials, and live model picker.
-    Providers,
+    /// Model-provider selection, credentials, and live model picker.
+    #[command(name = "model_providers")]
+    ModelProviders,
     /// Messaging channels (Telegram, Discord, Slack, Matrix, …).
     Channels,
     /// Memory backend (sqlite, lucid, markdown, none) + auto-save.
@@ -915,7 +916,7 @@ fn resolve_onboard_target(
         ),
         (
             providers_only,
-            Section::Providers,
+            Section::ModelProviders,
             "--providers-only",
             "providers",
         ),
@@ -932,7 +933,7 @@ fn resolve_onboard_target(
     .find(|(flag, ..)| *flag);
 
     let explicit_section = explicit.map(|s| match s {
-        OnboardSection::Providers => Section::Providers,
+        OnboardSection::ModelProviders => Section::ModelProviders,
         OnboardSection::Channels => Section::Channels,
         OnboardSection::Memory => Section::Memory,
         OnboardSection::Hardware => Section::Hardware,
@@ -3757,7 +3758,7 @@ mod tests {
     #[cfg(feature = "agent-runtime")]
     fn onboard_cli_positional_sections_parse() {
         for (arg, expected) in [
-            ("providers", OnboardSection::Providers),
+            ("model_providers", OnboardSection::ModelProviders),
             ("channels", OnboardSection::Channels),
             ("memory", OnboardSection::Memory),
             ("hardware", OnboardSection::Hardware),
@@ -3810,7 +3811,7 @@ mod tests {
             ),
             (
                 [false, true, false, false, false],
-                Section::Providers,
+                Section::ModelProviders,
                 "--providers-only",
                 "providers",
             ),
@@ -3853,14 +3854,14 @@ mod tests {
     fn resolve_onboard_target_explicit_plus_legacy_warns_but_picks_explicit() {
         use zeroclaw_runtime::onboard::Section;
         let (target, deprecation) = resolve_onboard_target(
-            Some(OnboardSection::Providers),
+            Some(OnboardSection::ModelProviders),
             true, // --channels-only
             false,
             false,
             false,
             false,
         );
-        assert_eq!(target, Section::Providers);
+        assert_eq!(target, Section::ModelProviders);
         assert_eq!(deprecation, Some(("--channels-only", "channels")));
     }
 

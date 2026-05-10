@@ -9,6 +9,7 @@ pub mod env_overrides;
 pub mod helpers;
 pub mod migration;
 pub mod multi_agent;
+pub mod onboarding;
 pub mod pairing;
 pub mod platform;
 pub mod policy;

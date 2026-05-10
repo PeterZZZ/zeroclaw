@@ -53,10 +53,14 @@ struct OpenAiModel {
 }
 
 /// Which slice of onboarding to run. `All` runs every section in order.
+/// Each variant maps 1:1 to a key in
+/// `zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     All,
-    Providers,
+    ModelProviders,
+    TtsProviders,
+    TranscriptionProviders,
     Channels,
     Memory,
     Hardware,
@@ -66,13 +70,15 @@ pub enum Section {
 }
 
 impl Section {
-    /// Stable string name used in TOML paths (`providers.models`, `agents`,
-    /// etc.) and surfaced over the HTTP CRUD API for grouping prop lists by
-    /// section. `All` has no path representation; returns `None`.
+    /// Stable string name used in TOML paths and surfaced over the HTTP
+    /// CRUD API for grouping prop lists by section. `All` has no path
+    /// representation; returns `None`.
     pub fn as_path_prefix(self) -> Option<&'static str> {
         match self {
             Self::All => None,
-            Self::Providers => Some("model_providers"),
+            Self::ModelProviders => Some("model_providers"),
+            Self::TtsProviders => Some("tts_providers"),
+            Self::TranscriptionProviders => Some("transcription_providers"),
             Self::Channels => Some("channels"),
             Self::Memory => Some("memory"),
             Self::Hardware => Some("hardware"),
@@ -85,14 +91,12 @@ impl Section {
     /// Map a dotted property path back to its onboarding section by looking
     /// at the path's first segment. Returns `None` for paths that don't fall
     /// into any wizard section (e.g. `onboard_state.completed_sections`).
-    ///
-    /// This is the substitute for a `#[onboard_section]` schema attribute —
-    /// the section is implicit in the path, derived once from this table
-    /// rather than duplicated on every field.
     pub fn from_path(path: &str) -> Option<Self> {
         let prefix = path.split('.').next()?;
         match prefix {
-            "model_providers" => Some(Self::Providers),
+            "model_providers" => Some(Self::ModelProviders),
+            "tts_providers" => Some(Self::TtsProviders),
+            "transcription_providers" => Some(Self::TranscriptionProviders),
             "channels" => Some(Self::Channels),
             "memory" => Some(Self::Memory),
             "hardware" => Some(Self::Hardware),
@@ -126,36 +130,49 @@ pub async fn run(
     section: Section,
     flags: &Flags,
 ) -> Result<()> {
-    match section {
-        Section::All => run_all(cfg, ui, flags).await,
-        Section::Providers => {
-            let _ = model_providers(cfg, ui, flags).await?;
-            Ok(())
+    if let Section::All = section {
+        return run_all(cfg, ui, flags).await;
+    }
+    let key = section
+        .as_path_prefix()
+        .expect("non-All section has a path prefix");
+    let _ = dispatch_section(cfg, ui, flags, key).await?;
+    Ok(())
+}
+
+/// Run a single onboarding section by canonical key. Returns `Nav::Done`
+/// for sections without an interactive wizard (the user reaches them via
+/// the `/config` dashboard or `zeroclaw config set`); the run-all loop
+/// treats Done as "advance to the next section".
+async fn dispatch_section(
+    cfg: &mut Config,
+    ui: &mut dyn OnboardUi,
+    flags: &Flags,
+    key: &str,
+) -> Result<Nav> {
+    match key {
+        "workspace" => Ok(Nav::Done),
+        "model_providers" => model_providers(cfg, ui, flags).await,
+        // TTS and transcription typed-family sections share the same
+        // shape as model_providers but don't have an interactive wizard
+        // yet — operators configure them via /config or `zeroclaw config
+        // set tts_providers.<type>.<alias>.<field> ...`. Listing them
+        // here keeps the wizard order matching the canonical const.
+        "tts_providers" | "transcription_providers" => {
+            ui.note(&format!(
+                "Skipping `{key}` (no interactive wizard yet). \
+                 Configure via the dashboard at /config/{key} or \
+                 `zeroclaw config set {key}.<type>.<alias>.<field> <value>`."
+            ));
+            Ok(Nav::Done)
         }
-        Section::Channels => {
-            let _ = channels(cfg, ui, flags).await?;
-            Ok(())
-        }
-        Section::Memory => {
-            let _ = memory(cfg, ui, flags).await?;
-            Ok(())
-        }
-        Section::Hardware => {
-            let _ = hardware(cfg, ui, flags).await?;
-            Ok(())
-        }
-        Section::Tunnel => {
-            let _ = tunnel(cfg, ui, flags).await?;
-            Ok(())
-        }
-        Section::Personality => {
-            let _ = personality(cfg, ui, flags).await?;
-            Ok(())
-        }
-        Section::Agents => {
-            let _ = agents(cfg, ui, flags).await?;
-            Ok(())
-        }
+        "channels" => channels(cfg, ui, flags).await,
+        "memory" => memory(cfg, ui, flags).await,
+        "hardware" => hardware(cfg, ui, flags).await,
+        "tunnel" => tunnel(cfg, ui, flags).await,
+        "personality" => personality(cfg, ui, flags).await,
+        "agents" => agents(cfg, ui, flags).await,
+        _ => Ok(Nav::Done),
     }
 }
 
@@ -164,22 +181,23 @@ pub async fn run(
 /// rewinds to the previous section. Back at the first section exits
 /// onboarding cleanly (user bails out).
 async fn run_all(cfg: &mut Config, ui: &mut dyn OnboardUi, flags: &Flags) -> Result<()> {
+    // Walk the canonical wizard order from
+    // `zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS` — the
+    // single source of truth shared with the gateway and the dashboard.
+    // Skipping `workspace` here matches the previous behavior (the CLI
+    // wizard never had a workspace step; Config::load_or_init handles
+    // the install-dir bootstrap before onboarding runs).
+    let order: Vec<&str> = zeroclaw_config::onboarding::ONBOARDING_WIZARD_SECTIONS
+        .iter()
+        .copied()
+        .filter(|k| *k != "workspace")
+        .collect();
     let mut i: usize = 0;
     loop {
-        let nav = match i {
-            0 => model_providers(cfg, ui, flags).await?,
-            1 => channels(cfg, ui, flags).await?,
-            2 => memory(cfg, ui, flags).await?,
-            3 => hardware(cfg, ui, flags).await?,
-            4 => tunnel(cfg, ui, flags).await?,
-            // Personality lives at the end so the user has answered the
-            // structural questions (model_providers, memory, …) before
-            // authoring the markdown files that reference them.
-            5 => personality(cfg, ui, flags).await?,
-            6 => agents(cfg, ui, flags).await?,
-            _ => return Ok(()),
+        let Some(key) = order.get(i) else {
+            return Ok(());
         };
-        match nav {
+        match dispatch_section(cfg, ui, flags, key).await? {
             Nav::Done => i += 1,
             Nav::Back => {
                 if i == 0 {
@@ -2014,7 +2032,7 @@ mod tests {
             .with("api-key", "sk-custom-test")
             .with("Model", "qwen-local");
 
-        run(&mut cfg, &mut ui, Section::Providers, &flags)
+        run(&mut cfg, &mut ui, Section::ModelProviders, &flags)
             .await
             .unwrap();
 
@@ -2074,7 +2092,7 @@ mod tests {
             ..Default::default()
         };
         let mut ui = QuickUi::new();
-        run(&mut cfg, &mut ui, Section::Providers, &flags)
+        run(&mut cfg, &mut ui, Section::ModelProviders, &flags)
             .await
             .unwrap();
 
@@ -2109,15 +2127,20 @@ mod tests {
             ..Default::default()
         };
         let mut ui = QuickUi::new();
-        run(&mut cfg, &mut ui, Section::Providers, &prime)
+        run(&mut cfg, &mut ui, Section::ModelProviders, &prime)
             .await
             .unwrap();
         let after_first = tokio::fs::read_to_string(&cfg.config_path).await.unwrap();
 
         let mut ui = QuickUi::new();
-        run(&mut cfg, &mut ui, Section::Providers, &Flags::default())
-            .await
-            .unwrap();
+        run(
+            &mut cfg,
+            &mut ui,
+            Section::ModelProviders,
+            &Flags::default(),
+        )
+        .await
+        .unwrap();
         let after_second = tokio::fs::read_to_string(&cfg.config_path).await.unwrap();
         assert_eq!(
             after_first, after_second,
@@ -2372,9 +2395,14 @@ mod tests {
                 .with_sequence("ModelProvider", ["Anthropic", "Done"])
                 .with("Alias", "my-alias"),
         );
-        run(&mut cfg, &mut ui, Section::Providers, &Flags::default())
-            .await
-            .unwrap();
+        run(
+            &mut cfg,
+            &mut ui,
+            Section::ModelProviders,
+            &Flags::default(),
+        )
+        .await
+        .unwrap();
 
         let alias_cfg = cfg
             .model_providers
@@ -2404,9 +2432,14 @@ mod tests {
                 .with_sequence("ModelProvider", ["Anthropic", "Done"])
                 .with("Alias (name for this configuration)", "fresh"),
         );
-        run(&mut cfg, &mut ui, Section::Providers, &Flags::default())
-            .await
-            .unwrap();
+        run(
+            &mut cfg,
+            &mut ui,
+            Section::ModelProviders,
+            &Flags::default(),
+        )
+        .await
+        .unwrap();
 
         let entry = cfg.model_providers.find("anthropic", "fresh");
         assert!(
