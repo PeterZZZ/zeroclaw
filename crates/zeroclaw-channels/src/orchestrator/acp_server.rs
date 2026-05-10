@@ -588,7 +588,7 @@ impl AcpServer {
         // the file/shell sandbox boundary. The agent's data directory
         // (memory DB, identity, scheduled tasks) still lives under
         // `config.workspace_dir`.
-        let agent = Agent::from_config_with_session_cwd_and_mcp(
+        let agent = Agent::from_config_with_session_cwd_and_mcp_backchannel(
             &self.config,
             &agent_alias,
             Some(std::path::Path::new(&workspace_dir)),
@@ -1450,6 +1450,7 @@ mod tests {
                     model: Some("llama3.2".to_string()),
                     ..Default::default()
                 },
+                ..OllamaModelProviderConfig::default()
             },
         );
         let server = AcpServer::new(config, AcpServerConfig::default());

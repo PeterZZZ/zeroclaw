@@ -594,12 +594,24 @@ impl FamilyProviderFactory for OllamaModelProviderConfig {
         api_url: Option<&str>,
         opts: &ModelProviderRuntimeOptions,
     ) -> Result<Box<dyn ModelProvider>> {
+        // Per-alias Ollama tuning lives on this typed slot, not on
+        // the generic `ModelProviderRuntimeOptions`. Read the three
+        // optional knobs off `&self` and bundle them into the
+        // request-time `OllamaTuning` so the wire payload's `options`
+        // block is explicit instead of relying on Ollama server
+        // defaults.
+        let tuning = crate::ollama::OllamaTuning::from_runtime_overrides(
+            self.num_ctx,
+            self.num_predict,
+            self.temperature_override,
+        );
         Ok(Box::new(
             crate::ollama::OllamaModelProvider::new_with_reasoning(
                 api_url,
                 key,
                 opts.reasoning_enabled,
-            ),
+            )
+            .with_tuning(tuning),
         ))
     }
 }

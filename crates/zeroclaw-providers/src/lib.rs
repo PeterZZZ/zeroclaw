@@ -563,6 +563,16 @@ pub struct ModelProviderRuntimeOptions {
     /// When set, the provider is asked to use its native tool-calling
     /// schema instead of OpenAI-compat tool calls. Generic across families.
     pub native_tools: Option<bool>,
+    /// Wire protocol to use for this provider.
+    /// `Some("responses")` routes the provider through the OpenResponses
+    /// `/v1/responses` API instead of chat_completions.  `None` uses the
+    /// provider's built-in default (chat_completions for most providers).
+    pub wire_api: Option<String>,
+    /// Enable or disable chain-of-thought thinking. Forwarded as
+    /// `enable_thinking` in the request body. `None` lets the model decide.
+    pub think: Option<bool>,
+    /// Passed verbatim as `chat_template_kwargs` to the llamacpp provider.
+    pub chat_template_kwargs: Option<serde_json::Value>,
 }
 
 impl Default for ModelProviderRuntimeOptions {
@@ -581,6 +591,9 @@ impl Default for ModelProviderRuntimeOptions {
             merge_system_into_user: false,
             provider_extra: None,
             native_tools: None,
+            wire_api: None,
+            think: None,
+            chat_template_kwargs: None,
         }
     }
 }
@@ -637,6 +650,9 @@ pub fn model_provider_runtime_options_from_model_provider_entry(
         merge_system_into_user,
         provider_extra: entry.and_then(|e| e.provider_extra.clone()),
         native_tools: entry.and_then(|e| e.native_tools),
+        wire_api: entry.and_then(|e| e.wire_api.clone()),
+        think: entry.and_then(|e| e.think),
+        chat_template_kwargs: entry.and_then(|e| e.chat_template_kwargs.clone()),
     }
 }
 
@@ -2622,5 +2638,50 @@ mod tests {
                 || url == "https://api.default.example/v1/messages",
             "fallback must resolve to one of the configured anthropic aliases; got `{url}`"
         );
+    }
+
+    #[test]
+    fn ollama_alias_tuning_fields_populate_tuning_struct() {
+        // Per-alias Ollama knobs live on `OllamaModelProviderConfig`
+        // (not on the generic `ModelProviderRuntimeOptions`). The
+        // factory's `create_provider` impl reads them off `&self` and
+        // builds `OllamaTuning` from there. Mirror that derivation
+        // here so the three fields are covered without exercising the
+        // factory dispatch.
+        let alias = zeroclaw_config::schema::OllamaModelProviderConfig {
+            num_ctx: Some(16384),
+            num_predict: Some(4096),
+            temperature_override: Some(0.5),
+            ..zeroclaw_config::schema::OllamaModelProviderConfig::default()
+        };
+
+        let tuning = ollama::OllamaTuning::from_runtime_overrides(
+            alias.num_ctx,
+            alias.num_predict,
+            alias.temperature_override,
+        );
+        assert_eq!(tuning.num_ctx, 16384);
+        assert_eq!(tuning.num_predict, 4096);
+        assert_eq!(tuning.temperature_override, Some(0.5));
+
+        let provider = ollama::OllamaModelProvider::new(None, None).with_tuning(tuning);
+        assert_eq!(provider.tuning(), tuning);
+    }
+
+    #[test]
+    fn ollama_alias_tuning_defaults_leave_temperature_override_unset() {
+        // A default `OllamaModelProviderConfig` must produce a tuning
+        // with `temperature_override = None` so per-call temperature
+        // wins — the backward-compat guarantee for operators who
+        // never set the override in config.toml.
+        let alias = zeroclaw_config::schema::OllamaModelProviderConfig::default();
+        let tuning = ollama::OllamaTuning::from_runtime_overrides(
+            alias.num_ctx,
+            alias.num_predict,
+            alias.temperature_override,
+        );
+        assert!(tuning.temperature_override.is_none());
+        assert_eq!(tuning.num_ctx, ollama::OLLAMA_DEFAULT_NUM_CTX);
+        assert_eq!(tuning.num_predict, ollama::OLLAMA_DEFAULT_NUM_PREDICT);
     }
 }

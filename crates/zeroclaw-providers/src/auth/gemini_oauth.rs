@@ -539,7 +539,8 @@ mod tests {
             EnvVarRestore::set("GEMINI_OAUTH_CLIENT_SECRET", "test-client-secret");
 
         let pkce = generate_pkce_state();
-        let url = build_authorize_url("test-client-id", &pkce).expect("Failed to build authorize URL");
+        let url =
+            build_authorize_url("test-client-id", &pkce).expect("Failed to build authorize URL");
         assert!(url.contains("accounts.google.com"));
         assert!(url.contains("client_id="));
         assert!(url.contains("redirect_uri="));

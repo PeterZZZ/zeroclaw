@@ -241,7 +241,7 @@ impl OpenAiCompatibleModelProvider {
         auth_style: AuthStyle,
     ) -> Self {
         Self::new_with_options(
-            name, base_url, credential, auth_style, false, false, None, true,
+            name, base_url, credential, auth_style, false, true, None, true,
         )
     }
 
@@ -412,6 +412,58 @@ impl OpenAiCompatibleModelProvider {
         )
     }
 
+    /// HTTP client for streaming SSE connections — connect timeout only, no total timeout.
+    /// reqwest's total timeout kills long-running streams mid-response; streaming paths must
+    /// use this client instead of http_client().
+    fn streaming_http_client(&self) -> Client {
+        let has_user_agent = self.user_agent.is_some();
+        let has_extra_headers = !self.extra_headers.is_empty();
+
+        if has_user_agent || has_extra_headers {
+            let mut headers = HeaderMap::new();
+            if let Some(ua) = self.user_agent.as_deref()
+                && let Ok(value) = HeaderValue::from_str(ua)
+            {
+                headers.insert(USER_AGENT, value);
+            }
+            for (key, value) in &self.extra_headers {
+                match (
+                    reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+                    HeaderValue::from_str(value),
+                ) {
+                    (Ok(name), Ok(val)) => {
+                        headers.insert(name, val);
+                    }
+                    _ => {
+                        tracing::warn!(header = key, "Skipping invalid extra header name or value");
+                    }
+                }
+            }
+
+            let builder = Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .default_headers(headers);
+            let builder = zeroclaw_config::schema::apply_runtime_proxy_to_builder(
+                builder,
+                "provider.compatible",
+            );
+            return builder.build().unwrap_or_else(|error| {
+                tracing::warn!(
+                    "Failed to build proxied streaming client with custom headers: {error}"
+                );
+                Client::new()
+            });
+        }
+
+        let builder = Client::builder().connect_timeout(std::time::Duration::from_secs(10));
+        let builder =
+            zeroclaw_config::schema::apply_runtime_proxy_to_builder(builder, "provider.compatible");
+        builder.build().unwrap_or_else(|error| {
+            tracing::warn!("Failed to build proxied streaming client: {error}");
+            Client::new()
+        })
+    }
+
     /// Build the full URL for chat completions, detecting if base_url already includes the path.
     /// This allows custom model_providers with non-standard endpoints (e.g., VolcEngine ARK uses
     /// `/api/coding/v3/chat/completions` instead of `/v1/chat/completions`).
@@ -458,23 +510,6 @@ impl OpenAiCompatibleModelProvider {
         !path.is_empty() && path != "/"
     }
 
-    fn requires_tool_stream(&self) -> bool {
-        let host_requires_tool_stream = reqwest::Url::parse(&self.base_url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-            .is_some_and(|host| host == "api.z.ai" || host.ends_with(".z.ai"));
-
-        host_requires_tool_stream || matches!(self.name.as_str(), "zai" | "z.ai")
-    }
-
-    fn tool_stream_for_tools(&self, has_tools: bool) -> Option<bool> {
-        if has_tools && self.requires_tool_stream() {
-            Some(true)
-        } else {
-            None
-        }
-    }
-
     /// Build the full URL for responses API, detecting if base_url already includes the path.
     fn responses_url(&self) -> String {
         if self.path_ends_with("/responses") {
@@ -494,6 +529,63 @@ impl OpenAiCompatibleModelProvider {
             format!("{normalized_base}/responses")
         } else {
             format!("{normalized_base}/v1/responses")
+        }
+    }
+
+    async fn chat_via_responses(
+        &self,
+        credential: Option<&str>,
+        messages: &[ChatMessage],
+        model: &str,
+    ) -> anyhow::Result<String> {
+        let (instructions, input) = build_responses_prompt(messages);
+        if input.is_empty() {
+            anyhow::bail!(
+                "{} Responses API fallback requires at least one non-system message",
+                self.name
+            );
+        }
+
+        let request = ResponsesRequest {
+            model: model.to_string(),
+            input,
+            instructions,
+            stream: Some(false),
+        };
+
+        let url = self.responses_url();
+
+        let response = self
+            .apply_auth_header(self.http_client().post(&url).json(&request), credential)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await?;
+            anyhow::bail!("{} Responses API error: {error}", self.name);
+        }
+
+        let body = response.text().await?;
+        let responses = parse_responses_response_body(&self.name, &body)?;
+
+        extract_responses_text(responses)
+            .ok_or_else(|| anyhow::anyhow!("No response from {} Responses API", self.name))
+    }
+
+    fn requires_tool_stream(&self) -> bool {
+        let host_requires_tool_stream = reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|host| host == "api.z.ai" || host.ends_with(".z.ai"));
+
+        host_requires_tool_stream || matches!(self.name.as_str(), "zai" | "z.ai")
+    }
+
+    fn tool_stream_for_tools(&self, has_tools: bool) -> Option<bool> {
+        if has_tools && self.requires_tool_stream() {
+            Some(true)
+        } else {
+            None
         }
     }
 
@@ -803,6 +895,11 @@ struct NativeMessage {
     reasoning_content: Option<String>,
 }
 
+// ---------------------------------------------------------------
+// Responses API fallback (used when /chat/completions returns 404 on
+// providers that only expose /v1/responses, e.g. llama-server)
+// ---------------------------------------------------------------
+
 #[derive(Debug, Serialize)]
 struct ResponsesRequest {
     model: String,
@@ -977,7 +1074,11 @@ impl StreamToolCallAccumulator {
         }
     }
 
-    fn into_provider_tool_call(self) -> Option<ProviderToolCall> {
+    fn into_provider_tool_call(
+        self,
+        targets_mistral_tool_call_contract: bool,
+        used_tool_call_ids: &mut std::collections::HashSet<String>,
+    ) -> Option<ProviderToolCall> {
         let name = self.name?;
         let arguments = if self.arguments.trim().is_empty() {
             "{}".to_string()
@@ -997,7 +1098,11 @@ impl StreamToolCallAccumulator {
         };
 
         Some(ProviderToolCall {
-            id: self.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: reserve_tool_call_id_for_contract(
+                targets_mistral_tool_call_contract,
+                self.id,
+                used_tool_call_ids,
+            ),
             name,
             arguments: normalized_arguments,
             extra_content: self.extra_content,
@@ -1081,6 +1186,71 @@ fn extract_sse_reasoning_delta(choice: &StreamChoice) -> Option<String> {
         .as_ref()
         .filter(|value| !value.is_empty())
         .cloned()
+}
+
+fn is_valid_mistral_tool_call_id(id: &str) -> bool {
+    id.len() == 9 && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn reserve_tool_call_id_for_contract(
+    targets_mistral_tool_call_contract: bool,
+    raw_id: Option<String>,
+    used_ids: &mut std::collections::HashSet<String>,
+) -> String {
+    if !targets_mistral_tool_call_contract {
+        let id = raw_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if used_ids.insert(id.clone()) {
+            return id;
+        }
+
+        loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if used_ids.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+    }
+
+    if let Some(id) = raw_id.as_deref()
+        && is_valid_mistral_tool_call_id(id)
+        && used_ids.insert(id.to_string())
+    {
+        return id.to_string();
+    }
+
+    let mut candidate = raw_id
+        .as_deref()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(9)
+        .collect::<String>();
+
+    if candidate.len() < 9 {
+        candidate.extend(
+            uuid::Uuid::new_v4()
+                .as_simple()
+                .to_string()
+                .chars()
+                .take(9 - candidate.len()),
+        );
+    }
+
+    if used_ids.insert(candidate.clone()) {
+        return candidate;
+    }
+
+    loop {
+        let generated = uuid::Uuid::new_v4()
+            .as_simple()
+            .to_string()
+            .chars()
+            .take(9)
+            .collect::<String>();
+        if used_ids.insert(generated.clone()) {
+            return generated;
+        }
+    }
 }
 
 /// Parse SSE (Server-Sent Events) stream from OpenAI-compatible model_providers.
@@ -1206,11 +1376,20 @@ pub(crate) fn sse_bytes_to_events(
     response: reqwest::Response,
     count_tokens: bool,
 ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
+    sse_bytes_to_events_for_contract(response, count_tokens, false)
+}
+
+fn sse_bytes_to_events_for_contract(
+    response: reqwest::Response,
+    count_tokens: bool,
+    targets_mistral_tool_call_contract: bool,
+) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
 
     tokio::spawn(async move {
         let mut buffer = String::new();
         let mut tool_calls: Vec<StreamToolCallAccumulator> = Vec::new();
+        let mut used_tool_call_ids = std::collections::HashSet::new();
         let mut emitted_tool_calls = false;
 
         match response.error_for_status_ref() {
@@ -1329,10 +1508,12 @@ pub(crate) fn sse_bytes_to_events(
 
                         if should_emit_tool_calls && !emitted_tool_calls {
                             emitted_tool_calls = true;
-                            for tool_call in tool_calls
-                                .drain(..)
-                                .filter_map(StreamToolCallAccumulator::into_provider_tool_call)
-                            {
+                            for tool_call in tool_calls.drain(..).filter_map(|tool_call| {
+                                tool_call.into_provider_tool_call(
+                                    targets_mistral_tool_call_contract,
+                                    &mut used_tool_call_ids,
+                                )
+                            }) {
                                 if tx.send(Ok(StreamEvent::ToolCall(tool_call))).await.is_err() {
                                     return;
                                 }
@@ -1348,10 +1529,12 @@ pub(crate) fn sse_bytes_to_events(
         }
 
         if !emitted_tool_calls {
-            for tool_call in tool_calls
-                .drain(..)
-                .filter_map(StreamToolCallAccumulator::into_provider_tool_call)
-            {
+            for tool_call in tool_calls.drain(..).filter_map(|tool_call| {
+                tool_call.into_provider_tool_call(
+                    targets_mistral_tool_call_contract,
+                    &mut used_tool_call_ids,
+                )
+            }) {
                 if tx.send(Ok(StreamEvent::ToolCall(tool_call))).await.is_err() {
                     return;
                 }
@@ -1436,30 +1619,23 @@ fn extract_responses_text(response: ResponsesResponse) -> Option<String> {
     None
 }
 
-fn compact_sanitized_body_snippet(body: &str) -> String {
-    super::sanitize_api_error(body)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn parse_chat_response_body(provider_name: &str, body: &str) -> anyhow::Result<ApiChatResponse> {
-    serde_json::from_str::<ApiChatResponse>(body).map_err(|error| {
-        let snippet = compact_sanitized_body_snippet(body);
-        anyhow::anyhow!(
-            "{provider_name} API returned an unexpected chat-completions payload: {error}; body={snippet}"
-        )
-    })
-}
-
 fn parse_responses_response_body(
     provider_name: &str,
     body: &str,
 ) -> anyhow::Result<ResponsesResponse> {
     serde_json::from_str::<ResponsesResponse>(body).map_err(|error| {
-        let snippet = compact_sanitized_body_snippet(body);
+        let snippet = super::sanitize_api_error(body);
         anyhow::anyhow!(
             "{provider_name} Responses API returned an unexpected payload: {error}; body={snippet}"
+        )
+    })
+}
+
+fn parse_chat_response_body(name: &str, body: &str) -> anyhow::Result<ApiChatResponse> {
+    serde_json::from_str(body).map_err(|_| {
+        let sanitized = super::sanitize_api_error(body);
+        anyhow::anyhow!(
+            "{name} API returned an unexpected chat-completions payload; body={sanitized}"
         )
     })
 }
@@ -1471,46 +1647,6 @@ impl OpenAiCompatibleModelProvider {
         credential: Option<&str>,
     ) -> reqwest::RequestBuilder {
         apply_auth_to_request(req, &self.auth_header, credential)
-    }
-
-    async fn chat_via_responses(
-        &self,
-        credential: Option<&str>,
-        messages: &[ChatMessage],
-        model: &str,
-    ) -> anyhow::Result<String> {
-        let (instructions, input) = build_responses_prompt(messages);
-        if input.is_empty() {
-            anyhow::bail!(
-                "{} Responses API fallback requires at least one non-system message",
-                self.name
-            );
-        }
-
-        let request = ResponsesRequest {
-            model: model.to_string(),
-            input,
-            instructions,
-            stream: Some(false),
-        };
-
-        let url = self.responses_url();
-
-        let response = self
-            .apply_auth_header(self.http_client().post(&url).json(&request), credential)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error = response.text().await?;
-            anyhow::bail!("{} Responses API error: {error}", self.name);
-        }
-
-        let body = response.text().await?;
-        let responses = parse_responses_response_body(&self.name, &body)?;
-
-        extract_responses_text(responses)
-            .ok_or_else(|| anyhow::anyhow!("No response from {} Responses API", self.name))
     }
 
     fn convert_tool_specs(
@@ -1568,9 +1704,14 @@ impl OpenAiCompatibleModelProvider {
     }
 
     fn convert_messages_for_native(
+        &self,
         messages: &[ChatMessage],
         allow_user_image_parts: bool,
     ) -> Vec<NativeMessage> {
+        let targets_mistral_tool_call_contract = self.targets_mistral_tool_call_contract();
+        let mut used_tool_call_ids = std::collections::HashSet::new();
+        let mut tool_call_id_map = std::collections::HashMap::new();
+
         messages
             .iter()
             .map(|message| {
@@ -1583,7 +1724,15 @@ impl OpenAiCompatibleModelProvider {
                     let tool_calls = parsed_calls
                         .into_iter()
                         .map(|tc| ToolCall {
-                            id: Some(tc.id),
+                            id: Some({
+                                let normalized_id = reserve_tool_call_id_for_contract(
+                                    targets_mistral_tool_call_contract,
+                                    Some(tc.id.clone()),
+                                    &mut used_tool_call_ids,
+                                );
+                                tool_call_id_map.insert(tc.id, normalized_id.clone());
+                                normalized_id
+                            }),
                             kind: Some("function".to_string()),
                             function: Some(Function {
                                 name: Some(tc.name),
@@ -1623,7 +1772,17 @@ impl OpenAiCompatibleModelProvider {
                     let tool_call_id = value
                         .get("tool_call_id")
                         .and_then(serde_json::Value::as_str)
-                        .map(ToString::to_string);
+                        .map(|raw_id| {
+                            tool_call_id_map.get(raw_id).cloned().unwrap_or_else(|| {
+                                let normalized_id = reserve_tool_call_id_for_contract(
+                                    targets_mistral_tool_call_contract,
+                                    Some(raw_id.to_string()),
+                                    &mut used_tool_call_ids,
+                                );
+                                tool_call_id_map.insert(raw_id.to_string(), normalized_id.clone());
+                                normalized_id
+                            })
+                        });
                     let content = value
                         .get("content")
                         .and_then(serde_json::Value::as_str)
@@ -1745,9 +1904,33 @@ impl OpenAiCompatibleModelProvider {
         modified_messages
     }
 
-    fn parse_native_response(message: ResponseMessage) -> ProviderChatResponse {
+    fn targets_mistral_tool_call_contract(&self) -> bool {
+        if self.name.eq_ignore_ascii_case("mistral") {
+            return true;
+        }
+
+        reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(|h| h.to_ascii_lowercase()))
+            .is_some_and(|host| host == "mistral.ai" || host.ends_with(".mistral.ai"))
+    }
+
+    fn reserve_tool_call_id(
+        &self,
+        raw_id: Option<String>,
+        used_ids: &mut std::collections::HashSet<String>,
+    ) -> String {
+        reserve_tool_call_id_for_contract(
+            self.targets_mistral_tool_call_contract(),
+            raw_id,
+            used_ids,
+        )
+    }
+
+    fn parse_native_response(&self, message: ResponseMessage) -> ProviderChatResponse {
         let text = message.effective_content_optional();
         let reasoning_content = message.reasoning_content.clone();
+        let mut used_tool_call_ids = std::collections::HashSet::new();
         let tool_calls = message
             .tool_calls
             .unwrap_or_default()
@@ -1767,7 +1950,7 @@ impl OpenAiCompatibleModelProvider {
                         "{}".to_string()
                     };
                 Some(ProviderToolCall {
-                    id: tc.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    id: self.reserve_tool_call_id(tc.id, &mut used_tool_call_ids),
                     name,
                     arguments: normalized_arguments,
                     extra_content: tc.extra_content,
@@ -1895,13 +2078,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
 
         let url = self.chat_completions_url();
 
-        let mut fallback_messages = Vec::new();
-        if let Some(system_prompt) = system_prompt {
-            fallback_messages.push(ChatMessage::system(system_prompt));
-        }
-        fallback_messages.push(ChatMessage::user(message));
-        let fallback_messages = Self::flatten_system_messages(&fallback_messages, merge);
-
         let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
@@ -1909,19 +2085,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         {
             Ok(response) => response,
             Err(chat_error) => {
-                if self.supports_responses_fallback {
-                    let sanitized = super::sanitize_api_error(&chat_error.to_string());
-                    return self
-                        .chat_via_responses(credential, &fallback_messages, model)
-                        .await
-                        .map_err(|responses_err| {
-                            anyhow::anyhow!(
-                                "{} chat completions transport error: {sanitized} (responses fallback failed: {responses_err})",
-                                self.name
-                            )
-                        });
-                }
-
                 return Err(chat_error.into());
             }
         };
@@ -1930,19 +2093,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             let status = response.status();
             let error = response.text().await?;
             let sanitized = super::sanitize_api_error(&error);
-
-            if status == reqwest::StatusCode::NOT_FOUND && self.supports_responses_fallback {
-                return self
-                    .chat_via_responses(credential, &fallback_messages, model)
-                    .await
-                    .map_err(|responses_err| {
-                        anyhow::anyhow!(
-                            "{} API error ({status}): {sanitized} (chat completions unavailable; responses fallback failed: {responses_err})",
-                            self.name
-                        )
-                    });
-            }
-
             anyhow::bail!("{} API error ({status}): {sanitized}", self.name);
         }
 
@@ -1954,15 +2104,15 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .into_iter()
             .next()
             .map(|c| {
-                // If tool_calls are present, serialize the full message as JSON
-                // so parse_tool_calls can handle the OpenAI-style format
                 if c.message.tool_calls.is_some()
-                    && c.message.tool_calls.as_ref().is_some_and(|t| !t.is_empty())
+                    && c.message
+                        .tool_calls
+                        .as_ref()
+                        .is_some_and(|t: &Vec<_>| !t.is_empty())
                 {
                     serde_json::to_string(&c.message)
                         .unwrap_or_else(|_| c.message.effective_content())
                 } else {
-                    // No tool calls, return content (with reasoning_content fallback)
                     c.message.effective_content()
                 }
             })
@@ -2010,22 +2160,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .await
         {
             Ok(response) => response,
-            Err(chat_error) => {
-                if self.supports_responses_fallback {
-                    let sanitized = super::sanitize_api_error(&chat_error.to_string());
-                    return self
-                        .chat_via_responses(credential, &effective_messages, model)
-                        .await
-                        .map_err(|responses_err| {
-                            anyhow::anyhow!(
-                                "{} chat completions transport error: {sanitized} (responses fallback failed: {responses_err})",
-                                self.name
-                            )
-                        });
-                }
-
-                return Err(chat_error.into());
-            }
+            Err(chat_error) => return Err(chat_error.into()),
         };
 
         if !response.status().is_success() {
@@ -2055,15 +2190,15 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .into_iter()
             .next()
             .map(|c| {
-                // If tool_calls are present, serialize the full message as JSON
-                // so parse_tool_calls can handle the OpenAI-style format
                 if c.message.tool_calls.is_some()
-                    && c.message.tool_calls.as_ref().is_some_and(|t| !t.is_empty())
+                    && c.message
+                        .tool_calls
+                        .as_ref()
+                        .is_some_and(|t: &Vec<_>| !t.is_empty())
                 {
                     serde_json::to_string(&c.message)
                         .unwrap_or_else(|_| c.message.effective_content())
                 } else {
-                    // No tool calls, return content (with reasoning_content fallback)
                     c.message.effective_content()
                 }
             })
@@ -2155,6 +2290,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
 
         let text = choice.message.effective_content_optional();
         let reasoning_content = choice.message.reasoning_content;
+        let mut used_tool_call_ids = std::collections::HashSet::new();
         let tool_calls = choice
             .message
             .tool_calls
@@ -2165,7 +2301,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 let name = function.name?;
                 let arguments = function.arguments.unwrap_or_else(|| "{}".to_string());
                 Some(ProviderToolCall {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: self.reserve_tool_call_id(tc.id, &mut used_tool_call_ids),
                     name,
                     arguments,
                     extra_content: tc.extra_content,
@@ -2191,12 +2327,15 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         let credential = self.credential.as_deref();
 
         let merge = self.effective_merge_system(model);
-        let tools = Self::convert_tool_specs(request.tools);
         let effective_messages = Self::flatten_system_messages(request.messages, merge);
         let effective_messages = self.strip_native_tool_messages(&effective_messages);
+
+        // When wire_api = "responses", route all turns through the responses API.
+
+        let tools = Self::convert_tool_specs(request.tools);
         let native_request = NativeChatRequest {
             model: model.to_string(),
-            messages: Self::convert_messages_for_native(&effective_messages, !merge),
+            messages: self.convert_messages_for_native(&effective_messages, !merge),
             temperature,
             stream: Some(false),
             // Non-streaming path; `usage` is on the final response body, not
@@ -2220,28 +2359,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .await
         {
             Ok(response) => response,
-            Err(chat_error) => {
-                if self.supports_responses_fallback {
-                    let sanitized = super::sanitize_api_error(&chat_error.to_string());
-                    return self
-                        .chat_via_responses(credential, &effective_messages, model)
-                        .await
-                        .map(|text| ProviderChatResponse {
-                            text: Some(text),
-                            tool_calls: vec![],
-                            usage: None,
-                            reasoning_content: None,
-                        })
-                        .map_err(|responses_err| {
-                            anyhow::anyhow!(
-                                "{} native chat transport error: {sanitized} (responses fallback failed: {responses_err})",
-                                self.name
-                            )
-                        });
-                }
-
-                return Err(chat_error.into());
-            }
+            Err(chat_error) => return Err(chat_error.into()),
         };
 
         if !response.status().is_success() {
@@ -2263,24 +2381,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 });
             }
 
-            if status == reqwest::StatusCode::NOT_FOUND && self.supports_responses_fallback {
-                return self
-                    .chat_via_responses(credential, &effective_messages, model)
-                    .await
-                    .map(|text| ProviderChatResponse {
-                        text: Some(text),
-                        tool_calls: vec![],
-                        usage: None,
-                        reasoning_content: None,
-                    })
-                    .map_err(|responses_err| {
-                        anyhow::anyhow!(
-                            "{} API error ({status}): {sanitized} (chat completions unavailable; responses fallback failed: {responses_err})",
-                            self.name
-                        )
-                    });
-            }
-
             anyhow::bail!("{} API error ({status}): {sanitized}", self.name);
         }
 
@@ -2297,7 +2397,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .map(|choice| choice.message)
             .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))?;
 
-        let mut result = Self::parse_native_response(message);
+        let mut result = self.parse_native_response(message);
         result.usage = usage;
         Ok(result)
     }
@@ -2311,6 +2411,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
     }
 
     fn supports_streaming_tool_events(&self) -> bool {
+        // The responses API always supports streaming tool events.
         self.native_tool_calling
     }
 
@@ -2337,9 +2438,9 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         let payload = if has_tools {
             serde_json::to_value(NativeChatRequest {
                 model: model.to_string(),
-                messages: Self::convert_messages_for_native(&effective_messages, !merge),
+                messages: self.convert_messages_for_native(&effective_messages, !merge),
                 temperature,
-                reasoning_effort: self.reasoning_effort.clone(),
+                reasoning_effort: self.reasoning_effort_for_model(model),
                 tool_stream: if options.enabled {
                     self.tool_stream_for_tools(true)
                 } else {
@@ -2369,7 +2470,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 model: model.to_string(),
                 messages,
                 temperature,
-                reasoning_effort: self.reasoning_effort.clone(),
+                reasoning_effort: self.reasoning_effort_for_model(model),
                 tool_stream: if options.enabled {
                     self.tool_stream_for_tools(false)
                 } else {
@@ -2393,9 +2494,10 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         };
 
         let url = self.chat_completions_url();
-        let client = self.http_client();
+        let client = self.streaming_http_client();
         let auth_header = self.auth_header.clone();
         let count_tokens = options.count_tokens;
+        let targets_mistral_tool_call_contract = self.targets_mistral_tool_call_contract();
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
 
@@ -2428,7 +2530,11 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 return;
             }
 
-            let mut event_stream = sse_bytes_to_events(response, count_tokens);
+            let mut event_stream = sse_bytes_to_events_for_contract(
+                response,
+                count_tokens,
+                targets_mistral_tool_call_contract,
+            );
             while let Some(event) = event_stream.next().await {
                 if tx.send(event).await.is_err() {
                     break;
@@ -2493,7 +2599,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         };
 
         let url = self.chat_completions_url();
-        let client = self.http_client();
+        let client = self.streaming_http_client();
         let auth_header = self.auth_header.clone();
 
         // Use a channel to bridge the async HTTP response to the stream
@@ -2587,7 +2693,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         };
 
         let url = self.chat_completions_url();
-        let client = self.http_client();
+        let client = self.streaming_http_client();
         let auth_header = self.auth_header.clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
@@ -2635,9 +2741,8 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
     }
 
     async fn warmup(&self) -> anyhow::Result<()> {
-        // Hit the chat completions URL with a GET to establish the connection pool.
-        // The server will likely return 405 Method Not Allowed, which is fine -
-        // the goal is TLS handshake and HTTP/2 negotiation.
+        // Hit the appropriate URL with a GET to prime the connection pool.
+        // The server will likely return 405 Method Not Allowed, which is fine.
         let url = self.chat_completions_url();
         let _ = self
             .apply_auth_header(self.http_client().get(&url), self.credential.as_deref())
@@ -2832,18 +2937,6 @@ mod tests {
         assert!(msg.contains("body="));
         assert!(msg.contains("[REDACTED]"));
         assert!(!msg.contains("sk-test-secret-value"));
-    }
-
-    #[test]
-    fn parse_responses_response_body_reports_sanitized_snippet() {
-        let body = r#"{"output_text":123,"api_key":"sk-another-secret"}"#;
-        let err = parse_responses_response_body("custom", body).expect_err("payload should fail");
-        let msg = err.to_string();
-
-        assert!(msg.contains("custom Responses API returned an unexpected payload"));
-        assert!(msg.contains("body="));
-        assert!(msg.contains("[REDACTED]"));
-        assert!(!msg.contains("sk-another-secret"));
     }
 
     #[test]
@@ -3320,6 +3413,7 @@ mod tests {
 
     #[test]
     fn parse_native_response_preserves_tool_call_id() {
+        let provider = make_model_provider("test", "https://example.com", None);
         let message = ResponseMessage {
             content: None,
             tool_calls: Some(vec![ToolCall {
@@ -3337,10 +3431,136 @@ mod tests {
             reasoning_content: None,
         };
 
-        let parsed = OpenAiCompatibleModelProvider::parse_native_response(message);
+        let parsed = provider.parse_native_response(message);
         assert_eq!(parsed.tool_calls.len(), 1);
         assert_eq!(parsed.tool_calls[0].id, "call_123");
         assert_eq!(parsed.tool_calls[0].name, "shell");
+    }
+
+    #[test]
+    fn parse_native_response_mistral_normalizes_invalid_tool_call_id() {
+        let provider = make_model_provider("Mistral", "https://api.mistral.ai/v1", None);
+        let message = ResponseMessage {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: Some("xvL0p9bZ41j2X0O3Q1y9vL0p9bZ41j2X".to_string()),
+                kind: Some("function".to_string()),
+                function: Some(Function {
+                    name: Some("shell".to_string()),
+                    arguments: Some(r#"{"command":"pwd"}"#.to_string()),
+                }),
+                name: None,
+                arguments: None,
+                parameters: None,
+                extra_content: None,
+            }]),
+            reasoning_content: None,
+        };
+
+        let parsed = provider.parse_native_response(message);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        let id = &parsed.tool_calls[0].id;
+        assert_eq!(id.len(), 9);
+        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn parse_native_response_mistral_generates_valid_id_when_missing() {
+        let provider = make_model_provider("Mistral", "https://api.mistral.ai/v1", None);
+        let message = ResponseMessage {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: None,
+                kind: Some("function".to_string()),
+                function: Some(Function {
+                    name: Some("shell".to_string()),
+                    arguments: Some(r#"{"command":"pwd"}"#.to_string()),
+                }),
+                name: None,
+                arguments: None,
+                parameters: None,
+                extra_content: None,
+            }]),
+            reasoning_content: None,
+        };
+
+        let parsed = provider.parse_native_response(message);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        let id = &parsed.tool_calls[0].id;
+        assert_eq!(id.len(), 9);
+        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn parse_native_response_custom_mistral_endpoint_normalizes_tool_call_id() {
+        let provider = make_model_provider("Custom", "https://api.mistral.ai/v1", None);
+        let message = ResponseMessage {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: Some("xvL0p9bZ41j2X0O3Q1y9vL0p9bZ41j2X".to_string()),
+                kind: Some("function".to_string()),
+                function: Some(Function {
+                    name: Some("shell".to_string()),
+                    arguments: Some(r#"{"command":"pwd"}"#.to_string()),
+                }),
+                name: None,
+                arguments: None,
+                parameters: None,
+                extra_content: None,
+            }]),
+            reasoning_content: None,
+        };
+
+        let parsed = provider.parse_native_response(message);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        let id = &parsed.tool_calls[0].id;
+        assert_eq!(id.len(), 9);
+        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn parse_native_response_mistral_avoids_id_collision_after_normalization() {
+        let provider = make_model_provider("Mistral", "https://api.mistral.ai/v1", None);
+        let message = ResponseMessage {
+            content: None,
+            tool_calls: Some(vec![
+                ToolCall {
+                    id: Some("ABCDEFGHI123".to_string()),
+                    kind: Some("function".to_string()),
+                    function: Some(Function {
+                        name: Some("shell".to_string()),
+                        arguments: Some(r#"{"command":"pwd"}"#.to_string()),
+                    }),
+                    name: None,
+                    arguments: None,
+                    parameters: None,
+                    extra_content: None,
+                },
+                ToolCall {
+                    id: Some("ABCDEFGHIxyz".to_string()),
+                    kind: Some("function".to_string()),
+                    function: Some(Function {
+                        name: Some("echo".to_string()),
+                        arguments: Some(r#"{"text":"ok"}"#.to_string()),
+                    }),
+                    name: None,
+                    arguments: None,
+                    parameters: None,
+                    extra_content: None,
+                },
+            ]),
+            reasoning_content: None,
+        };
+
+        let parsed = provider.parse_native_response(message);
+        assert_eq!(parsed.tool_calls.len(), 2);
+        let id0 = &parsed.tool_calls[0].id;
+        let id1 = &parsed.tool_calls[1].id;
+        assert_eq!(id0.len(), 9);
+        assert_eq!(id1.len(), 9);
+        assert!(id0.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert!(id1.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(id0, id1);
     }
 
     #[test]
@@ -3349,7 +3569,8 @@ mod tests {
             r#"{"tool_call_id":"call_abc","content":"done"}"#,
         )];
 
-        let converted = OpenAiCompatibleModelProvider::convert_messages_for_native(&input, true);
+        let provider = make_model_provider("test", "https://example.com", None);
+        let converted = provider.convert_messages_for_native(&input, true);
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "tool");
         assert_eq!(converted[0].tool_call_id.as_deref(), Some("call_abc"));
@@ -3360,12 +3581,69 @@ mod tests {
     }
 
     #[test]
+    fn native_chat_request_mistral_serializes_matching_valid_tool_call_ids() {
+        let provider = make_model_provider("Mistral", "https://api.mistral.ai/v1", None);
+        let invalid_id = "chatcmpl-tool-abc";
+        let history_json = serde_json::json!({
+            "content": "",
+            "tool_calls": [{
+                "id": invalid_id,
+                "name": "shell",
+                "arguments": "{\"cmd\":\"pwd\"}"
+            }]
+        });
+        let messages = vec![
+            ChatMessage::assistant(history_json.to_string()),
+            ChatMessage::tool(
+                serde_json::json!({
+                    "tool_call_id": invalid_id,
+                    "content": "done"
+                })
+                .to_string(),
+            ),
+        ];
+
+        let req = NativeChatRequest {
+            model: "mistral-large-latest".to_string(),
+            messages: provider.convert_messages_for_native(&messages, true),
+            temperature: 0.7,
+            stream: Some(false),
+            stream_options: None,
+            reasoning_effort: None,
+            tool_stream: None,
+            tools: Some(vec![serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Run a shell command",
+                    "parameters": {"type": "object"}
+                }
+            })]),
+            tool_choice: Some("auto".to_string()),
+            max_tokens: None,
+        };
+
+        let value = serde_json::to_value(&req).unwrap();
+        let assistant_id = value["messages"][0]["tool_calls"][0]["id"]
+            .as_str()
+            .expect("assistant tool call id should serialize");
+        let tool_id = value["messages"][1]["tool_call_id"]
+            .as_str()
+            .expect("tool result id should serialize");
+
+        assert_ne!(assistant_id, invalid_id);
+        assert!(is_valid_mistral_tool_call_id(assistant_id));
+        assert_eq!(assistant_id, tool_id);
+    }
+
+    #[test]
     fn convert_messages_for_native_keeps_user_image_markers_as_text_when_disabled() {
         let input = vec![ChatMessage::user(
             "System primer [IMAGE:data:image/png;base64,abcd] user turn",
         )];
 
-        let converted = OpenAiCompatibleModelProvider::convert_messages_for_native(&input, false);
+        let provider = make_model_provider("test", "https://example.com", None);
+        let converted = provider.convert_messages_for_native(&input, false);
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "user");
         assert!(matches!(
@@ -4230,12 +4508,38 @@ mod tests {
             extra_content: None,
         });
 
+        let mut used_tool_call_ids = std::collections::HashSet::new();
         let tool_call = acc
-            .into_provider_tool_call()
+            .into_provider_tool_call(false, &mut used_tool_call_ids)
             .expect("accumulator should emit tool call");
         assert_eq!(tool_call.id, "call_1");
         assert_eq!(tool_call.name, "shell");
         assert_eq!(tool_call.arguments, r#"{"command":"date"}"#);
+    }
+
+    #[test]
+    fn stream_tool_call_accumulator_mistral_normalizes_invalid_id() {
+        let mut acc = StreamToolCallAccumulator::default();
+        acc.apply_delta(&StreamToolCallDelta {
+            index: Some(0),
+            id: Some("chatcmpl-tool-abc".to_string()),
+            function: Some(StreamFunctionDelta {
+                name: Some("shell".to_string()),
+                arguments: Some(r#"{"command":"date"}"#.to_string()),
+            }),
+            name: None,
+            arguments: None,
+            extra_content: None,
+        });
+
+        let mut used_tool_call_ids = std::collections::HashSet::new();
+        let tool_call = acc
+            .into_provider_tool_call(true, &mut used_tool_call_ids)
+            .expect("accumulator should emit tool call");
+
+        assert_eq!(tool_call.id.len(), 9);
+        assert!(tool_call.id.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(tool_call.id, "chatcmpl-tool-abc");
     }
 
     #[test]
@@ -4263,6 +4567,7 @@ mod tests {
 
     #[test]
     fn parse_native_response_captures_reasoning_content() {
+        let provider = make_model_provider("test", "https://example.com", None);
         let message = ResponseMessage {
             content: Some("answer".to_string()),
             reasoning_content: Some("thinking step".to_string()),
@@ -4280,7 +4585,7 @@ mod tests {
             }]),
         };
 
-        let parsed = OpenAiCompatibleModelProvider::parse_native_response(message);
+        let parsed = provider.parse_native_response(message);
         assert_eq!(parsed.reasoning_content.as_deref(), Some("thinking step"));
         assert_eq!(parsed.text.as_deref(), Some("answer"));
         assert_eq!(parsed.tool_calls.len(), 1);
@@ -4288,13 +4593,14 @@ mod tests {
 
     #[test]
     fn parse_native_response_none_reasoning_content_for_normal_model() {
+        let provider = make_model_provider("test", "https://example.com", None);
         let message = ResponseMessage {
             content: Some("hello".to_string()),
             reasoning_content: None,
             tool_calls: None,
         };
 
-        let parsed = OpenAiCompatibleModelProvider::parse_native_response(message);
+        let parsed = provider.parse_native_response(message);
         assert!(parsed.reasoning_content.is_none());
         assert_eq!(parsed.text.as_deref(), Some("hello"));
     }
@@ -4313,7 +4619,8 @@ mod tests {
         });
 
         let messages = vec![ChatMessage::assistant(history_json.to_string())];
-        let native = OpenAiCompatibleModelProvider::convert_messages_for_native(&messages, true);
+        let provider = make_model_provider("test", "https://example.com", None);
+        let native = provider.convert_messages_for_native(&messages, true);
         assert_eq!(native.len(), 1);
         assert_eq!(native[0].role, "assistant");
         assert_eq!(
@@ -4336,7 +4643,8 @@ mod tests {
         });
 
         let messages = vec![ChatMessage::assistant(history_json.to_string())];
-        let native = OpenAiCompatibleModelProvider::convert_messages_for_native(&messages, true);
+        let provider = make_model_provider("test", "https://example.com", None);
+        let native = provider.convert_messages_for_native(&messages, true);
         assert_eq!(native.len(), 1);
         assert!(native[0].reasoning_content.is_none());
     }

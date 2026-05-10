@@ -651,6 +651,19 @@ pub struct ModelProviderConfig {
     /// tool calling for Groq models that support it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_tools: Option<bool>,
+    /// Enable or disable chain-of-thought thinking for models that support it
+    /// (e.g. Qwen3, GLM-4). `true` turns thinking on, `false` turns it off.
+    /// `None` (default) lets the model decide. Forwarded as `enable_thinking`
+    /// in the request body; mirrors the Ollama provider's `think` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
+    /// Arbitrary key/value pairs forwarded verbatim as `chat_template_kwargs`
+    /// in the request body (llama.cpp-specific). Use this to pass model-family
+    /// template variables that control behaviour not exposed by other fields.
+    /// Example (Qwen3 thinking suppression):
+    ///   `chat_template_kwargs = { enable_thinking = false }`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_template_kwargs: Option<serde_json::Value>,
 }
 
 // ── Per-family model model_provider configs ────────────────────────────
@@ -967,6 +980,23 @@ pub struct OllamaModelProviderConfig {
     #[nested]
     #[serde(flatten)]
     pub base: ModelProviderConfig,
+    /// Override the Ollama `num_ctx` (context window, in tokens) sent on
+    /// every `/api/chat` request. Defaults to the framework constant
+    /// (`OLLAMA_DEFAULT_NUM_CTX`) when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_ctx: Option<u32>,
+    /// Override the Ollama `num_predict` (max output tokens) sent on every
+    /// `/api/chat` request. Defaults to the framework constant
+    /// (`OLLAMA_DEFAULT_NUM_PREDICT`) when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_predict: Option<i32>,
+    /// Force every Ollama `/api/chat` request to use this temperature,
+    /// overriding the per-call value passed through
+    /// `ModelProvider::chat_with_system(.., temperature)`. When unset
+    /// (`None`, the default), the per-call temperature wins — full
+    /// backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_override: Option<f64>,
 }
 
 // ── Together ──
@@ -10332,11 +10362,21 @@ pub struct NextcloudTalkConfig {
     /// If not set, defaults to an empty string (no self-message filtering by name).
     #[serde(default)]
     pub bot_name: Option<String>,
-
     /// Tools excluded from this channel's tool spec. When set, these tools
     /// are not exposed to the model when responding via this channel.
     #[serde(default)]
     pub excluded_tools: Vec<String>,
+    /// Controls whether and how streaming draft updates are delivered.
+    ///
+    /// - `"off"` (default) — responses are sent as a single final message.
+    /// - `"partial"` — a placeholder is posted first and edited incrementally
+    ///   as tokens arrive, making long responses visible in real time.
+    #[serde(default)]
+    pub stream_mode: StreamMode,
+    /// Minimum interval in milliseconds between consecutive OCS edit calls per
+    /// room when `stream_mode = "partial"`. Default: 1000 ms.
+    #[serde(default = "default_draft_update_interval_ms")]
+    pub draft_update_interval_ms: u64,
 }
 
 impl ChannelConfig for NextcloudTalkConfig {
@@ -12178,6 +12218,13 @@ fn default_config_and_workspace_dirs() -> Result<(PathBuf, PathBuf)> {
 }
 
 fn default_config_dir() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var("ZEROCLAW_CONFIG_DIR") {
+        let custom = custom.trim();
+        if !custom.is_empty() {
+            return Ok(expand_tilde_path(custom));
+        }
+    }
+
     if let Ok(home) = std::env::var("HOME")
         && !home.is_empty()
     {
@@ -13928,7 +13975,9 @@ async fn sync_directory(path: &Path) -> Result<()> {
 #[prefix = "sop"]
 pub struct SopConfig {
     /// Directory containing SOP definitions (subdirs with SOP.toml + SOP.md).
-    /// Falls back to `<workspace>/sops` when omitted.
+    /// Required to enable runtime SOP loading. When omitted, no SOPs are loaded
+    /// at runtime; CLI commands (`sop list`, `sop validate`, `sop show`) still
+    /// resolve the default `<workspace>/sops` for offline inspection.
     #[serde(default)]
     pub sops_dir: Option<String>,
 
@@ -14532,6 +14581,41 @@ auto_save = true
         assert_eq!(pg.vector_dimensions, 1536);
         assert_eq!(pg.schema, "public");
         assert_eq!(pg.table, "memories");
+    }
+
+    #[test]
+    async fn ollama_alias_tuning_fields_roundtrip() {
+        // Ollama-specific tuning lives on `OllamaModelProviderConfig`,
+        // not on the generic `ModelProviderConfig` base. These knobs
+        // ride alongside the flattened `base` so a TOML alias like
+        // `[providers.models.ollama.local]` accepts them at the same
+        // level as `model`, `api_key`, etc.
+        let toml = r#"
+            num_ctx = 16384
+            num_predict = 4096
+            temperature_override = 0.5
+        "#;
+        let parsed: OllamaModelProviderConfig = toml::from_str(toml).unwrap();
+        assert_eq!(parsed.num_ctx, Some(16384));
+        assert_eq!(parsed.num_predict, Some(4096));
+        assert_eq!(parsed.temperature_override, Some(0.5));
+
+        let serialized = toml::to_string(&parsed).unwrap();
+        let reparsed: OllamaModelProviderConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.num_ctx, Some(16384));
+        assert_eq!(reparsed.num_predict, Some(4096));
+        assert_eq!(reparsed.temperature_override, Some(0.5));
+    }
+
+    #[test]
+    async fn ollama_alias_tuning_fields_default_to_none() {
+        let toml = r#"
+            api_key = "sk-test"
+        "#;
+        let parsed: OllamaModelProviderConfig = toml::from_str(toml).unwrap();
+        assert!(parsed.num_ctx.is_none());
+        assert!(parsed.num_predict.is_none());
+        assert!(parsed.temperature_override.is_none());
     }
 
     #[test]
@@ -16808,6 +16892,7 @@ model = "primary-model"
                     api_key: Some("ollama-key".to_string()),
                     ..Default::default()
                 },
+                ..OllamaModelProviderConfig::default()
             },
         );
 
@@ -16832,6 +16917,7 @@ model = "primary-model"
                     api_key: Some("ollama-typed-key".to_string()),
                     ..Default::default()
                 },
+                ..OllamaModelProviderConfig::default()
             },
         );
 
@@ -16937,6 +17023,25 @@ model = "primary-model"
         assert_eq!(resolved_workspace_dir, default_workspace_dir);
 
         let _ = fs::remove_dir_all(default_config_dir).await;
+    }
+
+    #[test]
+    async fn default_path_under_config_dir_respects_zeroclaw_config_dir() {
+        let _env_guard = env_override_lock().await;
+        let custom_dir = std::env::temp_dir().join("zeroclaw-test-profile");
+        // SAFETY: test-only, single-threaded test runner.
+        unsafe { std::env::set_var("ZEROCLAW_CONFIG_DIR", &custom_dir) };
+
+        let result = default_path_under_config_dir("knowledge.db");
+
+        // SAFETY: test-only, single-threaded test runner.
+        unsafe { std::env::remove_var("ZEROCLAW_CONFIG_DIR") };
+
+        assert_eq!(
+            result,
+            custom_dir.join("knowledge.db").to_string_lossy().as_ref(),
+            "expected path under ZEROCLAW_CONFIG_DIR, got: {result}"
+        );
     }
 
     #[test]
@@ -17808,6 +17913,8 @@ group_policy = "disabled"
             proxy_url: None,
             bot_name: None,
             excluded_tools: vec![],
+            stream_mode: StreamMode::default(),
+            draft_update_interval_ms: 1000,
         };
 
         let json = serde_json::to_string(&nc).unwrap();

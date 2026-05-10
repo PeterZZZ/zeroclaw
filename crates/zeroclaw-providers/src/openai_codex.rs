@@ -1084,7 +1084,21 @@ data: [DONE]
     fn capabilities_includes_vision() {
         let options = ModelProviderRuntimeOptions {
             secrets_encrypt: false,
-            ..Default::default()
+            auth_profile_override: None,
+            reasoning_enabled: None,
+            reasoning_effort: None,
+            provider_timeout_secs: None,
+            extra_headers: std::collections::HashMap::new(),
+            api_path: None,
+            provider_max_tokens: None,
+            merge_system_into_user: false,
+            provider_extra: None,
+            native_tools: None,
+            wire_api: None,
+            provider_api_url: None,
+            zeroclaw_dir: None,
+            think: None,
+            chat_template_kwargs: None,
         };
         let model_provider = OpenAiCodexModelProvider::new(&options, None)
             .expect("model_provider should initialize");

@@ -157,6 +157,8 @@ mod tests {
             proxy_url: None,
             bot_name: None,
             excluded_tools: vec![],
+            stream_mode: StreamMode::default(),
+            draft_update_interval_ms: 1000,
         };
 
         assert_eq!(telegram.allowed_users.len(), 1);
