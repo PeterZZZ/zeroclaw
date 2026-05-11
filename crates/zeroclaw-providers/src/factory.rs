@@ -181,26 +181,26 @@ pub fn dispatch_family_factory(
 
 use zeroclaw_config::schema::{
     Ai21ModelProviderConfig, AihubmixModelProviderConfig, AnthropicModelProviderConfig,
-    AnyscaleModelProviderConfig, AstraiModelProviderConfig, AvianModelProviderConfig,
-    AzureModelProviderConfig, BaichuanModelProviderConfig, BasetenModelProviderConfig,
-    BedrockModelProviderConfig, CerebrasModelProviderConfig, CloudflareModelProviderConfig,
-    CohereModelProviderConfig, CopilotModelProviderConfig, CustomModelProviderConfig,
-    DeepinfraModelProviderConfig, DeepmystModelProviderConfig, DeepseekModelProviderConfig,
-    DoubaoModelProviderConfig, FireworksModelProviderConfig, FriendliModelProviderConfig,
-    GeminiCliModelProviderConfig, GeminiModelProviderConfig, GlmModelProviderConfig,
-    GroqModelProviderConfig, HuggingfaceModelProviderConfig, HunyuanModelProviderConfig,
-    HyperbolicModelProviderConfig, KiloCliModelProviderConfig, LeptonModelProviderConfig,
-    LitellmModelProviderConfig, LlamacppModelProviderConfig, LmstudioModelProviderConfig,
-    MinimaxModelProviderConfig, MistralModelProviderConfig, MoonshotModelProviderConfig,
-    NebiusModelProviderConfig, NovitaModelProviderConfig, NscaleModelProviderConfig,
-    NvidiaModelProviderConfig, OllamaModelProviderConfig, OpenAIModelProviderConfig,
-    OpenRouterModelProviderConfig, OpencodeModelProviderConfig, OsaurusModelProviderConfig,
-    OvhModelProviderConfig, PerplexityModelProviderConfig, QianfanModelProviderConfig,
-    QwenModelProviderConfig, RekaModelProviderConfig, SambanovaModelProviderConfig,
-    SglangModelProviderConfig, SiliconflowModelProviderConfig, StepfunModelProviderConfig,
-    SyntheticModelProviderConfig, TelnyxModelProviderConfig, TogetherModelProviderConfig,
-    VeniceModelProviderConfig, VercelModelProviderConfig, VllmModelProviderConfig,
-    XaiModelProviderConfig, YiModelProviderConfig, ZaiModelProviderConfig,
+    AnyscaleModelProviderConfig, AstraiModelProviderConfig, AtomicChatModelProviderConfig,
+    AvianModelProviderConfig, AzureModelProviderConfig, BaichuanModelProviderConfig,
+    BasetenModelProviderConfig, BedrockModelProviderConfig, CerebrasModelProviderConfig,
+    CloudflareModelProviderConfig, CohereModelProviderConfig, CopilotModelProviderConfig,
+    CustomModelProviderConfig, DeepinfraModelProviderConfig, DeepmystModelProviderConfig,
+    DeepseekModelProviderConfig, DoubaoModelProviderConfig, FireworksModelProviderConfig,
+    FriendliModelProviderConfig, GeminiCliModelProviderConfig, GeminiModelProviderConfig,
+    GlmModelProviderConfig, GroqModelProviderConfig, HuggingfaceModelProviderConfig,
+    HunyuanModelProviderConfig, HyperbolicModelProviderConfig, KiloCliModelProviderConfig,
+    LeptonModelProviderConfig, LitellmModelProviderConfig, LlamacppModelProviderConfig,
+    LmstudioModelProviderConfig, MinimaxModelProviderConfig, MistralModelProviderConfig,
+    MoonshotModelProviderConfig, NebiusModelProviderConfig, NovitaModelProviderConfig,
+    NscaleModelProviderConfig, NvidiaModelProviderConfig, OllamaModelProviderConfig,
+    OpenAIModelProviderConfig, OpenRouterModelProviderConfig, OpencodeModelProviderConfig,
+    OsaurusModelProviderConfig, OvhModelProviderConfig, PerplexityModelProviderConfig,
+    QianfanModelProviderConfig, QwenModelProviderConfig, RekaModelProviderConfig,
+    SambanovaModelProviderConfig, SglangModelProviderConfig, SiliconflowModelProviderConfig,
+    StepfunModelProviderConfig, SyntheticModelProviderConfig, TelnyxModelProviderConfig,
+    TogetherModelProviderConfig, VeniceModelProviderConfig, VercelModelProviderConfig,
+    VllmModelProviderConfig, XaiModelProviderConfig, YiModelProviderConfig, ZaiModelProviderConfig,
 };
 
 // ── Pure-compat families ───────────────────────────────────────────────
@@ -419,6 +419,27 @@ impl CompatFamilySpec for MoonshotModelProviderConfig {
 impl CompatFamilySpec for VeniceModelProviderConfig {
     const DISPLAY: &'static str = "Venice";
     const DEFAULT_URL: &'static str = "https://api.venice.ai";
+    const AUTH: AuthStyle = AuthStyle::Bearer;
+    fn build_compat(
+        &self,
+        key: Option<&str>,
+        api_url: Option<&str>,
+    ) -> OpenAiCompatibleModelProvider {
+        OpenAiCompatibleModelProvider::new(
+            Self::DISPLAY,
+            api_url.unwrap_or(Self::DEFAULT_URL),
+            key,
+            Self::AUTH,
+        )
+        .without_native_tools()
+    }
+}
+impl CompatFamilySpec for AtomicChatModelProviderConfig {
+    const DISPLAY: &'static str = "Atomic Chat";
+    /// Default endpoint for the Jan / Atomic Chat local OpenAI-compatible
+    /// runtime (`jan.ai`). Operators override via `api_url` on the alias
+    /// entry when they run it on a non-default port.
+    const DEFAULT_URL: &'static str = "http://127.0.0.1:1337/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
     fn build_compat(
         &self,
@@ -892,7 +913,8 @@ impl FamilyProviderFactory for LlamacppModelProviderConfig {
             Some(llama_cpp_key),
             AuthStyle::Bearer,
             true,
-        );
+        )
+        .with_local_model_tool_sanitize();
         if opts.merge_system_into_user {
             p = p.with_merge_system_into_user();
         }

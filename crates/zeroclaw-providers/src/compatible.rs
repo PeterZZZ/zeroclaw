@@ -48,6 +48,12 @@ pub struct OpenAiCompatibleModelProvider {
     /// models.dev catalog key for this model_provider (e.g. "xai").
     /// When set, `list_models` fetches from the models.dev catalog.
     models_dev_key: Option<String>,
+    /// Apply the conservative tool-schema sanitizer when the served model
+    /// is one whose runtime rejects standard OpenAI-style tool schemas
+    /// (today: gemma-4 family on llama.cpp, where the empty-properties /
+    /// non-string `default` quirks crash the tool-call parser). The check
+    /// runs at tool conversion time against the runtime model id.
+    local_model_tool_sanitize: bool,
 }
 
 /// How the model_provider expects the API key to be sent.
@@ -246,7 +252,19 @@ impl OpenAiCompatibleModelProvider {
             api_path: None,
             max_tokens: None,
             models_dev_key: None,
+            local_model_tool_sanitize: false,
         }
+    }
+
+    /// Opt this provider into per-model conservative tool-schema sanitization.
+    /// Today the only trigger is the gemma-4 family on llama.cpp, where the
+    /// upstream tool-call parser rejects empty-properties / non-string
+    /// `default` values. The check runs at convert-time against the runtime
+    /// model id (not against the family) so the same provider instance
+    /// happily serves llama, qwen, etc. without sanitization.
+    pub fn with_local_model_tool_sanitize(mut self) -> Self {
+        self.local_model_tool_sanitize = true;
+        self
     }
 
     /// Disable native tool calling, forcing prompt-guided tool use instead.
@@ -1387,6 +1405,45 @@ impl OpenAiCompatibleModelProvider {
         })
     }
 
+    /// Wrap [`Self::convert_tool_specs`] with the per-model conservative
+    /// sanitizer when the provider opted in via
+    /// [`Self::with_local_model_tool_sanitize`] AND the runtime model id
+    /// matches a known-troubled family (today: gemma-4 on llama.cpp; also
+    /// the empty-model case where the operator hasn't named one).
+    fn convert_tool_specs_for_model(
+        &self,
+        tools: Option<&[zeroclaw_api::tool::ToolSpec]>,
+        model: &str,
+    ) -> Option<Vec<serde_json::Value>> {
+        let converted = Self::convert_tool_specs(tools)?;
+        if !self.local_model_tool_sanitize || !Self::should_sanitize_local_tool_schema(model) {
+            return Some(converted);
+        }
+        Some(
+            converted
+                .into_iter()
+                .map(|mut tool| {
+                    let Some(raw_parameters) = tool.get("parameters").cloned() else {
+                        return tool;
+                    };
+                    let cleaned = zeroclaw_api::schema::SchemaCleanr::clean(
+                        raw_parameters,
+                        zeroclaw_api::schema::CleaningStrategy::Conservative,
+                    );
+                    if let Some(obj) = tool.as_object_mut() {
+                        obj.insert("parameters".to_string(), cleaned);
+                    }
+                    tool
+                })
+                .collect(),
+        )
+    }
+
+    fn should_sanitize_local_tool_schema(model: &str) -> bool {
+        let lower = model.to_ascii_lowercase();
+        model.is_empty() || lower.contains("gemma-4") || lower.contains("gemma4")
+    }
+
     fn to_message_content(
         role: &str,
         content: &str,
@@ -2032,7 +2089,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
 
         // When wire_api = "responses", route all turns through the responses API.
 
-        let tools = Self::convert_tool_specs(request.tools);
+        let tools = self.convert_tool_specs_for_model(request.tools, model);
         let native_request = NativeChatRequest {
             model: model.to_string(),
             messages: self.convert_messages_for_native(&effective_messages, !merge),
@@ -2134,7 +2191,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         let effective_messages = Self::flatten_system_messages(request.messages, merge);
         let effective_messages = self.strip_native_tool_messages(&effective_messages);
 
-        let tools = Self::convert_tool_specs(request.tools);
+        let tools = self.convert_tool_specs_for_model(request.tools, model);
         let payload = if has_tools {
             serde_json::to_value(NativeChatRequest {
                 model: model.to_string(),

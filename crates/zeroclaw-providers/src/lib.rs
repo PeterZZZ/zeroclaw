@@ -78,18 +78,15 @@ pub fn is_minimax_intl_alias(name: &str) -> bool {
             | "minimax-portal-global"
     )
 }
-
 pub fn is_minimax_cn_alias(name: &str) -> bool {
     matches!(
         name,
         "minimax-cn" | "minimaxi" | "minimax-oauth-cn" | "minimax-portal-cn"
     )
 }
-
 pub fn is_minimax_alias(name: &str) -> bool {
     is_minimax_intl_alias(name) || is_minimax_cn_alias(name)
 }
-
 pub fn is_glm_global_alias(name: &str) -> bool {
     matches!(name, "glm" | "zhipu" | "glm-global" | "zhipu-global")
 }
@@ -1522,6 +1519,11 @@ pub fn list_model_providers() -> Vec<ModelProviderInfo> {
             display_name: "LiteLLM",
             local: false,
         },
+        ModelProviderInfo {
+            name: "atomic_chat",
+            display_name: "Atomic Chat",
+            local: true,
+        },
         // ── Fast inference ────────────────────────────────────
         ModelProviderInfo {
             name: "cerebras",
@@ -2013,6 +2015,28 @@ mod tests {
         // (this test).
         let options = ModelProviderRuntimeOptions::default();
         assert!(create_model_provider_with_options("openai-codex", None, &options).is_ok());
+    }
+
+    #[test]
+    fn factory_atomic_chat() {
+        assert!(create_model_provider("atomic_chat", Some("key")).is_ok());
+    }
+
+    #[test]
+    fn factory_atomic_chat_allows_missing_key() {
+        // Local provider — empty key is acceptable; the runtime still
+        // attaches a placeholder Bearer header.
+        assert!(create_model_provider("atomic_chat", None).is_ok());
+    }
+
+    #[test]
+    fn atomic_chat_is_listed_as_local_provider() {
+        let providers = list_model_providers();
+        let provider = providers
+            .iter()
+            .find(|p| p.name == "atomic_chat")
+            .expect("atomic_chat must be listed");
+        assert!(provider.local, "atomic_chat must be a local provider");
     }
 
     // ── Extended ecosystem ───────────────────────────────────

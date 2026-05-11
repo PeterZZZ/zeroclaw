@@ -1135,6 +1135,33 @@ pub struct MistralModelProviderConfig {
     pub base: ModelProviderConfig,
 }
 
+// ── Atomic Chat (local OpenAI-compatible runtime, e.g. Jan) ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AtomicChatEndpoint {
+    #[default]
+    Default,
+}
+
+impl ModelEndpoint for AtomicChatEndpoint {
+    fn uri(&self) -> &'static str {
+        match self {
+            Self::Default => "http://127.0.0.1:1337/v1",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "model_providers.atomic_chat"]
+pub struct AtomicChatModelProviderConfig {
+    #[nested]
+    #[serde(flatten)]
+    pub base: ModelProviderConfig,
+}
+
 // ── DeepSeek ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2586,6 +2613,7 @@ impl_default_family_endpoint! {
     OpenAIModelProviderConfig,
     AzureModelProviderConfig,
     AnthropicModelProviderConfig,
+    AtomicChatModelProviderConfig,
     OpenRouterModelProviderConfig,
     OllamaModelProviderConfig,
     TogetherModelProviderConfig,
