@@ -335,21 +335,24 @@ impl std::fmt::Display for Section {
     }
 }
 
-/// Index of `section` in [`ONBOARDING_WIZARD`].
+/// Index of `section` in [`ONBOARDING_WIZARD`], or `None` for
+/// explorer-only sections that are intentionally excluded from the
+/// initial-setup flow. Pre-split this returned `usize` and panicked
+/// on a missing variant; with the explorer_only group the panic became
+/// a real boot crash on any Section the dashboard sort comparator
+/// looked up that wasn't a wizard step.
 #[must_use]
-pub fn wizard_index(section: Section) -> usize {
-    ONBOARDING_WIZARD
-        .iter()
-        .position(|s| *s == section)
-        .expect("every Section variant is enumerated in ONBOARDING_WIZARD")
+pub fn wizard_index(section: Section) -> Option<usize> {
+    ONBOARDING_WIZARD.iter().position(|s| *s == section)
 }
 
 /// Canonical-order index for a wire key, or `None` if the key isn't a
-/// wizard section. Used by gateway / dashboard sort comparators that
-/// take string keys from the HTTP layer.
+/// wizard section (either it's explorer-only, or it isn't a Section at
+/// all). Used by gateway / dashboard sort comparators that take string
+/// keys from the HTTP layer.
 #[must_use]
 pub fn wizard_index_for_key(key: &str) -> Option<usize> {
-    Section::from_key(key).map(wizard_index)
+    Section::from_key(key).and_then(wizard_index)
 }
 
 /// True when `key` parses as a wizard section.
@@ -371,12 +374,44 @@ mod tests {
     fn wizard_round_trips() {
         for s in ONBOARDING_WIZARD {
             assert_eq!(Section::from_key(s.as_str()), Some(*s), "{s} round-trip");
-            assert_eq!(wizard_index(*s), {
-                ONBOARDING_WIZARD.iter().position(|x| x == s).unwrap()
-            });
+            assert_eq!(
+                wizard_index(*s),
+                Some(ONBOARDING_WIZARD.iter().position(|x| x == s).unwrap()),
+            );
         }
         assert_eq!(Section::from_key("gateway"), None);
         assert_eq!(Section::from_key("not_a_section"), None);
+    }
+
+    /// Explorer-only variants are deliberately absent from
+    /// `ONBOARDING_WIZARD` — `wizard_index` returns `None` for them
+    /// (used to panic, which crashed the gateway boot path).
+    #[test]
+    fn wizard_index_returns_none_for_explorer_only_sections() {
+        let explorer = [
+            Section::PeerGroups,
+            Section::Storage,
+            Section::Cron,
+            Section::Mcp,
+            Section::McpBundles,
+            Section::KnowledgeBundles,
+            Section::SkillBundles,
+            Section::RiskProfiles,
+            Section::RuntimeProfiles,
+        ];
+        for s in explorer {
+            assert_eq!(
+                wizard_index(s),
+                None,
+                "{s:?} is explorer-only and must not have a wizard index",
+            );
+            assert_eq!(
+                wizard_index_for_key(s.as_str()),
+                None,
+                "wizard_index_for_key({}) must be None for explorer-only sections",
+                s.as_str(),
+            );
+        }
     }
 
     /// Every section the dashboard URL surface points at must resolve

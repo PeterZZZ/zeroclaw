@@ -122,6 +122,38 @@ impl HasPropKind
     const PROP_KIND: PropKind = PropKind::Object;
 }
 
+// Vec<struct> fields are surfaced as PropKind::ObjectArray — each
+// element renders as a per-row sub-form on the dashboard rather than a
+// chip. The Configurable derive routes `<Vec<T> as HasPropKind>::PROP_KIND`
+// for every Vec field, so a missing impl here surfaces as a "trait bound
+// not satisfied" compile error pointing at the field. Add the impl in
+// the same module that defines the type if traits.rs's crate scope is
+// too narrow.
+impl HasPropKind for Vec<crate::schema::ClassificationRule> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::EmbeddingRouteConfig> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::GoogleWorkspaceAllowedOperation> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::McpServerConfig> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::ModelRouteConfig> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::NevisRoleMappingConfig> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::PeripheralBoardConfig> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+impl HasPropKind for Vec<crate::schema::ToolFilterGroup> {
+    const PROP_KIND: PropKind = PropKind::ObjectArray;
+}
+
 /// Describes a single property field discovered via `#[derive(Configurable)]`.
 #[derive(Clone)]
 pub struct PropFieldInfo {

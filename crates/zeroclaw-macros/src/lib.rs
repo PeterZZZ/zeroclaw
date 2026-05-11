@@ -1408,18 +1408,18 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
         let is_option = is_option_type(&field.ty);
         let inner_ty = extract_option_inner(&field.ty).unwrap_or(&field.ty);
 
-        // Skip HashMap and PathBuf compound types (handled by other paths
-        // or omitted from the prop surface). `Vec<T>` is surfaced as a
-        // single prop field — `Vec<String>` becomes PropKind::StringArray
-        // (chip editor on the dashboard), any other `Vec<T>` becomes
-        // PropKind::ObjectArray (per-row sub-form on the dashboard,
-        // JSON-array round-tripped on the wire).
+        // Skip HashMap and PathBuf compound types (handled by other
+        // paths or omitted from the prop surface). `Vec<T>` is
+        // surfaced as a single prop field; both kind classification
+        // and value rendering route through `<Vec<T> as HasPropKind>`,
+        // the single source of truth for "is this a chip-editor field
+        // or a per-row sub-form field". Every `Vec<T>` field type
+        // used in a `#[derive(Configurable)]` struct needs an
+        // explicit `impl HasPropKind for Vec<T>` in `traits.rs`; a
+        // missing impl is a compile error pointing at the field site.
         let vec_inner = extract_vec_inner(inner_ty);
-        let is_vec_string = vec_inner
-            .map(|t| t.to_token_stream().to_string() == "String")
-            .unwrap_or(false);
-        let is_vec_object = vec_inner.is_some() && !is_vec_string;
-        if is_compound_type(inner_ty) && !is_vec_string && !is_vec_object {
+        let is_vec = vec_inner.is_some();
+        if is_compound_type(inner_ty) && !is_vec {
             continue;
         }
 
@@ -1439,23 +1439,18 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
         let description_lit = description.as_str();
 
         // PropKind resolved at compile time via HasPropKind trait.
-        // All field types must implement HasPropKind — scalars in traits.rs,
-        // config enums in schema.rs via impl_enum_prop_kind!.
-        // Exception: `Vec<T>` of structs (anything that's not `Vec<String>`)
-        // is hardcoded to ObjectArray here because a blanket
-        // `impl<T> HasPropKind for Vec<T>` would conflict with the existing
-        // `Vec<String> -> StringArray` impl, and per-type impls would
-        // be tedious to maintain. The macro already knows the field is a
-        // Vec via `extract_vec_inner`.
-        let kind_token = if is_vec_object {
-            quote! { crate::config::PropKind::ObjectArray }
-        } else {
-            quote! { <#inner_ty as crate::config::HasPropKind>::PROP_KIND }
-        };
-        // Vec<T> object-array fields are never enums; short-circuit the
-        // `HasPropKind::PROP_KIND` probe so the compile doesn't demand
-        // a HasPropKind impl on `Vec<T>` for arbitrary T.
-        let enum_variants_expr = if is_vec_object {
+        // All field types must implement HasPropKind — scalars and
+        // transparent-string newtypes in traits.rs, config enums in
+        // schema.rs via impl_enum_prop_kind!, and every `Vec<T>` field
+        // type via the `Vec<T>: HasPropKind` family of impls (also in
+        // traits.rs). A missing impl is a compile error pointing at
+        // the field site — fix by adding the impl alongside the type.
+        let kind_token = quote! { <#inner_ty as crate::config::HasPropKind>::PROP_KIND };
+        // Vec<T> fields are never enums (their inner type might be, but
+        // the Vec itself isn't); short-circuit the enum-variants probe
+        // for Vec fields so the compile doesn't demand a HasPropKind
+        // probe of the Vec wrapper through the enum branch.
+        let enum_variants_expr = if is_vec {
             quote! { None::<fn() -> Vec<String>> }
         } else {
             quote! {
@@ -1496,35 +1491,58 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
         prop_kind_tokens.push(kind_token.clone());
         prop_is_option_flags.push(is_option);
 
-        if is_vec_object {
-            // For `Vec<T>` of structs we bypass make_prop_field's TOML-table
-            // lookup and JSON-serialize the field directly, so the dashboard
-            // gets `value: [{"name":"fs",...}]` instead of `value: "[{name=...}]"`
-            // (TOML inline syntax) that the per-row editor would have to parse.
+        if is_vec {
+            // Vec fields: rendering format follows the same trait
+            // (`HasPropKind`) that classifies the field's kind, so
+            // there is one source of truth driving both axes. The
+            // runtime `match` on PROP_KIND is monomorphized — the
+            // compiler dead-strips the unselected arm because
+            // PROP_KIND is a `const` associated item.
             //
-            // Empty Vec is rendered as `<unset>` to match how Option<T> empty
-            // values are surfaced — empty object-arrays carry no user signal
-            // and round-trip back to `<unset>` after a save anyway because
-            // `#[serde(skip_serializing_if = "Vec::is_empty")]` strips them
-            // from the on-disk TOML. Without this, the
-            // `every_prop_is_gettable_and_settable` round-trip test sees
-            // `set '[]' / get '<unset>'` and fails.
+            // - ObjectArray: JSON-serialize the field. TOML inline
+            //   tables (e.g. `[{username = "x"}]`) are not valid JSON,
+            //   so the dashboard's per-row editor needs explicit JSON.
+            // - Otherwise (StringArray / fallback): use the TOML
+            //   inline-array display. It's valid JSON for string-only
+            //   arrays and matches the `make_prop_field` round-trip
+            //   shape that `set_prop`/`get_prop` produce, keeping the
+            //   prop-accessibility audit gates green.
+            //
+            // `Option<Vec<T>>` is unwrapped before the empty check:
+            // `None` and `Some(empty)` both render as `<unset>`;
+            // `Some(non_empty)` follows the kind-based branch above.
+            let inner_value_expr = if is_option {
+                quote! { self.#field_ident.as_ref() }
+            } else {
+                quote! { Some(&self.#field_ident) }
+            };
             prop_field_entries.push(quote! {
-                crate::config::PropFieldInfo {
-                    name: #full_name_lit.to_string(),
-                    category: #category_lit,
-                    display_value: if self.#field_ident.is_empty() {
-                        "<unset>".to_string()
-                    } else {
-                        serde_json::to_string(&self.#field_ident)
-                            .unwrap_or_else(|_| "[]".to_string())
-                    },
-                    type_hint: #type_hint_lit,
-                    kind: #kind_token,
-                    is_secret: #is_secret,
-                    enum_variants: #enum_variants_expr,
-                    description: #description_lit,
-                    derived_from_secret: #derived_from_secret,
+                {
+                    let display_value: String = match #inner_value_expr {
+                        None => "<unset>".to_string(),
+                        Some(v) if v.is_empty() => "<unset>".to_string(),
+                        Some(v) => match <#inner_ty as crate::config::HasPropKind>::PROP_KIND {
+                            crate::config::PropKind::ObjectArray => {
+                                serde_json::to_string(v)
+                                    .unwrap_or_else(|_| "[]".to_string())
+                            }
+                            _ => match toml::Value::try_from(v) {
+                                Ok(tv) => tv.to_string(),
+                                Err(_) => "[]".to_string(),
+                            },
+                        },
+                    };
+                    crate::config::PropFieldInfo {
+                        name: #full_name_lit.to_string(),
+                        category: #category_lit,
+                        display_value,
+                        type_hint: #type_hint_lit,
+                        kind: #kind_token,
+                        is_secret: #is_secret,
+                        enum_variants: #enum_variants_expr,
+                        description: #description_lit,
+                        derived_from_secret: #derived_from_secret,
+                    }
                 }
             });
         } else {
