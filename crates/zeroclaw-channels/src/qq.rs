@@ -21,18 +21,6 @@ const QQ_MAX_UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
 /// Maximum entries in the upload cache before eviction.
 const UPLOAD_CACHE_CAPACITY: usize = 500;
 
-/// Passive reply limit per msg_id per hour (QQ API restriction).
-#[allow(dead_code)] // WIP: used by check_reply_allowed, not yet wired into send path
-const REPLY_LIMIT: u32 = 4;
-
-/// Passive reply tracking window in seconds (1 hour).
-#[allow(dead_code)] // WIP: used by check_reply_allowed, not yet wired into send path
-const REPLY_TTL_SECS: u64 = 3600;
-
-/// Maximum entries in the reply tracker before cleanup.
-#[allow(dead_code)] // WIP: used by check_reply_allowed, not yet wired into send path
-const REPLY_TRACKER_CAPACITY: usize = 10_000;
-
 /// QQ API media file types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QQMediaFileType {
@@ -61,8 +49,6 @@ struct QQMediaAttachment {
 #[derive(Debug, Deserialize)]
 struct QQUploadResponse {
     file_info: String,
-    #[allow(dead_code)]
-    file_uuid: Option<String>,
     ttl: Option<u64>,
 }
 
@@ -70,13 +56,6 @@ struct QQUploadResponse {
 struct UploadCacheEntry {
     file_info: String,
     expires_at: u64,
-}
-
-/// Tracks passive reply count per msg_id for QQ API rate limiting.
-#[allow(dead_code)] // WIP: used by check_reply_allowed, not yet wired into send path
-struct ReplyRecord {
-    count: u32,
-    first_reply_at: u64,
 }
 
 fn ensure_https(url: &str) -> anyhow::Result<()> {
@@ -294,9 +273,6 @@ pub struct QQChannel {
     workspace_dir: Option<PathBuf>,
     /// Upload cache: avoids re-uploading the same file within TTL.
     upload_cache: Arc<RwLock<HashMap<String, UploadCacheEntry>>>,
-    /// Passive reply tracker for QQ API rate limiting.
-    #[allow(dead_code)] // WIP: used by check_reply_allowed, not yet wired into send path
-    reply_tracker: Arc<RwLock<HashMap<String, ReplyRecord>>>,
     /// Per-channel proxy URL override.
     proxy_url: Option<String>,
     /// Session ID from the last READY event, used for gateway resume (opcode 6).
@@ -321,7 +297,6 @@ impl QQChannel {
             dedup: Arc::new(RwLock::new(HashSet::new())),
             workspace_dir: None,
             upload_cache: Arc::new(RwLock::new(HashMap::new())),
-            reply_tracker: Arc::new(RwLock::new(HashMap::new())),
             proxy_url: None,
             session_id: Arc::new(RwLock::new(None)),
             last_sequence: Arc::new(RwLock::new(None)),
@@ -570,39 +545,6 @@ impl QQChannel {
                 expires_at: now_secs() + ttl,
             },
         );
-    }
-
-    /// Track passive reply count for a msg_id. Returns true if reply is allowed.
-    #[allow(dead_code)] // WIP: not yet wired into send path
-    async fn check_reply_allowed(&self, msg_id: &str) -> bool {
-        let now = now_secs();
-        let mut tracker = self.reply_tracker.write().await;
-
-        // Cleanup if tracker is too large
-        if tracker.len() >= REPLY_TRACKER_CAPACITY {
-            tracker.retain(|_, v| now - v.first_reply_at < REPLY_TTL_SECS);
-        }
-
-        if let Some(record) = tracker.get_mut(msg_id) {
-            if now - record.first_reply_at >= REPLY_TTL_SECS {
-                // Window expired, cannot use passive reply
-                return false;
-            }
-            if record.count >= REPLY_LIMIT {
-                return false;
-            }
-            record.count += 1;
-            true
-        } else {
-            tracker.insert(
-                msg_id.to_string(),
-                ReplyRecord {
-                    count: 1,
-                    first_reply_at: now,
-                },
-            );
-            true
-        }
     }
 
     /// Resolve the API endpoint path components from a recipient string.

@@ -26,8 +26,6 @@ trait DriveBackend: Send + Sync {
         duration_ms: u64,
     ) -> Result<()>;
     async fn stop(&self) -> Result<()>;
-    #[allow(dead_code)]
-    async fn get_odometry(&self) -> Result<(f64, f64, f64)>; // x, y, theta - reserved for future odometry integration
 }
 
 /// Mock backend for testing
@@ -56,10 +54,6 @@ impl DriveBackend for MockDrive {
     async fn stop(&self) -> Result<()> {
         tracing::info!("MOCK DRIVE: STOP");
         Ok(())
-    }
-
-    async fn get_odometry(&self) -> Result<(f64, f64, f64)> {
-        Ok((0.0, 0.0, 0.0))
     }
 }
 
@@ -126,10 +120,6 @@ impl DriveBackend for Ros2Drive {
         Ok(())
     }
 
-    async fn get_odometry(&self) -> Result<(f64, f64, f64)> {
-        // Would subscribe to /odom topic in production
-        Ok((0.0, 0.0, 0.0))
-    }
 }
 
 /// Serial backend - sends commands to Arduino/motor controller
@@ -170,10 +160,6 @@ impl DriveBackend for SerialDrive {
 
     async fn stop(&self) -> Result<()> {
         self.move_robot(0.0, 0.0, 0.0, 0).await
-    }
-
-    async fn get_odometry(&self) -> Result<(f64, f64, f64)> {
-        Ok((0.0, 0.0, 0.0))
     }
 }
 

@@ -202,20 +202,6 @@ impl NotionChannel {
         Ok(())
     }
 
-    /// Write result text to the Result column.
-    #[allow(dead_code)] // WIP: will be wired into task completion flow
-    async fn set_result(&self, page_id: &str, result_text: &str) -> Result<()> {
-        let url = format!("{NOTION_API_BASE}/pages/{page_id}");
-        let payload = serde_json::json!({
-            "properties": {
-                &self.result_property: build_rich_text_payload(result_text),
-            }
-        });
-        self.api_call(reqwest::Method::PATCH, &url, Some(payload))
-            .await?;
-        Ok(())
-    }
-
     /// On startup, reset "running" tasks back to "pending" for crash recovery.
     async fn recover_stale(&self) -> Result<()> {
         let url = format!("{NOTION_API_BASE}/databases/{}/query", self.database_id);
