@@ -399,6 +399,17 @@ impl V2Config {
             passthrough.insert("agents".to_string(), toml::Value::Table(new_agents));
         }
 
+        // 8a. heartbeat.agent backfill: V2 `[heartbeat]` had no explicit
+        //     `agent` field — the worker fell through to the implicit
+        //     single agent. V3 makes the binding explicit and
+        //     `Config::validate()` rejects an empty `heartbeat.agent`
+        //     when `heartbeat.enabled = true`. When the V2 input has
+        //     enabled = true and `agent` unset, point it at the
+        //     synthesized (or first existing) agent so V2 users with
+        //     default heartbeat config don't boot into a validation
+        //     warning on every restart.
+        backfill_heartbeat_agent(&mut passthrough);
+
         // 9. Qualify bare-`provider` keys on tables whose V3 schema renamed
         //    them to a domain-qualified noun. The V2 grammar wrote
         //    `[tunnel] provider = "cloudflare"` and `[web_search] provider
@@ -1697,6 +1708,51 @@ fn merge_into_table(top: &mut toml::Table, section: &str, extras: toml::Table) {
         for (k, v) in extras {
             section_table.insert(k, v);
         }
+    }
+}
+
+/// V2 → V3 backfill: when `[heartbeat] enabled = true` and `agent` is
+/// unset/empty, set `agent` to a configured agent alias. Picks `"default"`
+/// when present (matching the synthesized-default-agent path), otherwise
+/// the first agent in the table. No-op when `agents` is empty or
+/// `heartbeat.agent` is already set (operator wins).
+fn backfill_heartbeat_agent(passthrough: &mut toml::Table) {
+    let needs_backfill = passthrough
+        .get("heartbeat")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|hb| {
+            let enabled = hb
+                .get("enabled")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+            let agent_set = hb
+                .get("agent")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty());
+            enabled && !agent_set
+        });
+    if !needs_backfill {
+        return;
+    }
+    let alias = passthrough
+        .get("agents")
+        .and_then(toml::Value::as_table)
+        .and_then(|agents| {
+            if agents.contains_key("default") {
+                Some("default".to_string())
+            } else {
+                agents.keys().next().cloned()
+            }
+        });
+    let Some(alias) = alias else {
+        return;
+    };
+    if let Some(toml::Value::Table(hb)) = passthrough.get_mut("heartbeat") {
+        hb.insert("agent".to_string(), toml::Value::String(alias.clone()));
+        tracing::info!(
+            target: "migration",
+            "heartbeat.agent unset with heartbeat.enabled = true → backfilled to {alias:?}"
+        );
     }
 }
 

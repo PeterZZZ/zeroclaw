@@ -1800,3 +1800,86 @@ fn v3_channel_types_covers_every_typed_channel_slot() {
         missing
     );
 }
+
+// ─────────────────────────────────────────────────────────────
+// V2 [heartbeat] enabled → V3 heartbeat.agent backfill
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+fn v2_heartbeat_enabled_backfills_agent_to_synthesized_default() {
+    // V2 heartbeat had no `agent` field; V3 requires one when enabled.
+    // Migration should fill `agent = "default"` when the agents fold
+    // synthesizes `agents.default` from an implicit single-agent V2 config.
+    let v3 = migrate_v2(
+        r#"
+schema_version = 2
+
+[providers.models.openai]
+api_key = "sk-test"
+model = "gpt-4o"
+
+[heartbeat]
+enabled = true
+"#,
+    );
+
+    assert_eq!(
+        v3.get("heartbeat")
+            .and_then(|h| h.get("agent"))
+            .and_then(toml::Value::as_str),
+        Some("default"),
+        "heartbeat.agent should be backfilled to the synthesized default agent"
+    );
+}
+
+#[test]
+fn v2_heartbeat_enabled_preserves_explicit_agent() {
+    // Operator-set agent wins — backfill must be additive only.
+    let v3 = migrate_v2(
+        r#"
+schema_version = 2
+
+[providers.models.openai]
+api_key = "sk-test"
+model = "gpt-4o"
+
+[heartbeat]
+enabled = true
+agent = "watcher"
+"#,
+    );
+
+    assert_eq!(
+        v3.get("heartbeat")
+            .and_then(|h| h.get("agent"))
+            .and_then(toml::Value::as_str),
+        Some("watcher"),
+        "explicit heartbeat.agent must survive migration"
+    );
+}
+
+#[test]
+fn v2_heartbeat_disabled_skips_backfill() {
+    // When disabled, leave heartbeat.agent alone so the operator can
+    // toggle `enabled = true` later without a stale alias appearing.
+    let v3 = migrate_v2(
+        r#"
+schema_version = 2
+
+[providers.models.openai]
+api_key = "sk-test"
+model = "gpt-4o"
+
+[heartbeat]
+enabled = false
+"#,
+    );
+
+    assert!(
+        v3.get("heartbeat")
+            .and_then(|h| h.get("agent"))
+            .and_then(toml::Value::as_str)
+            .is_none_or(str::is_empty),
+        "heartbeat.agent must stay empty when heartbeat is disabled"
+    );
+}
