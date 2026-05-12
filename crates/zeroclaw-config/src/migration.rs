@@ -185,71 +185,73 @@ pub fn generate(target_version: u32, opts: &GenerateOptions<'_>) -> Result<Strin
     toml::to_string_pretty(&value).context("failed to serialize generated config")
 }
 
-/// TOML keys whose string leaves are treated as secrets by
-/// [`encrypt_secret_strings`]. The list is the union of every V1, V2,
-/// and V3 `#[secret]`-annotated field name; matching is exact on the
-/// terminal key (the last path segment) so nested `linkedin.image.*.api_key_env`
-/// references are caught alongside top-level `[model_providers.<X>].api_key`.
-///
-/// Also catches list-of-secret cases (`paired_tokens`) and tuple-style
-/// strings under known secret keys (`private_key`, `webhook_secret`).
-const SECRET_KEY_NAMES: &[&str] = &[
-    "api_key",
-    "api_token",
-    "access_token",
-    "app_password",
-    "app_secret",
-    "app_token",
-    "auth_token",
-    "bearer_token",
-    "bot_token",
-    "channel_access_token",
-    "channel_secret",
-    "client_secret",
-    "encrypt_key",
-    "encoding_aes_key",
-    "nickserv_password",
-    "oauth_token",
-    "password",
-    "paired_tokens",
-    "private_key",
-    "refresh_token",
-    "sasl_password",
-    "secret",
-    "server_password",
-    "shared_secret",
-    "signing_secret",
-    "token",
-    "verification_token",
-    "verify_token",
-    "webhook_secret",
-];
+/// Set of TOML terminal key names whose string leaves are treated as
+/// secrets by [`encrypt_secret_strings`]. Derived once from the typed
+/// schema by migrating the comprehensive V1 fixture and collecting the
+/// terminal segment of every `prop_fields()` entry with `is_secret =
+/// true`. The set is schema-driven — adding a new `#[secret]`
+/// annotation anywhere in the schema automatically extends encryption
+/// coverage with no companion edit in this module.
+fn secret_key_names() -> &'static std::collections::HashSet<&'static str> {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let cfg = migrate_to_current(V1_FIXTURE)
+            .expect("V1 fixture migrates cleanly — this is also asserted in tests");
+        cfg.prop_fields()
+            .into_iter()
+            .filter(|f| f.is_secret)
+            .filter_map(|f| {
+                // The macro emits names in kebab form
+                // (`channels.matrix.access-token`); TOML keys at
+                // runtime use the raw field ident (snake). Take the
+                // terminal segment, snake-ify, then leak to satisfy
+                // the &'static str lifetime needed by the cached set.
+                let terminal = f.name.rsplit('.').next()?.to_string();
+                let snake = terminal.replace('-', "_");
+                Some(Box::leak(snake.into_boxed_str()) as &'static str)
+            })
+            .collect()
+    })
+}
 
 /// Walk a TOML tree and encrypt every string leaf whose terminal key
-/// name appears in [`SECRET_KEY_NAMES`]. Strings already in `enc2:` /
+/// name appears in [`secret_key_names`]. Strings already in `enc2:` /
 /// `enc:` form are left alone (idempotent). Arrays of strings under a
 /// matching key (e.g. `paired_tokens`) are encrypted element-wise.
 ///
 /// Works at every schema version because it operates on raw TOML
-/// rather than the typed `#[secret]` index, which only exists for V3.
+/// rather than a typed `#[secret]` index — only the *set of key names
+/// to encrypt* comes from the typed schema; the walker itself doesn't
+/// care about types.
 pub fn encrypt_secret_strings(
     value: &mut toml::Value,
     store: &crate::secrets::SecretStore,
 ) -> Result<()> {
+    let names = secret_key_names();
+    encrypt_walk(value, store, names)
+}
+
+fn encrypt_walk(
+    value: &mut toml::Value,
+    store: &crate::secrets::SecretStore,
+    names: &std::collections::HashSet<&'static str>,
+) -> Result<()> {
     match value {
         toml::Value::Table(table) => {
             for (key, child) in table.iter_mut() {
-                if SECRET_KEY_NAMES.contains(&key.as_str()) {
+                if names.contains(key.as_str()) {
                     encrypt_in_place(child, store)
                         .with_context(|| format!("encrypting secret at key `{key}`"))?;
                 } else {
-                    encrypt_secret_strings(child, store)?;
+                    encrypt_walk(child, store, names)?;
                 }
             }
         }
         toml::Value::Array(items) => {
             for item in items.iter_mut() {
-                encrypt_secret_strings(item, store)?;
+                encrypt_walk(item, store, names)?;
             }
         }
         _ => {}
@@ -275,8 +277,9 @@ fn encrypt_in_place(value: &mut toml::Value, store: &crate::secrets::SecretStore
             }
         }
         toml::Value::Table(table) => {
+            let names = secret_key_names();
             for (_, child) in table.iter_mut() {
-                encrypt_secret_strings(child, store)?;
+                encrypt_walk(child, store, names)?;
             }
         }
         _ => {}

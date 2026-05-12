@@ -2230,3 +2230,83 @@ fn find_first_string_at_key(value: &toml::Value, key: &str) -> Option<String> {
         _ => None,
     }
 }
+
+#[test]
+fn encryption_covers_every_schema_secret_field() {
+    // The encrypt walker derives its key-name allowlist from the typed
+    // schema via Config::prop_fields().filter(is_secret). This test
+    // proves end-to-end coverage by:
+    //
+    //   1. Generating a comprehensive V3 config from the V1 fixture.
+    //   2. Encrypting it via the walker.
+    //   3. Asserting that every prop_fields() entry with is_secret =
+    //      true whose dotted path is present in the generated config
+    //      carries `enc2:` ciphertext at that path (or is empty).
+    //
+    // Adding a new `#[secret]` field to the schema automatically
+    // joins the allowlist — no SECRET_KEY_NAMES const to maintain —
+    // and this test verifies the resulting output gets encrypted.
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let raw = generate(
+        CURRENT_SCHEMA_VERSION,
+        &GenerateOptions {
+            encrypt_secrets: true,
+            secret_store_dir: Some(tmp.path()),
+        },
+    )
+    .expect("encrypted generate succeeds");
+    let encrypted: toml::Value = toml::from_str(&raw).expect("encrypted output parses");
+    let plaintext_cfg = migrate_to_current(V1_FIXTURE).expect("V1 fixture migrates");
+
+    let mut missed = Vec::new();
+    for field in plaintext_cfg
+        .prop_fields()
+        .into_iter()
+        .filter(|f| f.is_secret)
+    {
+        let snake_path: String = field
+            .name
+            .split('.')
+            .map(|seg| seg.replace('-', "_"))
+            .collect::<Vec<_>>()
+            .join(".");
+        let leaf = lookup_dotted(&encrypted, &snake_path);
+        match leaf {
+            Some(toml::Value::String(s)) => {
+                if !s.is_empty() && !s.starts_with("enc2:") && !s.starts_with("enc:") {
+                    missed.push(format!("{snake_path} = {s:?}"));
+                }
+            }
+            Some(toml::Value::Array(items)) => {
+                for (i, item) in items.iter().enumerate() {
+                    if let toml::Value::String(s) = item
+                        && !s.is_empty()
+                        && !s.starts_with("enc2:")
+                        && !s.starts_with("enc:")
+                    {
+                        missed.push(format!("{snake_path}[{i}] = {s:?}"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "schema-derived encrypt walker missed these #[secret] paths in \
+         the generated config — the field exists in prop_fields() but its \
+         string leaf survived as plaintext:\n\n{}",
+        missed.join("\n")
+    );
+}
+
+/// Look up a dotted snake_case path inside a TOML value.
+fn lookup_dotted<'a>(value: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
+    let mut cur = value;
+    for segment in path.split('.') {
+        let table = cur.as_table()?;
+        cur = table.get(segment)?;
+    }
+    Some(cur)
+}
