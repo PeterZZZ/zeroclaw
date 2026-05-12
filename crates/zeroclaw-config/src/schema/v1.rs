@@ -1,38 +1,3 @@
-//! V1 schema partial typed lens for V1 → V2 migration.
-//!
-//! Frozen after V2 shipped (PR #5517 / `4259f27cb`). Explicit fields only for
-//! top-level keys that change between V1 and V2; everything else rides through
-//! `passthrough`.
-//!
-//! V1 → V2 transformation inventory (ground truth: `git show 1ec9c14ca:crates/zeroclaw-config/src/schema.rs`):
-//!
-//! Twelve former top-level fields fold into the new V2 `[providers]` section:
-//!
-//! | V1 path | V2 destination |
-//! |---|---|
-//! | `api_key` | `providers.api_key` |
-//! | `api_url` | `providers.api_url` |
-//! | `api_path` | `providers.api_path` |
-//! | `default_provider` (alias `model_provider`) | `providers.default_provider` |
-//! | `default_model` (alias `model`) | `providers.default_model` |
-//! | `model_providers` | `providers.models` |
-//! | `default_temperature` | `providers.default_temperature` |
-//! | `provider_timeout_secs` | `providers.provider_timeout_secs` |
-//! | `provider_max_tokens` | `providers.provider_max_tokens` |
-//! | `extra_headers` | `providers.extra_headers` |
-//! | `model_routes` | `model_routes` |
-//! | `embedding_routes` | `embedding_routes` |
-//!
-//! Plus rename: `channels_config` → `channels`. And: `schema_version = 2`
-//! is set on output.
-//!
-//! V2 ProvidersConfig (`git show 68a875b5b:crates/zeroclaw-config/src/providers.rs`)
-//! at the time of the V1→V2 cut had `{fallback, models, model_routes, embedding_routes}`.
-//! V2 then accumulated additional fields on the top-level Config or providers
-//! over its lifetime; we only handle the V1→V2 step here. Any fields that V2
-//! *expected* but V1 didn't have either default at deserialize time or remain
-//! unset (passthrough handles user-added unknowns).
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -105,57 +70,138 @@ impl V1Config {
             mut passthrough,
         } = self;
 
-        // Build V2 [providers] from the 12 former top-level fields.
-        let mut providers = toml::Table::new();
-        if let Some(v) = api_key {
-            providers.insert("api_key".to_string(), v);
-        }
-        if let Some(v) = api_url {
-            providers.insert("api_url".to_string(), v);
-        }
-        if let Some(v) = api_path {
-            providers.insert("api_path".to_string(), v);
-        }
-        if let Some(v) = default_provider {
-            providers.insert("default_provider".to_string(), v);
-        }
-        if let Some(v) = default_model {
-            providers.insert("default_model".to_string(), v);
-        }
-        if !model_providers.is_empty() {
-            let table: toml::Table = model_providers.into_iter().collect();
-            providers.insert("models".to_string(), toml::Value::Table(table));
-        }
-        if let Some(v) = default_temperature {
-            providers.insert("default_temperature".to_string(), v);
-        }
-        if let Some(v) = provider_timeout_secs {
-            providers.insert("provider_timeout_secs".to_string(), v);
-        }
-        if let Some(v) = provider_max_tokens {
-            providers.insert("provider_max_tokens".to_string(), v);
-        }
-        if !extra_headers.is_empty() {
-            let table: toml::Table = extra_headers.into_iter().collect();
-            providers.insert("extra_headers".to_string(), toml::Value::Table(table));
-        }
-        if !model_routes.is_empty() {
-            providers.insert("model_routes".to_string(), toml::Value::Array(model_routes));
-        }
-        if !embedding_routes.is_empty() {
-            providers.insert(
-                "embedding_routes".to_string(),
-                toml::Value::Array(embedding_routes),
-            );
-        }
+        // Build V2 [providers] from the V1 provider-related top-level fields.
+        //
+        // V2's ProvidersConfig has exactly four fields: `fallback`, `models`,
+        // `model_routes`, `embedding_routes`. The eight remaining V1 globals
+        // (`api_key`, `api_url`, `api_path`, `default_model`, `default_temperature`,
+        // `provider_timeout_secs`, `provider_max_tokens`, `extra_headers`) and
+        // `default_provider` are absorbed by the V2 ModelProviderConfig entry
+        // identified by V1's default_provider key — V2 moved them per-provider.
+        //
+        // V1 global -> V2 ModelProviderConfig field:
+        //   api_key                -> api_key
+        //   api_url                -> base_url
+        //   api_path               -> api_path
+        //   default_model          -> model
+        //   default_temperature    -> temperature
+        //   provider_timeout_secs  -> timeout_secs
+        //   provider_max_tokens    -> max_tokens
+        //   extra_headers          -> extra_headers
+        let has_v1_providers_data = default_provider.is_some()
+            || default_model.is_some()
+            || api_key.is_some()
+            || api_url.is_some()
+            || api_path.is_some()
+            || default_temperature.is_some()
+            || provider_timeout_secs.is_some()
+            || provider_max_tokens.is_some()
+            || !extra_headers.is_empty()
+            || !model_providers.is_empty()
+            || !model_routes.is_empty()
+            || !embedding_routes.is_empty();
 
-        let providers_value = if providers.is_empty() {
+        let providers_value = if !has_v1_providers_data {
             None
         } else {
-            tracing::info!(
-                target: "migration",
-                "[api_key, api_url, default_provider, default_model, model_providers, …] folded into [providers]"
+            // V1's `default_provider` identifies which provider entry absorbs
+            // the V1 globals. When the field is missing on disk, V1's runtime
+            // fell back to "openrouter" (the hardcoded Config::default value);
+            // we use the same key here so the migrated config behaves the way
+            // a stock V1 install did.
+            let default_provider_key: String = default_provider
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| "openrouter".to_string());
+
+            let mut models_table: toml::Table = model_providers.into_iter().collect();
+
+            let needs_fold = api_key.is_some()
+                || api_url.is_some()
+                || api_path.is_some()
+                || default_model.is_some()
+                || default_temperature.is_some()
+                || provider_timeout_secs.is_some()
+                || provider_max_tokens.is_some()
+                || !extra_headers.is_empty();
+
+            if needs_fold {
+                let entry_value = models_table
+                    .remove(&default_provider_key)
+                    .unwrap_or_else(|| toml::Value::Table(toml::Table::new()));
+                let mut entry_table = match entry_value {
+                    toml::Value::Table(t) => t,
+                    other => {
+                        // Non-table user value at model_providers.<key>.
+                        // Preserve verbatim; nothing to fold into.
+                        models_table.insert(default_provider_key.clone(), other);
+                        toml::Table::new()
+                    }
+                };
+
+                // `or_insert` semantics so any value the user explicitly set
+                // on the per-provider entry (e.g. base_url, max_tokens) wins
+                // over the V1 top-level global.
+                if let Some(v) = api_key {
+                    entry_table.entry("api_key".to_string()).or_insert(v);
+                }
+                if let Some(v) = api_url {
+                    entry_table.entry("base_url".to_string()).or_insert(v);
+                }
+                if let Some(v) = api_path {
+                    entry_table.entry("api_path".to_string()).or_insert(v);
+                }
+                if let Some(v) = default_model {
+                    entry_table.entry("model".to_string()).or_insert(v);
+                }
+                if let Some(v) = default_temperature {
+                    entry_table.entry("temperature".to_string()).or_insert(v);
+                }
+                if let Some(v) = provider_timeout_secs {
+                    entry_table.entry("timeout_secs".to_string()).or_insert(v);
+                }
+                if let Some(v) = provider_max_tokens {
+                    entry_table.entry("max_tokens".to_string()).or_insert(v);
+                }
+                if !extra_headers.is_empty() {
+                    let headers_table: toml::Table = extra_headers.into_iter().collect();
+                    entry_table
+                        .entry("extra_headers".to_string())
+                        .or_insert_with(|| toml::Value::Table(headers_table));
+                }
+
+                models_table.insert(
+                    default_provider_key.clone(),
+                    toml::Value::Table(entry_table),
+                );
+
+                tracing::info!(
+                    target: "migration",
+                    "V1 top-level provider globals folded into [providers.models.{default_provider_key}]"
+                );
+            }
+
+            let mut providers = toml::Table::new();
+            providers.insert(
+                "fallback".to_string(),
+                toml::Value::String(default_provider_key),
             );
+            if !models_table.is_empty() {
+                providers.insert("models".to_string(), toml::Value::Table(models_table));
+            }
+            if !model_routes.is_empty() {
+                providers.insert(
+                    "model_routes".to_string(),
+                    toml::Value::Array(model_routes),
+                );
+            }
+            if !embedding_routes.is_empty() {
+                providers.insert(
+                    "embedding_routes".to_string(),
+                    toml::Value::Array(embedding_routes),
+                );
+            }
             Some(toml::Value::Table(providers))
         };
 

@@ -1,21 +1,3 @@
-//! Forward-only schema migration: V1 → V2 → V3.
-//!
-//! User TOML on disk is the source of truth. Each historical version (V1, V2)
-//! is a partial typed lens (`schema/v{1,2}.rs`) — explicit Rust fields only for
-//! what transforms between adjacent versions; everything else rides through
-//! `passthrough: toml::Table`. V3 is the live `Config` in `schema.rs`.
-//!
-//! Public API (preserved from the previous implementation so existing callers
-//! in `schema.rs`, `src/main.rs`, gateway, tools, and tests keep compiling
-//! without changes):
-//! - `CURRENT_SCHEMA_VERSION` — current schema version constant
-//! - `V1_LEGACY_KEYS` — top-level keys whose presence implies V1 input
-//! - `migrate_to_current(&str) -> Result<Config>` — high-level: TOML → V3 Config
-//! - `migrate_file(&str) -> Result<Option<String>>` — pure transform; returns
-//!   `Some(migrated)` if migration ran, `None` if input was already current
-//! - `sync_table(toml_edit::Table, &toml::Table)` — comment-preserving
-//!   reconciliation helper used by `Config::save()`
-
 use anyhow::{Context, Result};
 use std::path::Path;
 

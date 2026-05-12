@@ -1,35 +1,3 @@
-//! V2 schema partial typed lens for V2 → V3 migration.
-//!
-//! Frozen after V3 ships. Explicit fields only for top-level sections that
-//! transform between V2 and V3; everything else rides through `passthrough`.
-//!
-//! V2 → V3 transformation inventory (ground truth: `git show 68a875b5b:crates/zeroclaw-config/src/schema.rs`
-//! and current branch HEAD):
-//!
-//! - **`autonomy` removed** → synthesized into `risk_profiles.default`
-//! - **`agent` removed** → synthesized into `runtime_profiles.default`
-//! - **`swarms` removed** → dropped (RFC #6271 follow-up)
-//! - **`cron` type-changed**: V2 `CronConfig` `{enabled, catch_up_on_startup, max_run_history, jobs}`
-//!   → V3 `cron: HashMap<String, CronJobDecl>` (alias-keyed); subsystem knobs move to `[scheduler]`
-//! - **`providers.fallback` eradicated**
-//! - **`providers.models` flat → aliased**: V2 `HashMap<id, ModelProviderConfig>`
-//!   → V3 `HashMap<provider_type, HashMap<alias, ModelProviderConfig>>`
-//! - **`cost.prices` removed** → folded into `model_providers.<type>.<alias>.pricing` inline
-//! - **`channels.<type>` shape**: V2 `Option<T>` → V3 `HashMap<String, T>` (channel aliasing)
-//! - **`channels.discord_history` removed** → folded into `channels.discord.<alias>.archive = true`
-//! - **`agents.<id>` inline brain fields** (`provider`, `model`, `temperature`, `api_key`)
-//!   → synthesized into `model_providers.<provider>.agent_<id>` and replaced with
-//!   `model_provider = "<provider>.agent_<id>"` alias reference
-//! - **V1/V2 `(custom|anthropic-custom):<url>` colon-URL provider strings**
-//!   → split during migration: the prefix becomes the V3 provider type key,
-//!   the URL lands in the alias entry's `uri`. This avoids embedding a
-//!   dot-bearing string into the V3 `<type>.<alias>` reference grammar
-//!   (`split_once('.')` would otherwise tokenize at the first URL dot, e.g.
-//!   inside `api.z.ai`, instead of the type/alias boundary).
-//! - **V2 per-entry `base_url` + `api_path` → V3 `uri`** (full endpoint URL).
-//!   Migration concatenates `base_url + api_path` (with leading `/` if needed,
-//!   trailing `/` stripped from base) and writes the result into `uri`.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
