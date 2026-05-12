@@ -1352,11 +1352,7 @@ async fn agents(cfg: &mut Config, ui: &mut dyn OnboardUi, _flags: &Flags) -> Res
         }
 
         let alias = if idx == add_new_idx {
-            let suggestion = if existing_aliases.is_empty() {
-                "default".to_string()
-            } else {
-                format!("{}-2", existing_aliases[0])
-            };
+            let suggestion = next_agent_alias_suggestion(&existing_aliases);
             let Some(a) = prompt_alias_name(ui, &suggestion).await? else {
                 continue;
             };
@@ -1372,6 +1368,21 @@ async fn agents(cfg: &mut Config, ui: &mut dyn OnboardUi, _flags: &Flags) -> Res
     }
     mark_completed(cfg, Section::Agents).await?;
     Ok(Nav::Done)
+}
+
+/// Suggest the next unused alias when the operator picks "+ Add new".
+/// On a fresh install, suggests "default". With one existing alias, suggests
+/// `{first}-2`. From there, increments until an unused suffix is found so
+/// adding the 4th+ agent doesn't pre-fill an alias that already exists.
+fn next_agent_alias_suggestion(existing: &[String]) -> String {
+    if existing.is_empty() {
+        return "default".to_string();
+    }
+    let base = existing[0].as_str();
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|candidate| !existing.contains(candidate))
+        .unwrap_or_else(|| format!("{base}-{}", existing.len() + 1))
 }
 
 /// Build the canonical schema path for a field on an agent alias entry.
@@ -1690,6 +1701,29 @@ mod tests {
     use tempfile::TempDir;
     use tokio::net::TcpListener;
     use zeroclaw_config::schema::{AnthropicModelProviderConfig, Config, ModelProviderConfig};
+
+    #[test]
+    fn next_agent_alias_suggestion_handles_empty_collision_and_growth() {
+        // Fresh install → "default".
+        assert_eq!(next_agent_alias_suggestion(&[]), "default");
+
+        // Single existing → first numeric suffix.
+        let one = vec!["assistant".to_string()];
+        assert_eq!(next_agent_alias_suggestion(&one), "assistant-2");
+
+        // Adding a third when -2 already exists must not collide.
+        let two = vec!["assistant".to_string(), "assistant-2".to_string()];
+        assert_eq!(next_agent_alias_suggestion(&two), "assistant-3");
+
+        // Non-sequential history still finds the next gap-free suffix.
+        let four = vec![
+            "researcher".to_string(),
+            "researcher-2".to_string(),
+            "researcher-3".to_string(),
+            "researcher-5".to_string(),
+        ];
+        assert_eq!(next_agent_alias_suggestion(&four), "researcher-4");
+    }
 
     /// Build a `Config` whose `config_path` / `workspace_dir` live inside a
     /// temp directory, so `save()` touches only the scratch tree.
