@@ -238,15 +238,16 @@ pub struct AgentOptionsResponse {
     pub agents: Vec<String>,
 }
 
-/// `GET /api/onboard/agent-options` — every alias-reference list the
-/// agent form needs, derived from the live config. Mirrors the lists the
-/// TUI computes locally for its alias pickers.
-pub async fn handle_agent_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
-    let cfg = state.config.read().clone();
-
+/// Build the `AgentOptionsResponse` from a config snapshot. Pure function
+/// so tests can drive the same code path the handler runs without spinning
+/// up an `AppState`.
+///
+/// `get_map_keys` expects **kebab-case** paths (the macro at
+/// `crates/zeroclaw-macros/src/lib.rs:366` builds lookup arms with
+/// `snake_to_kebab(field_name)`). Passing snake_case for any
+/// underscore-bearing field silently returns `None` → empty `Vec` →
+/// dashboard renders "No X configured yet" even though X is configured.
+pub fn build_agent_options(cfg: &zeroclaw_config::schema::Config) -> AgentOptionsResponse {
     fn dotted_aliases(cfg: &zeroclaw_config::schema::Config, prefix: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for f in cfg.prop_fields() {
@@ -265,18 +266,27 @@ pub async fn handle_agent_options(State(state): State<AppState>, headers: Header
         out
     }
 
-    let response = AgentOptionsResponse {
-        channels: dotted_aliases(&cfg, "channels"),
-        model_providers: dotted_aliases(&cfg, "providers.models"),
-        risk_profiles: cfg.get_map_keys("risk_profiles").unwrap_or_default(),
-        runtime_profiles: cfg.get_map_keys("runtime_profiles").unwrap_or_default(),
-        skill_bundles: cfg.get_map_keys("skill_bundles").unwrap_or_default(),
-        knowledge_bundles: cfg.get_map_keys("knowledge_bundles").unwrap_or_default(),
-        mcp_bundles: cfg.get_map_keys("mcp_bundles").unwrap_or_default(),
+    AgentOptionsResponse {
+        channels: dotted_aliases(cfg, "channels"),
+        model_providers: dotted_aliases(cfg, "providers.models"),
+        risk_profiles: cfg.get_map_keys("risk-profiles").unwrap_or_default(),
+        runtime_profiles: cfg.get_map_keys("runtime-profiles").unwrap_or_default(),
+        skill_bundles: cfg.get_map_keys("skill-bundles").unwrap_or_default(),
+        knowledge_bundles: cfg.get_map_keys("knowledge-bundles").unwrap_or_default(),
+        mcp_bundles: cfg.get_map_keys("mcp-bundles").unwrap_or_default(),
         agents: cfg.get_map_keys("agents").unwrap_or_default(),
-    };
+    }
+}
 
-    axum::Json(response).into_response()
+/// `GET /api/onboard/agent-options` — every alias-reference list the
+/// agent form needs, derived from the live config. Mirrors the lists the
+/// TUI computes locally for its alias pickers.
+pub async fn handle_agent_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let cfg = state.config.read().clone();
+    axum::Json(build_agent_options(&cfg)).into_response()
 }
 
 /// `GET /api/onboard/sections` — list every top-level config section.
@@ -1069,6 +1079,35 @@ pub async fn handle_section_select(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression guard: every alias-bearing map the handler exposes must
+    /// be reachable from `Config::get_map_keys` using the kebab-case path
+    /// `build_agent_options` passes. Snake_case silently returns `None` →
+    /// empty Vec → dashboard renders "No X configured yet" when X exists.
+    /// This test drives the same code the gateway runs and would have
+    /// caught the original bug. Adding a new alias-bearing field requires
+    /// adding it here too.
+    #[test]
+    fn build_agent_options_returns_every_configured_alias() {
+        let mut cfg = zeroclaw_config::schema::Config::default();
+        cfg.create_map_key("risk-profiles", "alpha_risk").unwrap();
+        cfg.create_map_key("runtime-profiles", "alpha_runtime")
+            .unwrap();
+        cfg.create_map_key("skill-bundles", "alpha_skills").unwrap();
+        cfg.create_map_key("knowledge-bundles", "alpha_knowledge")
+            .unwrap();
+        cfg.create_map_key("mcp-bundles", "alpha_mcp").unwrap();
+        cfg.create_map_key("agents", "alpha_agent").unwrap();
+
+        let resp = build_agent_options(&cfg);
+
+        assert_eq!(resp.risk_profiles, vec!["alpha_risk".to_string()]);
+        assert_eq!(resp.runtime_profiles, vec!["alpha_runtime".to_string()]);
+        assert_eq!(resp.skill_bundles, vec!["alpha_skills".to_string()]);
+        assert_eq!(resp.knowledge_bundles, vec!["alpha_knowledge".to_string()],);
+        assert_eq!(resp.mcp_bundles, vec!["alpha_mcp".to_string()]);
+        assert_eq!(resp.agents, vec!["alpha_agent".to_string()]);
+    }
 
     fn empty_cfg() -> zeroclaw_config::schema::Config {
         zeroclaw_config::schema::Config::default()

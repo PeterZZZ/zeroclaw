@@ -1669,11 +1669,16 @@ fn agent_field_path(alias: &str, snake_field: &str) -> String {
 async fn prompt_agent_fields(cfg: &mut Config, ui: &mut dyn OnboardUi, alias: &str) -> Result<Nav> {
     let channel_aliases = available_channel_aliases(cfg);
     let provider_aliases = available_model_provider_aliases(cfg);
-    let risk_aliases = cfg.get_map_keys("risk_profiles").unwrap_or_default();
-    let runtime_aliases = cfg.get_map_keys("runtime_profiles").unwrap_or_default();
-    let skill_aliases = cfg.get_map_keys("skill_bundles").unwrap_or_default();
-    let knowledge_aliases = cfg.get_map_keys("knowledge_bundles").unwrap_or_default();
-    let mcp_aliases = cfg.get_map_keys("mcp_bundles").unwrap_or_default();
+    // Paths must be kebab-case — the macro at
+    // crates/zeroclaw-macros/src/lib.rs:366 builds get_map_keys arms with
+    // snake_to_kebab field names. Snake_case here silently returns None →
+    // empty Vec → CLI picker shows the wrong "no aliases" state when the
+    // user has configured some.
+    let risk_aliases = cfg.get_map_keys("risk-profiles").unwrap_or_default();
+    let runtime_aliases = cfg.get_map_keys("runtime-profiles").unwrap_or_default();
+    let skill_aliases = cfg.get_map_keys("skill-bundles").unwrap_or_default();
+    let knowledge_aliases = cfg.get_map_keys("knowledge-bundles").unwrap_or_default();
+    let mcp_aliases = cfg.get_map_keys("mcp-bundles").unwrap_or_default();
 
     let mut step: usize = 0;
     loop {
