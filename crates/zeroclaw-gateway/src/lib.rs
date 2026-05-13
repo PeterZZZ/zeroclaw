@@ -15,6 +15,7 @@ pub mod api_pairing;
 pub mod api_personality;
 #[cfg(feature = "plugins-wasm")]
 pub mod api_plugins;
+pub mod api_skills;
 #[cfg(feature = "webauthn")]
 pub mod api_webauthn;
 pub mod auth_rate_limit;
@@ -1251,6 +1252,17 @@ pub async fn run_gateway(
         .route(
             "/api/personality/{filename}",
             get(api_personality::handle_get).put(api_personality::handle_put),
+        )
+        .route("/api/skills/bundles", get(api_skills::handle_list_bundles))
+        .route(
+            "/api/skills/bundles/{alias}/skills",
+            get(api_skills::handle_list_skills).post(api_skills::handle_create_skill),
+        )
+        .route(
+            "/api/skills/bundles/{alias}/skills/{name}",
+            get(api_skills::handle_read_skill)
+                .put(api_skills::handle_write_skill)
+                .delete(api_skills::handle_delete_skill),
         )
         .route("/api/config/init", post(api_config::handle_init))
         .route("/api/config/migrate", post(api_config::handle_migrate))
