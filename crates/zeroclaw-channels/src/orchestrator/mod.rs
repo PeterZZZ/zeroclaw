@@ -4453,10 +4453,12 @@ fn build_channel_by_id(
                     let alias = alias.clone();
                     Arc::new(move || cfg_arc.read().channel_external_peers("matrix", &alias))
                 };
+                let ack = mx.ack_reactions.unwrap_or(config.channels.ack_reactions);
                 Ok(Arc::new(
                     MatrixChannel::new(mx.clone(), alias, peer_resolver, state_dir)?
                         .with_transcription(config.transcription.clone())
-                        .with_workspace_dir(config.data_dir.clone()),
+                        .with_workspace_dir(config.data_dir.clone())
+                        .with_ack_reactions(ack),
                 ))
             }
             #[cfg(not(feature = "channel-matrix"))]
@@ -5080,11 +5082,13 @@ fn collect_configured_channels(
             let alias = alias.clone();
             Arc::new(move || cfg_arc.read().channel_external_peers("matrix", &alias))
         };
+        let ack = mx.ack_reactions.unwrap_or(config.channels.ack_reactions);
         match MatrixChannel::new(mx.clone(), alias.clone(), peer_resolver, state_dir) {
             Ok(channel) => {
                 let channel = channel
                     .with_transcription(config.transcription.clone())
-                    .with_workspace_dir(config.data_dir.clone());
+                    .with_workspace_dir(config.data_dir.clone())
+                    .with_ack_reactions(ack);
                 channels.push(ConfiguredChannel {
                     display_name: "Matrix",
                     channel: Arc::new(channel),

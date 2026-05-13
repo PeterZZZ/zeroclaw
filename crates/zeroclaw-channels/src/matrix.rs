@@ -2599,6 +2599,11 @@ pub struct MatrixChannel {
     bot_display_name: Arc<TokioRwLock<Option<String>>>,
     initial_sync_done: Arc<AtomicBool>,
     undecryptable_seen: Arc<TokioMutex<HashSet<OwnedEventId>>>,
+    /// Resolved `ack_reactions` for this Matrix instance — the
+    /// per-channel `MatrixConfig.ack_reactions` override falls back to
+    /// `[channels].ack_reactions` here at construction time, so the
+    /// read site doesn't need to re-resolve on every reaction.
+    ack_reactions: bool,
 }
 
 impl MatrixChannel {
@@ -2624,6 +2629,12 @@ impl MatrixChannel {
         if !has_token && !has_password {
             bail!("matrix: configure either `access_token` or `password`");
         }
+        // Initial resolved value: when the per-channel override is set
+        // we honor it directly; when it's `None`, default to `true`
+        // (the channels-wide default). Orchestrator callers should chain
+        // `.with_ack_reactions(...)` after construction to thread the
+        // actual `[channels].ack_reactions` global through.
+        let ack_reactions = config.ack_reactions.unwrap_or(true);
         Ok(Self {
             config: Arc::new(config),
             alias: alias.into(),
@@ -2640,6 +2651,7 @@ impl MatrixChannel {
             bot_display_name: Arc::new(TokioRwLock::new(None)),
             initial_sync_done: Arc::new(AtomicBool::new(false)),
             undecryptable_seen: Arc::new(TokioMutex::new(HashSet::new())),
+            ack_reactions,
         })
     }
 
@@ -2647,6 +2659,17 @@ impl MatrixChannel {
     /// channel handle is bound to.
     pub fn alias(&self) -> &str {
         &self.alias
+    }
+
+    /// Override the resolved `ack_reactions` value for this Matrix
+    /// channel. Used by the orchestrator to push the channels-wide
+    /// default down after constructing from per-channel config; the
+    /// orchestrator computes `mx.ack_reactions.unwrap_or(config.channels.ack_reactions)`
+    /// and passes the resolved bool here.
+    #[must_use]
+    pub fn with_ack_reactions(mut self, ack_reactions: bool) -> Self {
+        self.ack_reactions = ack_reactions;
+        self
     }
 
     pub fn with_transcription(mut self, transcription: TranscriptionConfig) -> Self {
@@ -3035,7 +3058,7 @@ impl Channel for MatrixChannel {
     }
 
     async fn add_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> Result<()> {
-        if !self.config.ack_reactions {
+        if !self.ack_reactions {
             return Ok(());
         }
         let client = self.ensure_client().await?;
@@ -3615,7 +3638,7 @@ mod tests {
                 password: password.map(String::from),
                 approval_timeout_secs: 300,
                 reply_in_thread: true,
-                ack_reactions: true,
+                ack_reactions: Some(true),
                 excluded_tools: vec![],
             }
         }

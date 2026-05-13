@@ -10192,10 +10192,12 @@ pub struct MatrixConfig {
     /// incoming message when none exists. When false, only continues existing threads.
     #[serde(default = "default_true")]
     pub reply_in_thread: bool,
-    /// When true (default), the bot sends acknowledgement reactions while processing
-    /// (👀 on receipt, ✅ on completion). Disable to keep rooms reaction-free.
-    #[serde(default = "default_true")]
-    pub ack_reactions: bool,
+    /// Override for the top-level `[channels].ack_reactions`. When
+    /// `None`, falls back to the channels-wide default. When set
+    /// explicitly (`true`/`false`), takes precedence for this Matrix
+    /// instance only.
+    #[serde(default)]
+    pub ack_reactions: Option<bool>,
 
     /// Tools excluded from this channel's tool spec. When set, these tools
     /// are not exposed to the model when responding via this channel.
@@ -15992,7 +15994,7 @@ allowed_contacts = ["+1234567890", "user@icloud.com"]
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
         let json = serde_json::to_string(&mc).unwrap();
@@ -16025,7 +16027,7 @@ allowed_contacts = ["+1234567890", "user@icloud.com"]
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
         let toml_str = toml::to_string(&mc).unwrap();
@@ -16154,7 +16156,7 @@ allowed_users = ["@u:matrix.org"]
                     password: None,
                     approval_timeout_secs: 300,
                     reply_in_thread: true,
-                    ack_reactions: true,
+                    ack_reactions: Some(true),
                     excluded_tools: vec![],
                 },
             )]),
@@ -19204,7 +19206,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
         let fields = mx.secret_fields();
@@ -19236,7 +19238,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
         let fields = mx.secret_fields();
@@ -19261,7 +19263,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
         mx.set_secret("channels.matrix.access-token", "new-token".into())
@@ -19287,7 +19289,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
         assert!(
@@ -19323,7 +19325,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
                 password: None,
                 approval_timeout_secs: 300,
                 reply_in_thread: true,
-                ack_reactions: true,
+                ack_reactions: Some(true),
                 excluded_tools: vec![],
             },
         );
@@ -19355,7 +19357,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
                 password: None,
                 approval_timeout_secs: 300,
                 reply_in_thread: true,
-                ack_reactions: true,
+                ack_reactions: Some(true),
                 excluded_tools: vec![],
             },
         );
@@ -19396,7 +19398,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
                 password: None,
                 approval_timeout_secs: 300,
                 reply_in_thread: true,
-                ack_reactions: true,
+                ack_reactions: Some(true),
                 excluded_tools: vec![],
             },
         );
@@ -19446,7 +19448,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
 
@@ -19483,7 +19485,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
 
@@ -19516,7 +19518,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         };
 
@@ -19544,7 +19546,7 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
             password: None,
             approval_timeout_secs: 300,
             reply_in_thread: true,
-            ack_reactions: true,
+            ack_reactions: Some(true),
             excluded_tools: vec![],
         }
     }
