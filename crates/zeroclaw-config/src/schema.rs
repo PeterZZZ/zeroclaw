@@ -8548,31 +8548,24 @@ impl Default for RiskProfileConfig {
 
 /// Named runtime/LLM execution profile (`[runtime_profiles.<alias>]`).
 ///
-/// Defines a reusable set of LLM model_provider and execution parameters. Agents
-/// or channels that reference this profile inherit its settings as overrides.
+/// Reusable agent-loop tunables: agentic mode, tool-call limits, history,
+/// context budget, prompt cap, parallel dispatch. Anything model-provider
+/// shaped (model, model_provider, temperature, max_tokens, timeout_secs)
+/// lives on `[model_providers.<type>.<alias>]`. Anything autonomy-shaped
+/// (`agentic_timeout_secs`, delegation limits) lives on
+/// `[risk_profiles.<alias>]`. Mixing those into runtime_profiles was a
+/// V1 artefact that confused operators and is now retired.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "runtime-profile"]
 #[serde(default)]
 pub struct RuntimeProfileConfig {
-    /// Model model_provider name (e.g. `"openrouter"`, `"ollama"`).
-    pub model_provider: Option<String>,
-    /// Model identifier.
-    pub model: Option<String>,
-    /// Sampling temperature override.
-    pub temperature: Option<f64>,
-    /// Maximum tokens to generate.
-    pub max_tokens: Option<u32>,
-    /// ModelProvider call timeout in seconds for non-agentic calls.
-    pub timeout_secs: Option<u64>,
     /// Enable agentic (multi-turn tool-call loop) mode.
     pub agentic: bool,
     /// Maximum tool-call iterations in agentic mode. `0` inherits the global default.
     pub max_tool_iterations: usize,
     /// Tools available in agentic mode (empty = inherit global allowed tools).
     pub allowed_tools: Vec<String>,
-    /// Agentic run timeout in seconds.
-    pub agentic_timeout_secs: Option<u64>,
     // ── Per-agent runtime tunables (also live on AliasedAgentConfig) ─
     /// Maximum conversation history messages retained per session. `None` inherits.
     pub max_history_messages: Option<usize>,

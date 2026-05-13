@@ -1376,11 +1376,15 @@ fn synthesize_agent_brains(
             }
         };
 
-        // Brain fold: provider/model/api_key/temperature → model-provider alias
+        // Brain fold: provider/model/api_key/temperature/timeout_secs →
+        // model-provider alias. V2's per-agent `timeout_secs` was the HTTP
+        // timeout for LLM calls; V3 hangs it off the model_provider entry,
+        // not the agent.
         let provider = agent_table.remove("provider");
         let model = agent_table.remove("model");
         let api_key = agent_table.remove("api_key");
         let temperature = agent_table.remove("temperature");
+        let provider_timeout_secs = extract_provider_timeout_secs(&mut agent_table);
         if let Some(toml::Value::String(raw_provider)) = provider {
             // Colon-URL form: split the URL out so the V3 outer key stays
             // dot-free and the URL lands in `uri`. Without this,
@@ -1400,6 +1404,9 @@ fn synthesize_agent_brains(
             }
             if let Some(t) = temperature {
                 entry.insert("temperature".to_string(), t);
+            }
+            if let Some(t) = provider_timeout_secs {
+                entry.insert("timeout_secs".to_string(), t);
             }
             // V3 keeps every provider category under `[providers]`:
             // `[providers.models.<type>.<alias>]` is the destination.
@@ -1427,8 +1434,22 @@ fn synthesize_agent_brains(
                 target: "migration",
                 "agents.{alias}: inline brain → providers.models.{provider_type}.{provider_alias}"
             );
-        } else if let Some(other) = provider {
-            agent_table.insert("provider".to_string(), other);
+        } else {
+            // No provider declared but operator still set timeout_secs;
+            // drop it rather than silently storing on the agent block,
+            // since V3 has no agent-level slot for it.
+            if provider_timeout_secs.is_some() {
+                tracing::warn!(
+                    target: "migration",
+                    "agents.{alias}.timeout_secs dropped: V3 stores it on \
+                     [model_providers.<type>.<alias>] and this agent has no \
+                     inline provider to fold it onto. Set it manually after \
+                     migration."
+                );
+            }
+            if let Some(other) = provider {
+                agent_table.insert("provider".to_string(), other);
+            }
         }
 
         // max_iterations → max_tool_iterations (V3 inline rename).
@@ -1457,10 +1478,17 @@ fn synthesize_agent_brains(
             );
         }
 
-        // max_depth → per-agent risk_profile.max_delegation_depth.
-        if let Some(max_depth) = agent_table.remove("max_depth") {
+        // max_depth + agentic_timeout_secs → per-agent risk_profile.
+        let max_depth = agent_table.remove("max_depth");
+        let agentic_timeout_secs = extract_agentic_timeout_secs(&mut agent_table);
+        if max_depth.is_some() || agentic_timeout_secs.is_some() {
             let mut overrides = toml::Table::new();
-            overrides.insert("max_delegation_depth".to_string(), max_depth);
+            if let Some(d) = max_depth {
+                overrides.insert("max_delegation_depth".to_string(), d);
+            }
+            if let Some(t) = agentic_timeout_secs {
+                overrides.insert("agentic_timeout_secs".to_string(), t);
+            }
             let profile_alias = format!("agent_{}", alias);
             install_profile_entry(passthrough, "risk_profiles", &profile_alias, overrides);
             agent_table
@@ -1468,7 +1496,7 @@ fn synthesize_agent_brains(
                 .or_insert_with(|| toml::Value::String(profile_alias.clone()));
             tracing::info!(
                 target: "migration",
-                "agents.{alias}.max_depth → risk_profiles.{profile_alias}.max_delegation_depth"
+                "agents.{alias}: max_depth/agentic_timeout_secs → risk_profiles.{profile_alias}"
             );
         }
 
@@ -1543,22 +1571,33 @@ fn synthesize_agent_brains(
     new_agents
 }
 
-/// Pull V2 `AliasedAgentConfig` fields that V3 moved onto
-/// `RuntimeProfileConfig` out of the agent table. Returns `Some(table)` if
-/// any V3 runtime-profile field was set; `None` otherwise.
+/// Pull V2 agent-loop fields onto V3 `RuntimeProfileConfig`. V2's
+/// `timeout_secs` (model-provider HTTP timeout) and `agentic_timeout_secs`
+/// (autonomy concern) moved off runtime_profiles in V3 — they belong on
+/// `[model_providers.<type>.<alias>]` and `[risk_profiles.<alias>]`
+/// respectively. The migration ports `agentic` and `allowed_tools` only;
+/// the other two are handled in dedicated callers.
 fn extract_runtime_overrides(agent: &mut toml::Table) -> Option<toml::Table> {
     let mut out = toml::Table::new();
-    for (v2_key, v3_key) in [
-        ("agentic", "agentic"),
-        ("allowed_tools", "allowed_tools"),
-        ("timeout_secs", "timeout_secs"),
-        ("agentic_timeout_secs", "agentic_timeout_secs"),
-    ] {
+    for (v2_key, v3_key) in [("agentic", "agentic"), ("allowed_tools", "allowed_tools")] {
         if let Some(v) = agent.remove(v2_key) {
             out.insert(v3_key.to_string(), v);
         }
     }
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// Pull V2 `[agents.<alias>].agentic_timeout_secs` off the agent table and
+/// hand it to the caller for routing onto the synthesized
+/// `risk_profiles.agent_<alias>.agentic_timeout_secs`.
+fn extract_agentic_timeout_secs(agent: &mut toml::Table) -> Option<toml::Value> {
+    agent.remove("agentic_timeout_secs")
+}
+
+/// Pull V2 `[agents.<alias>].timeout_secs` off the agent table; the
+/// caller folds this into the agent's resolved model_provider entry.
+fn extract_provider_timeout_secs(agent: &mut toml::Table) -> Option<toml::Value> {
+    agent.remove("timeout_secs")
 }
 
 /// Insert (or merge) a profile entry at `passthrough.<section>.<alias>`.

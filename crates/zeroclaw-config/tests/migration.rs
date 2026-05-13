@@ -826,8 +826,29 @@ fn t14b_runtime_overrides_synthesize_per_agent_runtime_profile() {
         .expect("synthesized runtime_profiles.agent_complex_agent");
     assert!(profile.agentic);
     assert_eq!(profile.allowed_tools, vec!["shell", "memory"]);
-    assert_eq!(profile.timeout_secs, Some(180));
-    assert_eq!(profile.agentic_timeout_secs, Some(600));
+}
+
+#[test]
+fn t14b2_per_agent_timeout_secs_folds_onto_model_provider_entry() {
+    let cfg = v3_config();
+    let agent = cfg
+        .agents
+        .get("complex_agent")
+        .expect("agents.complex_agent present");
+    let (provider_type, provider_alias) = agent
+        .model_provider
+        .split_once('.')
+        .expect("agents.complex_agent.model_provider is <type>.<alias>");
+    let entry = cfg
+        .providers
+        .models
+        .find(provider_type, provider_alias)
+        .expect("model_providers entry exists for complex_agent's brain");
+    assert_eq!(
+        entry.timeout_secs,
+        Some(180),
+        "V2 agent timeout_secs must land on the agent's model_provider, not runtime_profile"
+    );
 }
 
 #[test]
@@ -846,6 +867,11 @@ fn t14c_max_depth_synthesizes_per_agent_risk_profile() {
         .get("agent_complex_agent")
         .expect("synthesized risk_profiles.agent_complex_agent");
     assert_eq!(profile.max_delegation_depth, 4);
+    assert_eq!(
+        profile.agentic_timeout_secs,
+        Some(600),
+        "V2 agent agentic_timeout_secs must land on the agent's risk_profile, not runtime_profile"
+    );
 }
 
 #[test]
