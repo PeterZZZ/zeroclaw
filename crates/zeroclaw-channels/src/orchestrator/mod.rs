@@ -1116,6 +1116,38 @@ fn clear_sender_history(ctx: &ChannelRuntimeContext, sender_key: &str) {
         .pop(sender_key);
 }
 
+/// Fire the registered session-end hooks for a sender, carrying the cached
+/// conversation history as the transcript payload. No-op when no hooks are
+/// configured or the sender has no recorded history. Intended to be called
+/// immediately before [`clear_sender_history`] at a session boundary.
+async fn fire_session_end_for_sender(
+    ctx: &ChannelRuntimeContext,
+    sender_key: &str,
+    channel: &str,
+) {
+    let Some(hooks) = ctx.hooks.as_ref() else {
+        return;
+    };
+    let history_snapshot: Vec<zeroclaw_api::provider::ChatMessage> = {
+        let guard = ctx
+            .conversation_histories
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.peek(sender_key).cloned().unwrap_or_default()
+    };
+    if history_snapshot.is_empty() {
+        return;
+    }
+    let history: Vec<zeroclaw_api::provider::ConversationMessage> = history_snapshot
+        .into_iter()
+        .map(zeroclaw_api::provider::ConversationMessage::Chat)
+        .collect();
+    let cwd = ctx.workspace_dir.to_string_lossy().to_string();
+    hooks
+        .fire_session_end_with_history(sender_key, channel, &history, &cwd)
+        .await;
+}
+
 fn mark_sender_for_new_session(ctx: &ChannelRuntimeContext, sender_key: &str) {
     ctx.pending_new_sessions
         .lock()
@@ -1894,6 +1926,10 @@ async fn handle_runtime_command_if_needed(
             }
         }
         ChannelRuntimeCommand::NewSession => {
+            // Fire session-end hooks BEFORE clearing — handlers (e.g. MemSkills
+            // procedure-add) need read access to the conversation that's about
+            // to be discarded.
+            fire_session_end_for_sender(ctx, &sender_key, &msg.channel).await;
             clear_sender_history(ctx, &sender_key);
             if let Some(ref store) = ctx.session_store
                 && let Err(e) = store.delete_session(&sender_key)
@@ -5921,6 +5957,13 @@ pub async fn start_channels(
                 runner.register(Box::new(
                     zeroclaw_runtime::hooks::builtin::WebhookAuditHook::new(
                         config.hooks.builtin.webhook_audit.clone(),
+                    ),
+                ));
+            }
+            if config.hooks.builtin.external_session_end.enabled {
+                runner.register(Box::new(
+                    zeroclaw_runtime::hooks::builtin::ExternalProcessHook::new(
+                        config.hooks.builtin.external_session_end.clone(),
                     ),
                 ));
             }
