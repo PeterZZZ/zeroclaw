@@ -351,6 +351,14 @@ async fn persist_and_swap(
     Ok(())
 }
 
+/// Fields the gateway owns end-to-end (mints, rotates, persists itself).
+/// They're skipped by [`compute_drift`] so the dashboard doesn't surface a
+/// banner the operator can't act on. Add new entries here when a similar
+/// gateway-managed field lands (e.g. webhook secret rotation).
+fn is_gateway_managed_field(name: &str) -> bool {
+    matches!(name, "gateway.paired-tokens")
+}
+
 /// Compute drift between the in-memory config and what's on disk right now.
 /// Returns one entry per drifted property; empty when in-memory and disk
 /// agree (or when the on-disk file can't be parsed).
@@ -402,6 +410,14 @@ pub async fn compute_drift(in_memory: &zeroclaw_config::schema::Config) -> Vec<D
     all_names.extend(in_memory_props.keys().map(String::as_str));
     all_names.extend(on_disk_props.keys().map(String::as_str));
     for name in all_names {
+        // Gateway-managed internal state isn't operator-edited and the
+        // gateway persists it itself via `persist_pairing_tokens` /
+        // similar paths. Surfacing it as drift confuses operators who
+        // can't fix it from the dashboard and the banner sticks until
+        // the daemon happens to rewrite the file.
+        if is_gateway_managed_field(name) {
+            continue;
+        }
         let mem = in_memory_props.get(name);
         let disk = on_disk_props.get(name);
         let mem_display = mem.map(|p| p.display_value.as_str()).unwrap_or("<unset>");
