@@ -14,9 +14,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, Plus, Sparkles } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Plus, Sparkles, Trash2 } from 'lucide-react';
 import {
   ApiError,
+  deleteMapKey,
   getDrift,
   getMapKeys,
   getSections,
@@ -621,31 +622,24 @@ function AliasListView({
           style={{ borderColor: 'var(--pc-border)' }}
         >
           {aliases.map((alias) => (
-            <button
+            <AliasRow
               key={alias}
-              type="button"
-              onClick={() => {
+              alias={alias}
+              mapPath={mapPath}
+              onSelect={() =>
                 onSelectAlias(alias).catch((e) => {
                   setError(
                     e instanceof ApiError
                       ? `[${e.envelope.code}] ${e.envelope.message}`
                       : (e instanceof Error ? e.message : String(e)),
                   );
-                });
+                })
+              }
+              onDeleted={() => {
+                setAliases((prev) => prev.filter((a) => a !== alias));
               }}
-              className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left text-sm transition-colors hover:opacity-90"
-            >
-              <div>
-                <span style={{ color: 'var(--pc-text-primary)', fontWeight: 500 }}>{alias}</span>
-                <code
-                  className="block text-xs mt-0.5"
-                  style={{ color: 'var(--pc-text-faint)' }}
-                >
-                  {mapPath}.{alias}
-                </code>
-              </div>
-              <ChevronRight className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--pc-text-muted)' }} />
-            </button>
+              onDeleteError={(msg) => setError(msg)}
+            />
           ))}
 
           {/* Inline new alias row */}
@@ -677,6 +671,92 @@ function AliasListView({
   );
 }
 
+
+function AliasRow({
+  alias,
+  mapPath,
+  onSelect,
+  onDeleted,
+  onDeleteError,
+}: {
+  alias: string;
+  mapPath: string;
+  onSelect: () => void;
+  onDeleted: () => void;
+  onDeleteError: (msg: string) => void;
+}) {
+  // Two-stage confirm avoids accidental deletes without a modal: first
+  // click arms the trash (3-second window), second click commits.
+  const [armed, setArmed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  const onTrashClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!armed) {
+      setArmed(true);
+      return;
+    }
+    setDeleting(true);
+    deleteMapKey(mapPath, alias)
+      .then(() => {
+        onDeleted();
+      })
+      .catch((err) => {
+        onDeleteError(
+          err instanceof ApiError
+            ? `[${err.envelope.code}] ${err.envelope.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err),
+        );
+      })
+      .finally(() => {
+        setDeleting(false);
+        setArmed(false);
+      });
+  };
+
+  return (
+    <div className="w-full flex items-center justify-between gap-3 px-4 py-3 text-sm hover:opacity-90">
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex-1 min-w-0 flex items-center justify-between gap-3 text-left"
+      >
+        <div className="min-w-0">
+          <span style={{ color: 'var(--pc-text-primary)', fontWeight: 500 }}>{alias}</span>
+          <code
+            className="block text-xs mt-0.5"
+            style={{ color: 'var(--pc-text-faint)' }}
+          >
+            {mapPath}.{alias}
+          </code>
+        </div>
+        <ChevronRight className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--pc-text-muted)' }} />
+      </button>
+      <button
+        type="button"
+        onClick={onTrashClick}
+        disabled={deleting}
+        title={armed ? 'Click again to confirm delete' : 'Delete this alias'}
+        className="btn-icon flex-shrink-0"
+        style={
+          armed
+            ? { color: 'var(--color-status-error, #f87171)', borderColor: 'var(--color-status-error, #f87171)' }
+            : undefined
+        }
+      >
+        {armed ? <span className="text-xs px-1">Confirm</span> : <Trash2 className="h-4 w-4" />}
+      </button>
+    </div>
+  );
+}
 
 interface SectionOverviewProps {
   section: SectionInfo;

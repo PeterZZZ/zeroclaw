@@ -787,6 +787,41 @@ pub async fn handle_delete_map_key(
         }
     };
     if removed {
+        // Agent alias removal archives `agents/<alias>/workspace/` to
+        // `agents/_deleted/<alias>-<ts>/` rather than rm -rf. The
+        // workspace may contain operator notes, IDENTITY.md edits, etc.
+        // Memory database rows are NOT touched here; that needs the
+        // storage adapter's per-agent delete which lives elsewhere.
+        if q.path == "agents" {
+            let workspace = working.agent_workspace_dir(&q.key);
+            if workspace.exists()
+                && let Some(parent) = workspace.parent()
+            {
+                let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
+                let archive_root = parent.join("_deleted");
+                let archive_dir = archive_root.join(format!("{}-{ts}", q.key));
+                if let Err(err) = tokio::fs::create_dir_all(&archive_root).await {
+                    tracing::warn!(
+                        agent = %q.key,
+                        archive = %archive_root.display(),
+                        "agent alias removed from config but archive dir creation failed: {err}",
+                    );
+                } else if let Err(err) = tokio::fs::rename(&workspace, &archive_dir).await {
+                    tracing::warn!(
+                        agent = %q.key,
+                        from = %workspace.display(),
+                        to = %archive_dir.display(),
+                        "agent alias removed from config but workspace archive failed: {err}",
+                    );
+                } else {
+                    tracing::info!(
+                        agent = %q.key,
+                        archive = %archive_dir.display(),
+                        "agent workspace archived after alias removal",
+                    );
+                }
+            }
+        }
         working.mark_dirty(&format!("{}.{}", q.path, q.key));
         if let Err(e) = persist_and_swap(&state, working).await {
             return error_response(e);
