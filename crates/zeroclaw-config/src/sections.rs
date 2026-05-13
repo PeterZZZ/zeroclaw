@@ -459,8 +459,18 @@ mod tests {
                 Section::KnowledgeBundles,
                 false,
             ),
-            ("skill-bundles", "skill_bundles", Section::SkillBundles, true),
-            ("risk-profiles", "risk_profiles", Section::RiskProfiles, true),
+            (
+                "skill-bundles",
+                "skill_bundles",
+                Section::SkillBundles,
+                true,
+            ),
+            (
+                "risk-profiles",
+                "risk_profiles",
+                Section::RiskProfiles,
+                true,
+            ),
             (
                 "runtime-profiles",
                 "runtime_profiles",

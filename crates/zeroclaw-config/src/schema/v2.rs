@@ -982,8 +982,7 @@ fn synthesize_peer_group_from_allowlist(
         "agents".to_string(),
         toml::Value::Array(vec![toml::Value::String("default".to_string())]),
     );
-    let external_peers: Vec<toml::Value> =
-        usernames.into_iter().map(toml::Value::String).collect();
+    let external_peers: Vec<toml::Value> = usernames.into_iter().map(toml::Value::String).collect();
     group_entry.insert(
         "external_peers".to_string(),
         toml::Value::Array(external_peers),

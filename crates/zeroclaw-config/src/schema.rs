@@ -3074,15 +3074,27 @@ impl Config {
         {
             return custom.clone();
         }
-        let install_root = self
-            .config_path
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        install_root
+        self.install_root_dir()
             .join("agents")
             .join(agent_alias)
             .join("workspace")
+    }
+
+    /// `<install>/shared/` — directory shared across every agent on this
+    /// host. Holds skills, skill bundles, knowledge bundles, and any
+    /// other content not scoped to a single agent's workspace. Distinct
+    /// from `agent_workspace_dir(alias)` (per-agent state) and
+    /// `data_dir` (databases + runtime state).
+    #[must_use]
+    pub fn shared_workspace_dir(&self) -> std::path::PathBuf {
+        self.install_root_dir().join("shared")
+    }
+
+    fn install_root_dir(&self) -> std::path::PathBuf {
+        self.config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
     }
 
     /// Resolve an aliased-agent config by alias. `None` when the alias
@@ -12886,6 +12898,13 @@ impl Config {
                 "[system] filesystem migration failed (continuing with legacy layout): {e}"
             );
         }
+        // Heal pre-shared-workspace V3 installs whose skills landed in
+        // `agents/default/workspace/skills/`. Idempotent.
+        if let Err(e) = crate::migration::relocate_default_agent_skills_to_shared(&zeroclaw_dir) {
+            tracing::warn!(
+                "[system] skills relocation to shared workspace failed (continuing): {e}"
+            );
+        }
 
         let config_path = zeroclaw_dir.join("config.toml");
 
@@ -12913,6 +12932,18 @@ impl Config {
         // Legacy alias retained for clarity in the struct initializer
         // and existing field assignments below.
         let workspace_dir = data_dir;
+
+        // `<install>/shared/` — root workspace shared across every agent
+        // on the host. Holds skills, skill bundles, and other content
+        // not scoped to a single agent. Per-agent state still lives at
+        // `<install>/agents/<alias>/workspace/`.
+        let shared_dir = zeroclaw_dir.join("shared");
+        fs::create_dir_all(&shared_dir).await.with_context(|| {
+            format!(
+                "Failed to create shared workspace directory: {}",
+                shared_dir.display()
+            )
+        })?;
 
         fs::create_dir_all(&zeroclaw_dir)
             .await

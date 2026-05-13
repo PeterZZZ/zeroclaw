@@ -406,11 +406,18 @@ pub struct MigrateReport {
 /// `<install>/agents/default/workspace/` (per-agent markdown +
 /// identity files).
 const LEGACY_SHARED_DB_DIRS: &[&str] = &["memory", "sessions", "state"];
+/// Legacy `<workspace>/<name>` entries that are host-wide rather than
+/// per-agent. They land in `<install>/shared/<name>/` so every agent
+/// on the host can resolve them. Today: skills; knowledge / templates
+/// follow if/when they grow shared semantics.
+const LEGACY_SHARED_WORKSPACE_DIRS: &[&str] = &["skills"];
 
 /// Split a legacy `<install>/workspace/` into:
 /// - `<install>/data/<name>/` for shared databases (memory, sessions,
 ///   state) — these live at the instance root in V3, with per-agent
 ///   attribution at the row level.
+/// - `<install>/shared/<name>/` for host-wide content like skills
+///   (see `LEGACY_SHARED_WORKSPACE_DIRS`).
 /// - `<install>/agents/default/workspace/<rest>` for per-agent
 ///   plaintext (MEMORY.md, IDENTITY.md, SOUL.md, any other files).
 ///
@@ -431,6 +438,7 @@ const LEGACY_SHARED_DB_DIRS: &[&str] = &["memory", "sessions", "state"];
 pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<bool> {
     let legacy = install_root.join("workspace");
     let data_target = install_root.join("data");
+    let shared_target = install_root.join("shared");
     let agent_default = install_root
         .join("agents")
         .join("default")
@@ -497,6 +505,12 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
             data_target.display()
         )
     })?;
+    std::fs::create_dir_all(&shared_target).with_context(|| {
+        format!(
+            "[system] failed to create shared workspace dir {}",
+            shared_target.display()
+        )
+    })?;
     std::fs::create_dir_all(&agent_default).with_context(|| {
         format!(
             "[system] failed to create default agent workspace dir {}",
@@ -506,6 +520,7 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
 
     let mut shared_count = 0usize;
     let mut agent_count = 0usize;
+    let mut shared_workspace_count = 0usize;
     for entry in std::fs::read_dir(&legacy).with_context(|| {
         format!(
             "[system] failed to enumerate legacy workspace at {}",
@@ -520,11 +535,14 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
         })?;
         let name = entry.file_name();
         let src = entry.path();
-        let is_shared_db = name
-            .to_str()
-            .is_some_and(|n| LEGACY_SHARED_DB_DIRS.contains(&n));
+        let name_str = name.to_str();
+        let is_shared_db = name_str.is_some_and(|n| LEGACY_SHARED_DB_DIRS.contains(&n));
+        let is_shared_workspace =
+            name_str.is_some_and(|n| LEGACY_SHARED_WORKSPACE_DIRS.contains(&n));
         let dst = if is_shared_db {
             data_target.join(&name)
+        } else if is_shared_workspace {
+            shared_target.join(&name)
         } else {
             agent_default.join(&name)
         };
@@ -570,6 +588,8 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
 
         if is_shared_db {
             shared_count += 1;
+        } else if is_shared_workspace {
+            shared_workspace_count += 1;
         } else {
             agent_count += 1;
         }
@@ -588,11 +608,63 @@ pub fn migrate_legacy_workspace_to_default_agent(install_root: &Path) -> Result<
     tracing::info!(
         legacy = %legacy.display(),
         data_target = %data_target.display(),
+        shared_target = %shared_target.display(),
         agent_target = %agent_default.display(),
         backup = %backup_dir.display(),
-        shared = shared_count,
+        shared_db = shared_count,
+        shared_workspace = shared_workspace_count,
         agent = agent_count,
-        "[system] filesystem migration: legacy workspace split into shared data + default agent workspace"
+        "[system] filesystem migration: legacy workspace split into data + shared + default agent workspace"
+    );
+    Ok(true)
+}
+
+/// Lift skills the prior V3 migration parked under
+/// `agents/default/workspace/skills/` up to `<install>/shared/skills/`.
+/// Idempotent: skips when source missing or destination already has
+/// content. Run after `migrate_legacy_workspace_to_default_agent` at
+/// every load so existing v0.8.0-pre-shared installs heal on next boot.
+pub fn relocate_default_agent_skills_to_shared(install_root: &Path) -> Result<bool> {
+    let src = install_root
+        .join("agents")
+        .join("default")
+        .join("workspace")
+        .join("skills");
+    let dst = install_root.join("shared").join("skills");
+    if !src.is_dir() {
+        return Ok(false);
+    }
+    let dst_populated = dst
+        .is_dir()
+        .then(|| std::fs::read_dir(&dst).ok())
+        .flatten()
+        .is_some_and(|mut iter| iter.next().is_some());
+    if dst_populated {
+        return Ok(false);
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "[system] failed to create shared workspace parent {}",
+                parent.display()
+            )
+        })?;
+    }
+    if std::fs::rename(&src, &dst).is_err() {
+        copy_dir_recursive(&src, &dst).with_context(|| {
+            format!(
+                "[system] failed to copy {} to {}",
+                src.display(),
+                dst.display()
+            )
+        })?;
+        std::fs::remove_dir_all(&src)
+            .with_context(|| format!("[system] failed to remove {} after copy", src.display()))?;
+    }
+    tracing::info!(
+        from = %src.display(),
+        to = %dst.display(),
+        "[system] filesystem migration: lifted default-agent skills into shared/"
     );
     Ok(true)
 }
@@ -1142,6 +1214,111 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(backup_legacy.join("MEMORY.md")).unwrap(),
             "# Memory\n\nfoo"
+        );
+    }
+
+    #[test]
+    fn fs_migration_routes_legacy_skills_into_shared_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_root = tmp.path();
+        let legacy = install_root.join("workspace");
+        std::fs::create_dir_all(legacy.join("skills").join("hello-world")).unwrap();
+        std::fs::write(
+            legacy.join("skills").join("hello-world").join("SKILL.md"),
+            "# Hello\n",
+        )
+        .unwrap();
+        std::fs::write(legacy.join("IDENTITY.md"), "# Identity\nbar").unwrap();
+
+        let ran = migrate_legacy_workspace_to_default_agent(install_root).unwrap();
+        assert!(ran);
+
+        let shared_skill = install_root
+            .join("shared")
+            .join("skills")
+            .join("hello-world")
+            .join("SKILL.md");
+        assert_eq!(std::fs::read_to_string(&shared_skill).unwrap(), "# Hello\n");
+
+        let agent_default = install_root
+            .join("agents")
+            .join("default")
+            .join("workspace");
+        assert_eq!(
+            std::fs::read_to_string(agent_default.join("IDENTITY.md")).unwrap(),
+            "# Identity\nbar"
+        );
+        assert!(
+            !agent_default.join("skills").exists(),
+            "skills must NOT land under the default agent's workspace"
+        );
+    }
+
+    #[test]
+    fn relocate_skills_lifts_default_agent_skills_to_shared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_root = tmp.path();
+        let stuck = install_root
+            .join("agents")
+            .join("default")
+            .join("workspace")
+            .join("skills")
+            .join("stuck-skill");
+        std::fs::create_dir_all(&stuck).unwrap();
+        std::fs::write(stuck.join("SKILL.md"), "# Stuck\n").unwrap();
+
+        let ran = relocate_default_agent_skills_to_shared(install_root).unwrap();
+        assert!(ran);
+
+        let shared = install_root
+            .join("shared")
+            .join("skills")
+            .join("stuck-skill")
+            .join("SKILL.md");
+        assert_eq!(std::fs::read_to_string(&shared).unwrap(), "# Stuck\n");
+        assert!(
+            !install_root
+                .join("agents")
+                .join("default")
+                .join("workspace")
+                .join("skills")
+                .exists(),
+            "default-agent skills dir must be removed once lifted"
+        );
+
+        let second = relocate_default_agent_skills_to_shared(install_root).unwrap();
+        assert!(!second, "relocation must be idempotent on a healed install");
+    }
+
+    #[test]
+    fn relocate_skills_skips_when_shared_already_populated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_root = tmp.path();
+        std::fs::create_dir_all(
+            install_root
+                .join("agents")
+                .join("default")
+                .join("workspace")
+                .join("skills")
+                .join("legacy"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(install_root.join("shared").join("skills").join("already"))
+            .unwrap();
+        std::fs::write(
+            install_root
+                .join("shared")
+                .join("skills")
+                .join("already")
+                .join("SKILL.md"),
+            "# Already\n",
+        )
+        .unwrap();
+
+        let ran = relocate_default_agent_skills_to_shared(install_root).unwrap();
+        assert!(
+            !ran,
+            "must not clobber a populated shared/skills/ even when default-agent has stale entries"
         );
     }
 }
