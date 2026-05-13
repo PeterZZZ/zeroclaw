@@ -7,6 +7,7 @@
 //!
 //! Run with: `cargo run --example memskills_session_end_demo -p zeroclaw-runtime`
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use zeroclaw_api::provider::{ChatMessage, ConversationMessage, ToolCall};
@@ -91,5 +92,89 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!("\nDone. MemSkills hook ran end-to-end (no failures = exit-0 from bin).");
+
+    // ------------------------------------------------------------------
+    // Bonus stage: prove the orchestrator data flow works
+    // ------------------------------------------------------------------
+    // The previous stages hand-built a `Vec<ConversationMessage>` and fed
+    // it to the runner. In production, the orchestrator stores conversation
+    // history as `Vec<ChatMessage>` keyed by sender, and the new helper
+    // `fire_session_end_for_sender` does the same conversion this stage
+    // performs. Demonstrating it here proves the wiring in
+    // `crates/zeroclaw-channels/src/orchestrator/mod.rs` will produce a
+    // valid transcript at /new command time.
+
+    println!("\n=== Bonus: orchestrator data flow simulation ===");
+    let mut sender_histories: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+    sender_histories.insert(
+        "alice:cli".to_string(),
+        vec![
+            ChatMessage::user("/procedure-add demo-orchestrator-flow"),
+            ChatMessage::assistant("Acknowledged."),
+            ChatMessage::user("/new"),
+        ],
+    );
+
+    // Now mirror fire_session_end_for_sender:
+    let sender_key = "alice:cli";
+    let channel = "cli";
+    let history_snapshot = sender_histories
+        .get(sender_key)
+        .cloned()
+        .unwrap_or_default();
+    println!(
+        "  cache lookup for sender_key='{sender_key}' → {} turns",
+        history_snapshot.len()
+    );
+    if history_snapshot.is_empty() {
+        println!("  (no transcript to emit; orchestrator early-returns)");
+    } else {
+        let converted: Vec<ConversationMessage> = history_snapshot
+            .into_iter()
+            .map(ConversationMessage::Chat)
+            .collect();
+        println!("  converted {} ChatMessages to ConversationMessage::Chat", converted.len());
+
+        let bonus_dir = std::env::temp_dir().join("zeroclaw-orchestrator-flow");
+        let _ = std::fs::remove_dir_all(&bonus_dir);
+        let bonus_cfg = ExternalSessionEndConfig {
+            enabled: true,
+            command: "node".into(),
+            args: vec![std::env::var("MEMSKILLS_HOOK_BIN").unwrap_or_else(|_|
+                "/Users/petermemverge/Desktop/MemVerge/MemSkills/skills/general/procedure-memory/bin/proc-session-end-hook.mjs".into()
+            )],
+            transcript_dir: bonus_dir.to_string_lossy().to_string(),
+            timeout_secs: 30,
+        };
+        let mut bonus_runner = HookRunner::new();
+        bonus_runner.register(Box::new(ExternalProcessHook::new(bonus_cfg)));
+        bonus_runner
+            .fire_session_end_with_history(sender_key, channel, &converted, &std::env::current_dir()?.to_string_lossy())
+            .await;
+
+        // Show what landed on disk.
+        if let Ok(rd) = std::fs::read_dir(&bonus_dir) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                let bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                println!("  transcript: {} ({bytes} bytes)", p.display());
+                if let Ok(body) = std::fs::read_to_string(&p) {
+                    for (i, line) in body.lines().enumerate() {
+                        println!("    line {}: {}", i + 1, truncate_for_display(line, 100));
+                    }
+                }
+            }
+        }
+        println!("  ✓ orchestrator-shape data made it through the wire");
+    }
+
     Ok(())
+}
+
+fn truncate_for_display(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }

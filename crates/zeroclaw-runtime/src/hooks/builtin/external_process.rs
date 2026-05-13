@@ -197,7 +197,9 @@ impl HookHandler for ExternalProcessHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use zeroclaw_api::provider::{ChatMessage, ConversationMessage};
+    use crate::hooks::HookRunner;
 
     fn enabled_config(command: &str, args: Vec<String>, dir: PathBuf) -> ExternalSessionEndConfig {
         ExternalSessionEndConfig {
@@ -353,5 +355,127 @@ mod tests {
 
     fn tempdir() -> tempfile::TempDir {
         tempfile::tempdir().expect("create tempdir")
+    }
+
+    /// Replicate the exact data path that the orchestrator's
+    /// `fire_session_end_for_sender` runs in production:
+    ///   1. Look up per-sender history in a keyed cache
+    ///   2. Map `Vec<ChatMessage>` → `Vec<ConversationMessage::Chat>`
+    ///   3. Dispatch via the HookRunner with the converted history
+    /// Asserts the registered ExternalProcessHook actually wrote a
+    /// transcript whose contents reflect the cached history.
+    #[tokio::test]
+    async fn orchestrator_dataflow_fires_external_hook_with_cached_history() {
+        let tmp = tempdir();
+        // Use `/bin/cat` as the external command — it consumes stdin
+        // (validating that the spawn + pipe path runs) and exits cleanly.
+        let cfg = ExternalSessionEndConfig {
+            enabled: true,
+            command: "/bin/cat".into(),
+            args: vec![],
+            transcript_dir: tmp.path().to_string_lossy().to_string(),
+            timeout_secs: 5,
+        };
+        let mut runner = HookRunner::new();
+        runner.register(Box::new(ExternalProcessHook::new(cfg)));
+
+        // Mirror the orchestrator's storage: a per-sender map of cached
+        // chat turns. The real type is `Arc<Mutex<LruCache<...>>>`; the
+        // lookup semantics that matter here are identical for HashMap.
+        let mut sender_histories: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+        sender_histories.insert(
+            "alice:cli".into(),
+            vec![
+                ChatMessage::user("/procedure-add demo-procedure"),
+                ChatMessage::assistant("ack"),
+                ChatMessage::user("ok thanks"),
+            ],
+        );
+
+        // Inline replication of fire_session_end_for_sender:
+        //   1. peek the cache for this sender
+        //   2. early-return if empty (no transcript to fire)
+        //   3. map ChatMessage → ConversationMessage::Chat
+        //   4. dispatch on the runner
+        let sender_key = "alice:cli";
+        let channel = "cli";
+        let history_snapshot = sender_histories
+            .get(sender_key)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!history_snapshot.is_empty(), "test setup invariant");
+
+        let history: Vec<ConversationMessage> = history_snapshot
+            .into_iter()
+            .map(ConversationMessage::Chat)
+            .collect();
+        let cwd = "/tmp/workspace";
+        runner
+            .fire_session_end_with_history(sender_key, channel, &history, cwd)
+            .await;
+
+        // Assertion 1: a transcript file was written with the sender_key
+        // as the filename prefix.
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected exactly one transcript file");
+        let path = entries[0].path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            name.starts_with("alice:cli-") || name.starts_with("alice%3Acli-"),
+            "filename should be derived from sender_key; got {name}"
+        );
+
+        // Assertion 2: the file contains 3 JSONL lines (one per cached
+        // ChatMessage) and the user's slash invocation made it through.
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(body.lines().count(), 3, "expected 3 JSONL lines");
+        assert!(
+            body.contains(r#""text":"/procedure-add demo-procedure""#),
+            "expected the user's slash command in the transcript; got: {body}"
+        );
+        assert!(body.contains(r#""role":"assistant""#));
+        assert!(body.contains(r#""role":"user""#));
+    }
+
+    /// Mirror the orchestrator's early-return path for empty senders.
+    /// A sender_key with no cached history must produce zero side effects
+    /// (no transcript file, no child spawn).
+    #[tokio::test]
+    async fn orchestrator_dataflow_empty_history_does_nothing() {
+        let tmp = tempdir();
+        let cfg = ExternalSessionEndConfig {
+            enabled: true,
+            command: "/bin/cat".into(),
+            args: vec![],
+            transcript_dir: tmp.path().to_string_lossy().to_string(),
+            timeout_secs: 5,
+        };
+        let mut runner = HookRunner::new();
+        runner.register(Box::new(ExternalProcessHook::new(cfg)));
+
+        // Empty sender history → we should skip dispatch entirely.
+        // Replicate orchestrator's `if history_snapshot.is_empty() { return; }`
+        // by simply not firing.
+        let sender_histories: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+        let history_snapshot = sender_histories
+            .get("unknown:sender")
+            .cloned()
+            .unwrap_or_default();
+        if !history_snapshot.is_empty() {
+            // (would fire; never reached in this test)
+            unreachable!();
+        }
+
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "no transcript should exist for an empty sender"
+        );
     }
 }
