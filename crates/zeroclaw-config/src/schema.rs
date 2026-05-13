@@ -618,9 +618,6 @@ pub struct ModelProviderConfig {
     #[cfg_attr(feature = "schema-export", schemars(extend("x-secret" = true)))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    /// Override the model_provider type label. Rarely needed — only useful when you run two profiles against the same model_provider type (e.g. two different OpenAI-compatible gateways) and want to tell them apart in logs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     /// Endpoint URI the client hits. Override the family's default endpoint when pointing at a self-hosted gateway (LiteLLM, vLLM, Ollama), a custom proxy, or any non-standard URL. Leave unset to use the family's default URI from its `ModelEndpoint` impl. Set this to the FULL endpoint URL — there is no separate path-suffix field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
@@ -13281,26 +13278,22 @@ impl Config {
         for (type_key, alias_key, profile) in self.model_providers.iter_entries() {
             let profile_name = format!("{type_key}.{alias_key}");
 
-            let has_name = profile
-                .name
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty());
             let has_uri = profile
                 .uri
                 .as_deref()
                 .map(str::trim)
                 .is_some_and(|value| !value.is_empty());
 
-            // Entries created by migration from top-level fields use the model_provider
-            // name as the map key and may not have explicit `name` or `uri`
-            // (the model_provider factory resolves the family's default endpoint via
-            // `ModelEndpoint`). An entry with no identifying information at
-            // all is almost always an in-progress onboarding state — the user
-            // picked the model_provider but hasn't filled anything in yet. Warn but
-            // don't bail; the runtime falls back to family-default endpoint at
-            // use time, and a chat against the unconfigured model_provider fails
-            // with a clear error then.
+            // Entries created by migration from top-level fields use the
+            // model_provider type+alias as the map key and may not have
+            // explicit `uri` (the model_provider factory resolves the
+            // family's default endpoint via `ModelEndpoint`). An entry
+            // with no identifying information at all is almost always an
+            // in-progress onboarding state — the user picked the model
+            // provider but hasn't filled anything in yet. Warn but don't
+            // bail; the runtime falls back to family-default endpoint at
+            // use time, and a chat against the unconfigured model
+            // provider fails with a clear error then.
             let has_api_key = profile
                 .api_key
                 .as_deref()
@@ -13309,10 +13302,10 @@ impl Config {
                 .model
                 .as_deref()
                 .is_some_and(|v| !v.trim().is_empty());
-            if !has_name && !has_uri && !has_api_key && !has_model {
+            if !has_uri && !has_api_key && !has_model {
                 tracing::warn!(
                     model_provider = %profile_name,
-                    "model_providers.{profile_name} is empty (no name / uri / api_key / model). \
+                    "model_providers.{profile_name} is empty (no uri / api_key / model). \
                      Skipping at runtime; finish onboarding via the dashboard or `zeroclaw onboard` \
                      to make this model_provider usable.",
                 );
@@ -17206,7 +17199,6 @@ model = "primary-model"
             "default".to_string(),
             OpenRouterModelProviderConfig {
                 base: ModelProviderConfig {
-                    name: Some("sub2api".to_string()),
                     uri: Some("https://api.tonsof.blue/v1".to_string()),
                     wire_api: Some("ws".to_string()),
                     requires_openai_auth: false,
@@ -17578,7 +17570,6 @@ default_model = "persisted-profile"
             "default".to_string(),
             OpenRouterModelProviderConfig {
                 base: ModelProviderConfig {
-                    name: Some("test-provider".into()),
                     temperature: Some(99.0),
                     ..Default::default()
                 },
@@ -17598,7 +17589,6 @@ default_model = "persisted-profile"
             "default".to_string(),
             OpenRouterModelProviderConfig {
                 base: ModelProviderConfig {
-                    name: Some("test-provider".into()),
                     temperature: Some(-0.5),
                     ..Default::default()
                 },
@@ -17618,7 +17608,6 @@ default_model = "persisted-profile"
             "default".to_string(),
             OpenRouterModelProviderConfig {
                 base: ModelProviderConfig {
-                    name: Some("test-provider".into()),
                     temperature: Some(0.7),
                     ..Default::default()
                 },
