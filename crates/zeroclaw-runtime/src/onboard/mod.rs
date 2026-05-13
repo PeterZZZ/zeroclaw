@@ -1453,28 +1453,41 @@ async fn prompt_agent_fields(cfg: &mut Config, ui: &mut dyn OnboardUi, alias: &s
     }
 }
 
-/// Multi-line system-prompt editor backed by `$EDITOR`. Falls through to
-/// the trait's `editor()` so backends pick the right surface (suspend +
-/// $EDITOR for the TUI, headless echo for `QuickUi`, textarea for the
-/// gateway when wired).
+/// Multi-line system-prompt editor backed by `$EDITOR`. Writes to
+/// `agents/<alias>/workspace/AGENTS.md` — the per-agent markdown
+/// surface the docstring has always pointed at. There is no
+/// `agents.<alias>.system_prompt` config field; trying to write one
+/// (the previous behavior) errored out with "Unknown property".
 async fn prompt_agent_system_prompt(
-    cfg: &mut Config,
+    cfg: &Config,
     ui: &mut dyn OnboardUi,
     alias: &str,
 ) -> Result<Nav> {
-    let path = agent_field_path(alias, "system_prompt");
-    let current = cfg.get_prop(&path).ok().unwrap_or_default();
-    let initial = if current == "<unset>" {
-        String::new()
-    } else {
-        current.clone()
-    };
-    ui.note("Optional system prompt. Prefer placing prose in `agents/<alias>/AGENTS.md`.");
-    match ui.editor("system-prompt", &initial).await? {
+    let workspace = cfg.agent_workspace_dir(alias);
+    let agents_md = workspace.join("AGENTS.md");
+    let initial = tokio::fs::read_to_string(&agents_md)
+        .await
+        .unwrap_or_default();
+    ui.note(
+        "Optional system prompt for this agent. Stored at \
+         agents/<alias>/workspace/AGENTS.md and loaded into the system \
+         prompt at agent start. Leave empty to skip.",
+    );
+    match ui.editor("AGENTS.md", &initial).await? {
         Answer::Back => Ok(Nav::Back),
         Answer::Value(new) => {
             if new != initial {
-                persist(cfg, &path, &new).await?;
+                tokio::fs::create_dir_all(&workspace)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to create per-agent workspace at {}",
+                            workspace.display()
+                        )
+                    })?;
+                tokio::fs::write(&agents_md, &new).await.with_context(|| {
+                    format!("Failed to write AGENTS.md at {}", agents_md.display())
+                })?;
             }
             Ok(Nav::Done)
         }
