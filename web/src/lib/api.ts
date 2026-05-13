@@ -774,7 +774,8 @@ export interface AgentOptionsResponse {
   skill_bundles: string[];
   knowledge_bundles: string[];
   mcp_bundles: string[];
-  memory_namespaces: string[];
+  agents: string[];
+  memory_namespaces?: string[];
 }
 
 export function getAgentOptions(): Promise<AgentOptionsResponse> {

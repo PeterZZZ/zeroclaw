@@ -235,6 +235,7 @@ pub struct AgentOptionsResponse {
     pub skill_bundles: Vec<String>,
     pub knowledge_bundles: Vec<String>,
     pub mcp_bundles: Vec<String>,
+    pub agents: Vec<String>,
 }
 
 /// `GET /api/onboard/agent-options` — every alias-reference list the
@@ -272,6 +273,7 @@ pub async fn handle_agent_options(State(state): State<AppState>, headers: Header
         skill_bundles: cfg.get_map_keys("skill_bundles").unwrap_or_default(),
         knowledge_bundles: cfg.get_map_keys("knowledge_bundles").unwrap_or_default(),
         mcp_bundles: cfg.get_map_keys("mcp_bundles").unwrap_or_default(),
+        agents: cfg.get_map_keys("agents").unwrap_or_default(),
     };
 
     axum::Json(response).into_response()

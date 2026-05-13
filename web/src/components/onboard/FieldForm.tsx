@@ -224,8 +224,24 @@ const AGENT_MULTI_ALIAS_FIELDS: Record<string, keyof AgentOptionsResponse> = {
   'mcp-bundles': 'mcp_bundles',
 };
 
+// Peer-groups carry the same alias-ref shape as agents do: a single
+// `channel` field (one-of the configured channels) plus an `agents`
+// list (subset of configured agents). Mirror agent's picker UX so a
+// peer-groups form doesn't fall back to free-text inputs.
+const PEER_GROUP_SINGLE_ALIAS_FIELDS: Record<string, keyof AgentOptionsResponse> = {
+  channel: 'channels',
+};
+const PEER_GROUP_MULTI_ALIAS_FIELDS: Record<string, keyof AgentOptionsResponse> = {
+  agents: 'agents',
+};
+
 function agentFieldKey(path: string): string | null {
   const m = path.match(/^agents\.[^.]+\.(.+)$/);
+  return m && m[1] ? m[1] : null;
+}
+
+function peerGroupFieldKey(path: string): string | null {
+  const m = path.match(/^peer-groups\.[^.]+\.(.+)$/);
   return m && m[1] ? m[1] : null;
 }
 
@@ -235,12 +251,13 @@ function agentFieldKey(path: string): string | null {
 const AGENT_ALIAS_SOURCE_PATH: Record<keyof AgentOptionsResponse, string> = {
   channels: '/config/channels',
   model_providers: '/config/providers',
-  risk_profiles: '/config/risk_profiles',
-  runtime_profiles: '/config/runtime_profiles',
-  skill_bundles: '/config/skill_bundles',
-  knowledge_bundles: '/config/knowledge_bundles',
-  mcp_bundles: '/config/mcp_bundles',
-  memory_namespaces: '/config/memory_namespaces',
+  risk_profiles: '/config/risk-profiles',
+  runtime_profiles: '/config/runtime-profiles',
+  skill_bundles: '/config/skill-bundles',
+  knowledge_bundles: '/config/knowledge-bundles',
+  mcp_bundles: '/config/mcp-bundles',
+  agents: '/config/agents',
+  memory_namespaces: '/config/memory-namespaces',
 };
 
 function AgentEmptyAliasFallback({
@@ -743,15 +760,18 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
   // renders as a picker over the live config rather than a free-text
   // input. The `system_prompt` field gets a textarea.
   const agentField = agentFieldKey(entry.path);
+  const peerGroupField = peerGroupFieldKey(entry.path);
   // Schema path is kebab-case (matches prop_fields() emission).
   const isAgentSystemPrompt = agentField === 'system-prompt';
-  const agentSingleAliasKind: keyof AgentOptionsResponse | null =
-    agentField && AGENT_SINGLE_ALIAS_FIELDS[agentField]
-      ? AGENT_SINGLE_ALIAS_FIELDS[agentField]
+  const agentSingleAliasKind: keyof AgentOptionsResponse | null = agentField
+    ? (AGENT_SINGLE_ALIAS_FIELDS[agentField] ?? null)
+    : peerGroupField
+      ? (PEER_GROUP_SINGLE_ALIAS_FIELDS[peerGroupField] ?? null)
       : null;
-  const agentMultiAliasKind: keyof AgentOptionsResponse | null =
-    agentField && AGENT_MULTI_ALIAS_FIELDS[agentField]
-      ? AGENT_MULTI_ALIAS_FIELDS[agentField]
+  const agentMultiAliasKind: keyof AgentOptionsResponse | null = agentField
+    ? (AGENT_MULTI_ALIAS_FIELDS[agentField] ?? null)
+    : peerGroupField
+      ? (PEER_GROUP_MULTI_ALIAS_FIELDS[peerGroupField] ?? null)
       : null;
   const agentNeedsOptions =
     agentSingleAliasKind !== null || agentMultiAliasKind !== null;
