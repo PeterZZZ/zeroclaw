@@ -229,7 +229,7 @@ export default function Config() {
         drifted,
       });
       return (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 flex-1 min-h-0">
           <button
             type="button"
             onClick={() => navigate(-1)}
@@ -304,7 +304,7 @@ export default function Config() {
         settingsTab
       );
       return (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 flex-1 min-h-0">
           <button
             type="button"
             onClick={() => navigate(`/config/${encodeURIComponent(activeSection.key)}`)}
@@ -340,7 +340,7 @@ export default function Config() {
     if (typeParam) {
       // Non-alias-tiered section with a type in the URL: treat as form
       return (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 flex-1 min-h-0">
           <button
             type="button"
             onClick={() => navigate(`/config/${encodeURIComponent(activeSection.key)}`)}
@@ -493,6 +493,12 @@ export default function Config() {
       <main className="flex-1 overflow-y-auto p-6">
         {activeSection && (
           <div className="flex flex-col gap-4 max-w-3xl min-h-full">
+            {/* Layout note: every wrapper between <main> (the scroll
+                container) and FieldForm's save bar uses flex-1 + min-h-0
+                so the form stretches to the viewport bottom. Without
+                that chain, the save bar's `sticky bottom-0` anchors
+                to a content-height column and floats mid-viewport
+                instead of pinning to the bottom of the scroll area. */}
             {/* Breadcrumb */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div
@@ -536,7 +542,7 @@ export default function Config() {
               </div>
             </div>
 
-            {mainContent}
+            <div className="flex-1 min-h-0 flex flex-col">{mainContent}</div>
           </div>
         )}
       </main>

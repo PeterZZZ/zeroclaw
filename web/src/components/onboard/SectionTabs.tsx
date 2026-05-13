@@ -48,7 +48,7 @@ export default function SectionTabs({ tabs, defaultKey }: SectionTabsProps) {
   if (!active) return null;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <div
         className="flex items-center gap-1 border-b -mx-2 px-2 overflow-x-auto"
         style={{ borderColor: 'var(--pc-border)' }}
@@ -77,7 +77,9 @@ export default function SectionTabs({ tabs, defaultKey }: SectionTabsProps) {
           );
         })}
       </div>
-      <div role="tabpanel">{active.render()}</div>
+      <div role="tabpanel" className="flex-1 min-h-0 flex flex-col">
+        {active.render()}
+      </div>
     </div>
   );
 }

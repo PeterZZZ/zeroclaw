@@ -731,6 +731,15 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
   const isProviderModelField = /^providers\.models\.[^.]+\.[^.]+\.model$/.test(
     entry.path,
   );
+  // Skill-bundle directory field — `skill-bundles.<alias>.directory` (or
+  // the legacy snake form `skill_bundles.<alias>.directory`). When unset
+  // the runtime falls back to `<install>/shared/skills/<alias>/`; render
+  // that resolved default as a placeholder so operators see the path
+  // their bundle will actually use.
+  const skillBundleAlias = (() => {
+    const m = entry.path.match(/^skill[-_]bundles\.([^.]+)\.directory$/);
+    return m ? m[1] : null;
+  })();
 
   // Agent-form alias pickers. Each `agents.<alias>.<field>` row that
   // references another section's aliases (channels, model_provider, etc.)
@@ -1019,7 +1028,9 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
                 ? entry.populated
                   ? 'Leave blank to keep current value'
                   : 'Enter value'
-                : ''
+                : skillBundleAlias
+                  ? `shared/skills/${skillBundleAlias}/ (default — leave empty)`
+                  : ''
             }
           />
         )}
