@@ -5757,6 +5757,64 @@ pub struct BuiltinHooksConfig {
     #[serde(default)]
     #[nested]
     pub webhook_audit: WebhookAuditConfig,
+    /// Configuration for external-process session-end hooks.
+    ///
+    /// When enabled, ZeroClaw writes the conversation transcript to disk on
+    /// session end and shells out to a configured command (e.g. a Node.js
+    /// script). Used by MemSkills' `procedure-add` pipeline.
+    #[serde(default)]
+    #[nested]
+    pub external_session_end: ExternalSessionEndConfig,
+}
+
+/// Configuration for the external-process session-end hook.
+///
+/// Bridges ZeroClaw's `on_session_end` lifecycle event to external tooling
+/// (e.g. a Node.js script). On session end, ZeroClaw serializes the agent
+/// history to a JSONL file under `transcript_dir`, then spawns `command`
+/// with `args`, piping a small JSON envelope (`transcript_path` + `cwd`)
+/// to the child process's stdin.
+#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "hooks.builtin.external-session-end"]
+pub struct ExternalSessionEndConfig {
+    /// Enable the external session-end hook. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Executable to spawn (e.g. `"node"`, `"python3"`, or an absolute path
+    /// to a binary). No PATH lookup beyond the OS default.
+    #[serde(default)]
+    pub command: String,
+    /// Positional arguments passed to `command`. Typically the path to a
+    /// hook script as the first argument.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Directory where ZeroClaw writes the serialized JSONL transcript.
+    /// `~` is not expanded; supply an absolute path. Created on demand.
+    /// Default: `~/.zeroclaw/workspace/transcripts` (resolved by the hook
+    /// handler at registration time when this field is empty).
+    #[serde(default)]
+    pub transcript_dir: String,
+    /// Maximum time (seconds) to wait for the child process to exit before
+    /// killing it. Hooks must not block the runtime. Default: `30`.
+    #[serde(default = "default_external_session_end_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_external_session_end_timeout() -> u64 {
+    30
+}
+
+impl Default for ExternalSessionEndConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: String::new(),
+            args: Vec::new(),
+            transcript_dir: String::new(),
+            timeout_secs: default_external_session_end_timeout(),
+        }
+    }
 }
 
 /// Configuration for the webhook-audit builtin hook.

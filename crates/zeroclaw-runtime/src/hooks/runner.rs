@@ -6,10 +6,10 @@ use std::panic::AssertUnwindSafe;
 use tracing::info;
 
 use zeroclaw_api::channel::ChannelMessage;
-use zeroclaw_api::provider::{ChatMessage, ChatResponse};
+use zeroclaw_api::provider::{ChatMessage, ChatResponse, ConversationMessage};
 use zeroclaw_api::tool::ToolResult;
 
-use super::traits::{HookHandler, HookResult};
+use super::traits::{HookHandler, HookResult, SessionEndPayload};
 
 /// Dispatcher that manages registered hook handlers.
 ///
@@ -73,6 +73,33 @@ impl HookRunner {
             .handlers
             .iter()
             .map(|h| h.on_session_end(session_id, channel))
+            .collect();
+        join_all(futs).await;
+    }
+
+    /// Fire session-end carrying the conversation transcript.
+    ///
+    /// Use this variant when the caller has the full agent history available
+    /// at session-close time. Handlers that only implement [`on_session_end`]
+    /// still run via the default trait impl, so this dispatcher subsumes
+    /// `fire_session_end` for callers that have transcript data.
+    pub async fn fire_session_end_with_history(
+        &self,
+        session_id: &str,
+        channel: &str,
+        history: &[ConversationMessage],
+        cwd: &str,
+    ) {
+        let payload = SessionEndPayload {
+            session_id,
+            channel,
+            history,
+            cwd,
+        };
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.on_session_end_with_history(payload.clone()))
             .collect();
         join_all(futs).await;
     }

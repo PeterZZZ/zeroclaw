@@ -3,8 +3,25 @@ use serde_json::Value;
 use std::time::Duration;
 
 use zeroclaw_api::channel::ChannelMessage;
-use zeroclaw_api::provider::{ChatMessage, ChatResponse};
+use zeroclaw_api::provider::{ChatMessage, ChatResponse, ConversationMessage};
 use zeroclaw_api::tool::ToolResult;
+
+/// Payload passed to `on_session_end` with conversation transcript data.
+///
+/// Carries enough context for external hook handlers (e.g. MemSkills'
+/// `procedure-add` pipeline) to serialize the session for downstream tools
+/// without re-querying agent state.
+#[derive(Debug, Clone)]
+pub struct SessionEndPayload<'a> {
+    pub session_id: &'a str,
+    pub channel: &'a str,
+    /// Full conversation history captured at session boundary. May be empty
+    /// for sessions that ended before any turn ran.
+    pub history: &'a [ConversationMessage],
+    /// Workspace / project root the session operated in. Used by external
+    /// hooks to scope their work (e.g. write transcripts into the right repo).
+    pub cwd: &'a str,
+}
 
 /// Result of a modifying hook — continue with (possibly modified) data, or cancel.
 #[derive(Debug, Clone)]
@@ -33,6 +50,16 @@ pub trait HookHandler: Send + Sync {
     async fn on_gateway_stop(&self) {}
     async fn on_session_start(&self, _session_id: &str, _channel: &str) {}
     async fn on_session_end(&self, _session_id: &str, _channel: &str) {}
+
+    /// Session-end variant that receives the full conversation transcript.
+    ///
+    /// Default impl delegates to [`on_session_end`] so existing hooks remain
+    /// no-ops. Implement this method when your hook needs access to the
+    /// conversation history (e.g. external transcript-archival hooks like
+    /// MemSkills' `procedure-add`).
+    async fn on_session_end_with_history(&self, payload: SessionEndPayload<'_>) {
+        self.on_session_end(payload.session_id, payload.channel).await;
+    }
     async fn on_llm_input(&self, _messages: &[ChatMessage], _model: &str) {}
     async fn on_llm_output(&self, _response: &ChatResponse) {}
     async fn on_after_tool_call(&self, _tool: &str, _result: &ToolResult, _duration: Duration) {}
