@@ -20,6 +20,7 @@ import {
   ChevronRight,
   Cpu,
   MemoryStick,
+  Brain,
 } from 'lucide-react';
 import type {
   StatusResponse,
@@ -36,14 +37,18 @@ import {
   getChannels,
   getSessionMessages,
   deleteSession,
+  getMemory,
+  deleteMemory,
+  getMapKeys,
 } from '@/lib/api';
+import type { MemoryEntry } from '@/types/api';
 import { loadAgentSummaries, toggleAgentEnabled, type AgentSummary } from '@/lib/agents';
 import AgentCard from '@/components/AgentCard';
 import EntityLink from '@/components/EntityLink';
 import { useSSE } from '@/hooks/useSSE';
 import { t } from '@/lib/i18n';
 
-type TabId = 'overview' | 'sessions' | 'channels' | 'health' | 'cost';
+type TabId = 'overview' | 'sessions' | 'channels' | 'memories' | 'health' | 'cost';
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -238,6 +243,7 @@ const TABS: { id: TabId; labelKey: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', labelKey: 'dashboard.tab_overview', icon: LayoutDashboard },
   { id: 'sessions', labelKey: 'dashboard.tab_sessions', icon: Users },
   { id: 'channels', labelKey: 'dashboard.tab_channels', icon: Wifi },
+  { id: 'memories', labelKey: 'dashboard.tab_memories', icon: Brain },
   { id: 'health', labelKey: 'dashboard.tab_health', icon: Heart },
   { id: 'cost', labelKey: 'dashboard.tab_cost', icon: DollarSign },
 ];
@@ -1153,7 +1159,7 @@ function ChannelsTab() {
 // Main Dashboard Component
 // ---------------------------------------------------------------------------
 
-const TAB_IDS: TabId[] = ['overview', 'sessions', 'channels', 'health', 'cost'];
+const TAB_IDS: TabId[] = ['overview', 'sessions', 'channels', 'memories', 'health', 'cost'];
 
 function parseTab(raw: string | null): TabId {
   if (raw && (TAB_IDS as string[]).includes(raw)) return raw as TabId;
@@ -1173,10 +1179,16 @@ export default function Dashboard() {
         const next = new URLSearchParams(prev);
         if (id === 'overview') next.delete('tab');
         else next.set('tab', id);
-        // Filters belong to the sessions tab; drop them when leaving.
-        if (id !== 'sessions') {
+        // Filters belong to specific tabs; drop them when leaving so deep
+        // links don't drag a stale agent= into the wrong tab.
+        if (id !== 'sessions' && id !== 'memories') {
           next.delete('agent');
+        }
+        if (id !== 'sessions') {
           next.delete('channel');
+        }
+        if (id !== 'memories') {
+          next.delete('category');
         }
         return next;
       },
@@ -1279,6 +1291,7 @@ export default function Dashboard() {
       )}
       {activeTab === 'sessions' && <SessionsTab />}
       {activeTab === 'channels' && <ChannelsTab />}
+      {activeTab === 'memories' && <MemoriesTab />}
       {activeTab === 'health' && <HealthTab status={status} />}
       {activeTab === 'cost' && <CostTab cost={cost} />}
     </div>
@@ -1502,6 +1515,255 @@ function CostTab({ cost }: { cost: CostSummary }) {
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Memories Tab — mirrors SessionsTab's shape (agent + category filters in
+// URL params, per-row Delete) but for `getMemory()` results. The fuller
+// /memory page (with the add-entry form) stays the canonical entry point
+// for creating new rows; this tab is the cross-agent inspection surface.
+// ---------------------------------------------------------------------------
+
+function MemoriesTab() {
+  const [entries, setEntries] = useState<MemoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agentFilter = searchParams.get('agent') ?? '';
+  const categoryFilter = searchParams.get('category') ?? '';
+  const [knownAgents, setKnownAgents] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const setFilter = (key: 'agent' | 'category', value: string) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    getMemory(undefined, categoryFilter || undefined, agentFilter || undefined)
+      .then((rows) => {
+        setEntries(rows);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
+  }, [agentFilter, categoryFilter]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  useEffect(() => {
+    getMapKeys('agents')
+      .then((r) => setKnownAgents(r.keys))
+      .catch(() => {
+        /* dropdown stays empty; filter still works as a typed value */
+      });
+  }, []);
+
+  const knownCategories = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of entries) if (e.category) s.add(e.category);
+    return Array.from(s).sort();
+  }, [entries]);
+
+  const handleDelete = async (entry: MemoryEntry) => {
+    if (deleting) return;
+    if (!window.confirm(`Delete memory ${entry.key}? This cannot be undone.`)) return;
+    setDeleting(entry.id);
+    try {
+      await deleteMemory(entry.key);
+      setEntries((prev) => prev.filter((e) => e.id !== entry.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48">
+        <div className="flex items-center gap-3">
+          <div
+            className="h-6 w-6 border-2 rounded-full animate-spin"
+            style={{ borderColor: 'var(--pc-border)', borderTopColor: 'var(--pc-accent)' }}
+          />
+          <span className="text-sm" style={{ color: 'var(--pc-text-muted)' }}>
+            Loading memories…
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        className="rounded-2xl border p-4"
+        style={{
+          background: 'var(--color-status-error-alpha-08)',
+          borderColor: 'var(--color-status-error-alpha-20)',
+          color: 'var(--color-status-error)',
+        }}
+      >
+        {error}
+      </div>
+    );
+  }
+
+  return (
+    <div className="card p-5 animate-slide-in-up space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Brain className="h-5 w-5" style={{ color: 'var(--pc-accent)' }} />
+        <h2
+          className="text-sm font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--pc-text-primary)' }}
+        >
+          Memories
+        </h2>
+        <span
+          className="text-xs font-mono px-2 py-0.5 rounded-full"
+          style={{ background: 'rgba(var(--pc-accent-rgb), 0.1)', color: 'var(--pc-accent)' }}
+        >
+          {entries.length}
+        </span>
+        <Link
+          to="/memory"
+          className="text-xs ml-2 hover:underline"
+          style={{ color: 'var(--pc-text-muted)' }}
+          title="Full Memory page with the add-entry form"
+        >
+          + add / manage
+        </Link>
+
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Bot
+              className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5"
+              style={{ color: 'var(--pc-text-faint)' }}
+            />
+            <select
+              value={agentFilter}
+              onChange={(e) => setFilter('agent', e.target.value)}
+              className="input-electric pl-7 pr-6 py-1 text-xs appearance-none cursor-pointer"
+              title="Filter by owning agent"
+            >
+              <option value="">All agents</option>
+              {knownAgents.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="relative">
+            <Filter
+              className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5"
+              style={{ color: 'var(--pc-text-faint)' }}
+            />
+            <select
+              value={categoryFilter}
+              onChange={(e) => setFilter('category', e.target.value)}
+              className="input-electric pl-7 pr-6 py-1 text-xs appearance-none cursor-pointer"
+              title="Filter by category"
+            >
+              <option value="">All categories</option>
+              {knownCategories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="text-sm py-8 text-center" style={{ color: 'var(--pc-text-faint)' }}>
+          No memories match the current filters
+        </p>
+      ) : (
+        <div className="space-y-2 overflow-y-auto max-h-[32rem]">
+          {entries.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex items-start justify-between gap-3 py-3 px-4 rounded-xl"
+              style={{ background: 'var(--pc-bg-elevated)' }}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start gap-2 mb-1 flex-wrap">
+                  <span
+                    className="text-sm font-medium font-mono break-all"
+                    style={{ color: 'var(--pc-text-primary)' }}
+                  >
+                    {entry.key}
+                  </span>
+                  {entry.agent_alias && (
+                    <EntityLink
+                      kind="agent"
+                      id={entry.agent_alias}
+                      className="text-[10px] font-medium px-2 py-0.5 rounded-full flex-shrink-0 hover:underline"
+                      style={{
+                        background: 'rgba(var(--pc-accent-rgb), 0.10)',
+                        color: 'var(--pc-accent-light)',
+                      }}
+                      title={`Open agents.${entry.agent_alias} config`}
+                    >
+                      {entry.agent_alias}
+                    </EntityLink>
+                  )}
+                  {entry.category && (
+                    <span
+                      className="text-[10px] font-mono px-2 py-0.5 rounded-full flex-shrink-0"
+                      style={{
+                        background: 'rgba(167, 139, 250, 0.10)',
+                        color: '#a78bfa',
+                      }}
+                    >
+                      {entry.category}
+                    </span>
+                  )}
+                </div>
+                <p
+                  className="text-sm whitespace-pre-wrap break-words"
+                  style={{ color: 'var(--pc-text-secondary)' }}
+                >
+                  {entry.content}
+                </p>
+                <p
+                  className="text-[10px] font-mono mt-1"
+                  style={{ color: 'var(--pc-text-faint)' }}
+                  title={entry.timestamp}
+                >
+                  {formatLocalDateTime(entry.timestamp)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleDelete(entry)}
+                disabled={deleting === entry.id}
+                className="p-1.5 rounded-lg hover:bg-[var(--pc-hover)] disabled:opacity-50 flex-shrink-0"
+                title="Delete memory"
+                style={{ color: 'var(--color-status-error)' }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

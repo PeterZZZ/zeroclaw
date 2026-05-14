@@ -331,6 +331,25 @@ export default function AgentCard({ agent, toggling, onToggle }: AgentCardProps)
         <p
           className="text-xs flex items-center gap-1.5"
           style={{ color: 'var(--pc-text-muted)' }}
+        >
+          <Brain className="h-3 w-3" />
+          {agent.memoryCount === 0 ? (
+            <span>No memories</span>
+          ) : (
+            <Link
+              to={`/?tab=memories&agent=${encodeURIComponent(agent.alias)}`}
+              className="hover:underline"
+              title={`Show memories for ${agent.alias}`}
+            >
+              {agent.memoryCount === 1
+                ? '1 memory'
+                : `${agent.memoryCount} memories`}
+            </Link>
+          )}
+        </p>
+        <p
+          className="text-xs flex items-center gap-1.5"
+          style={{ color: 'var(--pc-text-muted)' }}
           title={
             agent.monthCostUsd === null
               ? 'Per-agent tracking disabled in [cost].track_per_agent'

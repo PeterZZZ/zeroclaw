@@ -1,4 +1,4 @@
-import { getCost, getMapKeys, getSessions, listProps, patchConfig } from './api';
+import { getCost, getMapKeys, getMemory, getSessions, listProps, patchConfig } from './api';
 
 export interface AgentSummary {
   alias: string;
@@ -21,6 +21,8 @@ export interface AgentSummary {
   sessionCount: number;
   lastActivity: string | null;
   monthCostUsd: number | null;
+  /** Persisted memory rows attributed to this agent via `agent_alias`. */
+  memoryCount: number;
 }
 
 function entryValue(entry: { populated?: boolean; value?: unknown }): unknown {
@@ -57,11 +59,12 @@ export async function loadAgentSummaries(): Promise<AgentSummary[]> {
   const { keys } = await getMapKeys('agents');
   if (keys.length === 0) return [];
 
-  // Fetch sessions + cost in parallel with per-agent prop lookups.
-  // Falls back to empty/null if either endpoint errors so a sessions or
-  // cost outage doesn't blank the agents page.
+  // Fetch sessions + cost + memories in parallel with per-agent prop
+  // lookups. Falls back to empty/null if any endpoint errors so a partial
+  // outage doesn't blank the agents page.
   const sessionsPromise = getSessions().catch(() => []);
   const costPromise = getCost().catch(() => null);
+  const memoriesPromise = getMemory().catch(() => []);
 
   // Reverse-build agent → peer-groups in parallel with the per-agent walks.
   // listProps('peer-groups.<alias>.agents') is the field that names members.
@@ -110,15 +113,23 @@ export async function loadAgentSummaries(): Promise<AgentSummary[]> {
         sessionCount: 0,
         lastActivity: null,
         monthCostUsd: null,
+        memoryCount: 0,
       };
     }),
   );
 
-  const [sessions, cost, peerGroups] = await Promise.all([
+  const [sessions, cost, peerGroups, memories] = await Promise.all([
     sessionsPromise,
     costPromise,
     peerGroupsPromise,
+    memoriesPromise,
   ]);
+  const memoriesByAgent = memories.reduce<Record<string, number>>((acc, m) => {
+    if (m.agent_alias) {
+      acc[m.agent_alias] = (acc[m.agent_alias] ?? 0) + 1;
+    }
+    return acc;
+  }, {});
   for (const summary of summaries) {
     const owned = sessions.filter((s) => s.agent_alias === summary.alias);
     summary.sessionCount = owned.length;
@@ -130,6 +141,7 @@ export async function loadAgentSummaries(): Promise<AgentSummary[]> {
     const agentCost = cost?.by_agent?.[summary.alias];
     summary.monthCostUsd = agentCost ? agentCost.cost_usd : null;
     summary.peerGroups = peerGroups[summary.alias] ?? [];
+    summary.memoryCount = memoriesByAgent[summary.alias] ?? 0;
   }
 
   return summaries;
