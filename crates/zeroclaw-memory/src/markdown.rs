@@ -95,6 +95,7 @@ impl MarkdownMemory {
                     importance: None,
                     superseded_by: None,
                     agent_alias: None,
+                    agent_id: None,
                 }
             })
             .collect()
@@ -465,5 +466,34 @@ mod tests {
     async fn markdown_empty_count() {
         let (_tmp, mem) = temp_workspace();
         assert_eq!(mem.count().await.unwrap(), 0);
+    }
+
+    // Markdown has no agents table and no UUID indirection. Rows return
+    // `agent_alias = agent_id = None`; the dashboard renders these as
+    // "unattributed". This locks that contract so a future change can't
+    // silently leak a synthesized UUID into `agent_alias` (the bug that
+    // bit the SQL backends before the JOIN landed).
+    #[tokio::test]
+    async fn markdown_entries_carry_no_agent_attribution() {
+        let (_tmp, mem) = temp_workspace();
+        mem.store("k", "v", MemoryCategory::Core, None).await.unwrap();
+        let entry = mem.get("MEMORY.md:0").await.unwrap();
+        if let Some(entry) = entry {
+            assert!(
+                entry.agent_alias.is_none(),
+                "markdown rows must never claim an agent alias"
+            );
+            assert!(
+                entry.agent_id.is_none(),
+                "markdown rows must never claim a raw agent id either"
+            );
+        }
+        // list path must show the same shape regardless of how a row is
+        // surfaced (keyed lookup vs. enumeration).
+        let rows = mem.list(None, None).await.unwrap();
+        for row in rows {
+            assert!(row.agent_alias.is_none(), "list path must not synthesize aliases");
+            assert!(row.agent_id.is_none(), "list path must not synthesize ids");
+        }
     }
 }

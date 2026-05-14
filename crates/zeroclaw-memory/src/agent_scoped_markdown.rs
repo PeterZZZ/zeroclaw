@@ -59,12 +59,27 @@ impl AgentScopedMarkdownMemory {
     }
 
     /// Stamp `[<alias>] ` onto each entry's `key` so a merged recall
-    /// makes attribution visible. The key is the only field the
-    /// recall caller surfaces verbatim, so the attribution rides
-    /// through to logs and prompts without changing the trait.
+    /// makes attribution visible in logs / prompts that surface the key
+    /// verbatim, and populate `agent_alias` + `agent_id` so the
+    /// dashboard renders Markdown rows with the same per-agent chip
+    /// the SQL backends emit via JOIN.
     fn attribute(alias: &str, mut entries: Vec<MemoryEntry>) -> Vec<MemoryEntry> {
         for entry in &mut entries {
             entry.key = format!("[{alias}] {}", entry.key);
+            entry.agent_alias = Some(alias.to_string());
+            entry.agent_id = Some(alias.to_string());
+        }
+        entries
+    }
+
+    /// Lighter-weight variant for non-merged reads (own-only `get`,
+    /// `list`): set attribution without rewriting the key. Used by
+    /// `get` / `list` where the row already comes from the bound
+    /// agent's own backend and no `[alias]` namespacing is needed.
+    fn stamp_attribution(alias: &str, mut entries: Vec<MemoryEntry>) -> Vec<MemoryEntry> {
+        for entry in &mut entries {
+            entry.agent_alias = Some(alias.to_string());
+            entry.agent_id = Some(alias.to_string());
         }
         entries
     }
@@ -211,7 +226,12 @@ impl Memory for AgentScopedMarkdownMemory {
     }
 
     async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
-        self.own.get(key).await
+        let entry = self.own.get(key).await?;
+        Ok(entry.map(|mut e| {
+            e.agent_alias = Some(self.own_alias.clone());
+            e.agent_id = Some(self.own_alias.clone());
+            e
+        }))
     }
 
     async fn list(
@@ -219,7 +239,8 @@ impl Memory for AgentScopedMarkdownMemory {
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
     ) -> Result<Vec<MemoryEntry>> {
-        self.own.list(category, session_id).await
+        let entries = self.own.list(category, session_id).await?;
+        Ok(Self::stamp_attribution(&self.own_alias, entries))
     }
 
     async fn forget(&self, key: &str) -> Result<bool> {
@@ -357,5 +378,71 @@ mod tests {
             hits.iter().any(|h| h.key.starts_with("[beta] ")),
             "caller-restricted recall must include the requested peer's rows"
         );
+    }
+
+    // Dashboard parity with SQL backends: every row surfaced through the
+    // Markdown wrapper must carry `agent_alias` (and `agent_id`) so the
+    // /api/memory response renders the agent chip correctly, the same as
+    // SQL JOIN-resolved rows.
+    #[tokio::test]
+    async fn list_and_get_stamp_agent_alias_for_dashboard_parity() {
+        let (_tmp, own) = make_md("alpha-ws");
+        let scoped = AgentScopedMarkdownMemory::new("alpha", own, vec![]);
+
+        scoped
+            .store("note", "preferences", MemoryCategory::Core, None)
+            .await
+            .unwrap();
+
+        let list_rows = scoped.list(None, None).await.unwrap();
+        assert!(!list_rows.is_empty(), "list must return the stored row");
+        for row in &list_rows {
+            assert_eq!(
+                row.agent_alias.as_deref(),
+                Some("alpha"),
+                "list rows must be stamped with the bound agent's alias"
+            );
+            assert_eq!(
+                row.agent_id.as_deref(),
+                Some("alpha"),
+                "agent_id mirrors agent_alias on Markdown (no UUID indirection)"
+            );
+        }
+
+        let key = &list_rows[0].key;
+        let got = scoped.get(key).await.unwrap().expect("get must find the row");
+        assert_eq!(got.agent_alias.as_deref(), Some("alpha"));
+        assert_eq!(got.agent_id.as_deref(), Some("alpha"));
+    }
+
+    // The recall path's `[alpha] ` key-prefix attribution must coexist
+    // with the new field-level attribution. The fields are what the
+    // dashboard reads; the prefix is what prompts / logs read.
+    #[tokio::test]
+    async fn recall_attribution_carries_through_both_key_prefix_and_alias_field() {
+        let (_tmp_a, own) = make_md("alpha-ws");
+        let (_tmp_b, peer_mem) = make_md("beta-ws");
+        peer_mem
+            .store("peer-note", "from beta", MemoryCategory::Core, None)
+            .await
+            .unwrap();
+        let scoped = AgentScopedMarkdownMemory::new(
+            "alpha",
+            own,
+            vec![MarkdownPeer {
+                alias: "beta".into(),
+                memory: peer_mem,
+            }],
+        );
+        scoped
+            .store("own-note", "from alpha", MemoryCategory::Core, None)
+            .await
+            .unwrap();
+
+        let hits = scoped.recall("from", 10, None, None, None).await.unwrap();
+        let alpha_hit = hits.iter().find(|h| h.key.starts_with("[alpha] ")).unwrap();
+        let beta_hit = hits.iter().find(|h| h.key.starts_with("[beta] ")).unwrap();
+        assert_eq!(alpha_hit.agent_alias.as_deref(), Some("alpha"));
+        assert_eq!(beta_hit.agent_alias.as_deref(), Some("beta"));
     }
 }

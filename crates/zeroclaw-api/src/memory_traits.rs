@@ -44,17 +44,24 @@ pub struct MemoryEntry {
     /// If this entry was superseded by a newer conflicting entry.
     #[serde(default)]
     pub superseded_by: Option<String>,
-    /// Alias of the agent this row is attributed to (the HashMap key in
-    /// `Config::agents`, e.g. `"default"` or `"research_agent"`).
-    /// Backends without per-agent columns (Markdown, Qdrant payload-less
-    /// variants, None) leave this `None`; SQL-backed stores populate it
-    /// from the `memories.agent_id` column (DB column name stays `agent_id`
-    /// per SQL FK convention; the value has always been the alias string).
-    /// `AgentScopedMemory` enforces the bound + allowlist boundary on read
-    /// paths the trait does not expose an agent-aware form for
-    /// (`get`, `list`).
-    #[serde(default, alias = "agent_id")]
+    /// Resolved, human-readable agent alias for this row (the HashMap key
+    /// in `Config::agents`, e.g. `"clamps"`). SQL-backed stores produce
+    /// this via `LEFT JOIN agents ON agents.id = memories.agent_id`;
+    /// Markdown / Qdrant / None backends populate it with the raw column
+    /// value (which is itself the alias for those backends).
+    ///
+    /// Use this field for display / routing. For scope-equality checks
+    /// (e.g. inside `AgentScopedMemory`) use [`MemoryEntry::agent_id`]
+    /// instead since that's stable across backend kinds (UUID for SQL,
+    /// alias for non-SQL).
+    #[serde(default)]
     pub agent_alias: Option<String>,
+    /// Raw value of the storage layer's agent column. For SQL backends
+    /// this is the `memories.agent_id` UUID FK to `agents.id`; for
+    /// Markdown / Qdrant / None this is the alias string. The scoping
+    /// wrapper compares on this field so backend-kind doesn't matter.
+    #[serde(default, alias = "agent_id")]
+    pub agent_id: Option<String>,
 }
 
 fn default_namespace() -> String {

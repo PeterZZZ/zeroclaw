@@ -347,7 +347,8 @@ impl PostgresMemory {
                 .unwrap_or_else(|_| "default".into()),
             importance: row.try_get("importance").ok(),
             superseded_by: None,
-            agent_alias: row.try_get("agent_id").ok(),
+            agent_alias: row.try_get("agent_alias").ok(),
+            agent_id: row.try_get("agent_id").ok(),
         })
     }
 }
@@ -457,22 +458,24 @@ impl Memory for PostgresMemory {
 
             let stmt = format!(
                 "
-                SELECT id, key, content, category, created_at, session_id, agent_id,
+                SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, a.alias AS agent_alias, m.agent_id,
                        (
-                         CASE WHEN to_tsvector('simple', key) @@ plainto_tsquery('simple', $1)
-                           THEN ts_rank_cd(to_tsvector('simple', key), plainto_tsquery('simple', $1)) * 2.0
+                         CASE WHEN to_tsvector('simple', m.key) @@ plainto_tsquery('simple', $1)
+                           THEN ts_rank_cd(to_tsvector('simple', m.key), plainto_tsquery('simple', $1)) * 2.0
                            ELSE 0.0 END +
-                         CASE WHEN to_tsvector('simple', content) @@ plainto_tsquery('simple', $1)
-                           THEN ts_rank_cd(to_tsvector('simple', content), plainto_tsquery('simple', $1))
+                         CASE WHEN to_tsvector('simple', m.content) @@ plainto_tsquery('simple', $1)
+                           THEN ts_rank_cd(to_tsvector('simple', m.content), plainto_tsquery('simple', $1))
                            ELSE 0.0 END
                        ) AS score
-                FROM {qualified_table}
-                WHERE ($2::TEXT IS NULL OR session_id = $2)
-                  AND ($1 = '' OR to_tsvector('simple', key || ' ' || content) @@ plainto_tsquery('simple', $1))
+                FROM {qualified_table} m
+                LEFT JOIN {qualified_agents} a ON a.id = m.agent_id
+                WHERE ($2::TEXT IS NULL OR m.session_id = $2)
+                  AND ($1 = '' OR to_tsvector('simple', m.key || ' ' || m.content) @@ plainto_tsquery('simple', $1))
                   {time_filter}
-                ORDER BY score DESC, updated_at DESC
+                ORDER BY score DESC, m.updated_at DESC
                 LIMIT $3
-                "
+                ",
+                qualified_agents = self.qualified_agents,
             );
 
             #[allow(clippy::cast_possible_wrap)]
@@ -494,15 +497,17 @@ impl Memory for PostgresMemory {
     async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
+        let qualified_agents = self.qualified_agents.clone();
         let key = key.to_string();
 
         run_on_os_thread(move || -> Result<Option<MemoryEntry>> {
             let mut client = client.lock();
             let stmt = format!(
                 "
-                SELECT id, key, content, category, created_at, session_id, agent_id
-                FROM {qualified_table}
-                WHERE key = $1
+                SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, a.alias AS agent_alias, m.agent_id
+                FROM {qualified_table} m
+                LEFT JOIN {qualified_agents} a ON a.id = m.agent_id
+                WHERE m.key = $1
                 LIMIT 1
                 "
             );
@@ -520,6 +525,7 @@ impl Memory for PostgresMemory {
     ) -> Result<Vec<MemoryEntry>> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
+        let qualified_agents = self.qualified_agents.clone();
         let category = category.map(Self::category_to_str);
         let sid = session_id.map(str::to_string);
 
@@ -527,11 +533,12 @@ impl Memory for PostgresMemory {
             let mut client = client.lock();
             let stmt = format!(
                 "
-                SELECT id, key, content, category, created_at, session_id, agent_id
-                FROM {qualified_table}
-                WHERE ($1::TEXT IS NULL OR category = $1)
-                  AND ($2::TEXT IS NULL OR session_id = $2)
-                ORDER BY updated_at DESC
+                SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, a.alias AS agent_alias, m.agent_id
+                FROM {qualified_table} m
+                LEFT JOIN {qualified_agents} a ON a.id = m.agent_id
+                WHERE ($1::TEXT IS NULL OR m.category = $1)
+                  AND ($2::TEXT IS NULL OR m.session_id = $2)
+                ORDER BY m.updated_at DESC
                 "
             );
 
@@ -671,32 +678,34 @@ impl Memory for PostgresMemory {
             // unattributed rows to special-case.
             let time_filter: String = match (since_ref, until_ref) {
                 (Some(_), Some(_)) => {
-                    " AND created_at >= $5::TIMESTAMPTZ AND created_at <= $6::TIMESTAMPTZ".into()
+                    " AND m.created_at >= $5::TIMESTAMPTZ AND m.created_at <= $6::TIMESTAMPTZ".into()
                 }
-                (Some(_), None) => " AND created_at >= $5::TIMESTAMPTZ".into(),
-                (None, Some(_)) => " AND created_at <= $5::TIMESTAMPTZ".into(),
+                (Some(_), None) => " AND m.created_at >= $5::TIMESTAMPTZ".into(),
+                (None, Some(_)) => " AND m.created_at <= $5::TIMESTAMPTZ".into(),
                 (None, None) => String::new(),
             };
 
             let stmt = format!(
                 "
-                SELECT id, key, content, category, created_at, session_id, agent_id,
+                SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, a.alias AS agent_alias, m.agent_id,
                        (
-                         CASE WHEN to_tsvector('simple', key) @@ plainto_tsquery('simple', $1)
-                           THEN ts_rank_cd(to_tsvector('simple', key), plainto_tsquery('simple', $1)) * 2.0
+                         CASE WHEN to_tsvector('simple', m.key) @@ plainto_tsquery('simple', $1)
+                           THEN ts_rank_cd(to_tsvector('simple', m.key), plainto_tsquery('simple', $1)) * 2.0
                            ELSE 0.0 END +
-                         CASE WHEN to_tsvector('simple', content) @@ plainto_tsquery('simple', $1)
-                           THEN ts_rank_cd(to_tsvector('simple', content), plainto_tsquery('simple', $1))
+                         CASE WHEN to_tsvector('simple', m.content) @@ plainto_tsquery('simple', $1)
+                           THEN ts_rank_cd(to_tsvector('simple', m.content), plainto_tsquery('simple', $1))
                            ELSE 0.0 END
                        ) AS score
-                FROM {qualified_table}
-                WHERE ($2::TEXT IS NULL OR session_id = $2)
-                  AND ($1 = '' OR to_tsvector('simple', key || ' ' || content) @@ plainto_tsquery('simple', $1))
-                  AND agent_id = ANY($4)
+                FROM {qualified_table} m
+                LEFT JOIN {qualified_agents} a ON a.id = m.agent_id
+                WHERE ($2::TEXT IS NULL OR m.session_id = $2)
+                  AND ($1 = '' OR to_tsvector('simple', m.key || ' ' || m.content) @@ plainto_tsquery('simple', $1))
+                  AND m.agent_id = ANY($4)
                   {time_filter}
-                ORDER BY score DESC, updated_at DESC
+                ORDER BY score DESC, m.updated_at DESC
                 LIMIT $3
-                "
+                ",
+                qualified_agents = self.qualified_agents,
             );
 
             #[allow(clippy::cast_possible_wrap)]

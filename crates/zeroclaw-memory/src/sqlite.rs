@@ -796,28 +796,29 @@ impl SqliteMemory {
             let until_ref = until_owned.as_deref();
 
             let mut sql =
-                "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id FROM memories \
-                           WHERE superseded_by IS NULL AND 1=1"
+                "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id \
+                 FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                 WHERE m.superseded_by IS NULL AND 1=1"
                     .to_string();
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
             let mut idx = 1;
 
             if let Some(sid) = sid.as_deref() {
-                let _ = write!(sql, " AND session_id = ?{idx}");
+                let _ = write!(sql, " AND m.session_id = ?{idx}");
                 param_values.push(Box::new(sid.to_string()));
                 idx += 1;
             }
             if let Some(s) = since_ref {
-                let _ = write!(sql, " AND created_at >= ?{idx}");
+                let _ = write!(sql, " AND m.created_at >= ?{idx}");
                 param_values.push(Box::new(s.to_string()));
                 idx += 1;
             }
             if let Some(u) = until_ref {
-                let _ = write!(sql, " AND created_at <= ?{idx}");
+                let _ = write!(sql, " AND m.created_at <= ?{idx}");
                 param_values.push(Box::new(u.to_string()));
                 idx += 1;
             }
-            let _ = write!(sql, " ORDER BY updated_at DESC LIMIT ?{idx}");
+            let _ = write!(sql, " ORDER BY m.updated_at DESC LIMIT ?{idx}");
             #[allow(clippy::cast_possible_wrap)]
             param_values.push(Box::new(limit as i64));
 
@@ -837,6 +838,7 @@ impl SqliteMemory {
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
                     agent_alias: row.get(9)?,
+                    agent_id: row.get(10)?,
                 })
             })?;
 
@@ -966,8 +968,9 @@ impl Memory for SqliteMemory {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let sql = format!(
-                    "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id \
-                     FROM memories WHERE superseded_by IS NULL AND id IN ({placeholders})"
+                    "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id \
+                     FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                     WHERE m.superseded_by IS NULL AND m.id IN ({placeholders})"
                 );
                 let mut stmt = conn.prepare(&sql)?;
                 let id_params: Vec<Box<dyn rusqlite::types::ToSql>> = merged
@@ -988,17 +991,18 @@ impl Memory for SqliteMemory {
                         row.get::<_, Option<f64>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
                     ))
                 })?;
 
                 let mut entry_map = std::collections::HashMap::new();
                 for row in rows {
-                    let (id, key, content, cat, ts, sid, ns, imp, sup, aid) = row?;
-                    entry_map.insert(id, (key, content, cat, ts, sid, ns, imp, sup, aid));
+                    let (id, key, content, cat, ts, sid, ns, imp, sup, alias, aid) = row?;
+                    entry_map.insert(id, (key, content, cat, ts, sid, ns, imp, sup, alias, aid));
                 }
 
                 for scored in &merged {
-                    if let Some((key, content, cat, ts, sid, ns, imp, sup, aid)) = entry_map.remove(&scored.id) {
+                    if let Some((key, content, cat, ts, sid, ns, imp, sup, alias, aid)) = entry_map.remove(&scored.id) {
                         if let Some(s) = since_ref
                             && ts.as_str() < s {
                                 continue;
@@ -1018,7 +1022,8 @@ impl Memory for SqliteMemory {
                             namespace: ns.unwrap_or_else(|| "default".into()),
                             importance: imp,
                             superseded_by: sup,
-                            agent_alias: aid,
+                            agent_alias: alias,
+                            agent_id: aid,
                         };
                         if let Some(filter_sid) = session_ref
                             && entry.session_id.as_deref() != Some(filter_sid) {
@@ -1055,7 +1060,7 @@ impl Memory for SqliteMemory {
                         .enumerate()
                         .map(|(i, _)| {
                             format!(
-                                "(content LIKE ?{} ESCAPE '\\' OR key LIKE ?{} ESCAPE '\\')",
+                                "(m.content LIKE ?{} ESCAPE '\\' OR m.key LIKE ?{} ESCAPE '\\')",
                                 i * 2 + 1,
                                 i * 2 + 2
                             )
@@ -1065,17 +1070,18 @@ impl Memory for SqliteMemory {
                     let mut param_idx = patterns.len() * 2 + 1;
                     let mut time_conditions = String::new();
                     if since_ref.is_some() {
-                        let _ = write!(time_conditions, " AND created_at >= ?{param_idx}");
+                        let _ = write!(time_conditions, " AND m.created_at >= ?{param_idx}");
                         param_idx += 1;
                     }
                     if until_ref.is_some() {
-                        let _ = write!(time_conditions, " AND created_at <= ?{param_idx}");
+                        let _ = write!(time_conditions, " AND m.created_at <= ?{param_idx}");
                         param_idx += 1;
                     }
                     let sql = format!(
-                        "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id FROM memories
-                         WHERE superseded_by IS NULL AND ({where_clause}){time_conditions}
-                         ORDER BY updated_at DESC
+                        "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id
+                         FROM memories m LEFT JOIN agents a ON a.id = m.agent_id
+                         WHERE m.superseded_by IS NULL AND ({where_clause}){time_conditions}
+                         ORDER BY m.updated_at DESC
                          LIMIT ?{param_idx}"
                     );
                     let mut stmt = conn.prepare(&sql)?;
@@ -1107,6 +1113,7 @@ impl Memory for SqliteMemory {
                             importance: row.get(7)?,
                             superseded_by: row.get(8)?,
                             agent_alias: row.get(9)?,
+                            agent_id: row.get(10)?,
                         })
                     })?;
                     for row in rows {
@@ -1144,7 +1151,9 @@ impl Memory for SqliteMemory {
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<MemoryEntry>> {
             let conn = conn.lock();
             let mut stmt = conn.prepare(
-                "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id FROM memories WHERE key = ?1",
+                "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id \
+                 FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                 WHERE m.key = ?1",
             )?;
 
             let mut rows = stmt.query_map(params![key], |row| {
@@ -1160,6 +1169,7 @@ impl Memory for SqliteMemory {
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
                     agent_alias: row.get(9)?,
+                    agent_id: row.get(10)?,
                 })
             })?;
 
@@ -1200,14 +1210,16 @@ impl Memory for SqliteMemory {
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
                     agent_alias: row.get(9)?,
+                    agent_id: row.get(10)?,
                 })
             };
 
             if let Some(ref cat) = category {
                 let cat_str = Self::category_to_str(cat);
                 let mut stmt = conn.prepare(
-                    "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id FROM memories
-                     WHERE superseded_by IS NULL AND category = ?1 ORDER BY updated_at DESC LIMIT ?2",
+                    "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id
+                     FROM memories m LEFT JOIN agents a ON a.id = m.agent_id
+                     WHERE m.superseded_by IS NULL AND m.category = ?1 ORDER BY m.updated_at DESC LIMIT ?2",
                 )?;
                 let rows = stmt.query_map(params![cat_str, DEFAULT_LIST_LIMIT], row_mapper)?;
                 for row in rows {
@@ -1220,8 +1232,9 @@ impl Memory for SqliteMemory {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id FROM memories
-                     WHERE superseded_by IS NULL ORDER BY updated_at DESC LIMIT ?1",
+                    "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id
+                     FROM memories m LEFT JOIN agents a ON a.id = m.agent_id
+                     WHERE m.superseded_by IS NULL ORDER BY m.updated_at DESC LIMIT ?1",
                 )?;
                 let rows = stmt.query_map(params![DEFAULT_LIST_LIMIT], row_mapper)?;
                 for row in rows {
@@ -1388,38 +1401,39 @@ impl Memory for SqliteMemory {
         tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
             let mut sql =
-                "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by, agent_id \
-                 FROM memories WHERE 1=1"
+                "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id \
+                 FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                 WHERE 1=1"
                     .to_string();
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
             let mut idx = 1;
 
             if let Some(ref ns) = filter.namespace {
-                let _ = write!(sql, " AND namespace = ?{idx}");
+                let _ = write!(sql, " AND m.namespace = ?{idx}");
                 param_values.push(Box::new(ns.clone()));
                 idx += 1;
             }
             if let Some(ref sid) = filter.session_id {
-                let _ = write!(sql, " AND session_id = ?{idx}");
+                let _ = write!(sql, " AND m.session_id = ?{idx}");
                 param_values.push(Box::new(sid.clone()));
                 idx += 1;
             }
             if let Some(ref cat) = filter.category {
-                let _ = write!(sql, " AND category = ?{idx}");
+                let _ = write!(sql, " AND m.category = ?{idx}");
                 param_values.push(Box::new(Self::category_to_str(cat)));
                 idx += 1;
             }
             if let Some(ref since) = filter.since {
-                let _ = write!(sql, " AND created_at >= ?{idx}");
+                let _ = write!(sql, " AND m.created_at >= ?{idx}");
                 param_values.push(Box::new(since.clone()));
                 idx += 1;
             }
             if let Some(ref until) = filter.until {
-                let _ = write!(sql, " AND created_at <= ?{idx}");
+                let _ = write!(sql, " AND m.created_at <= ?{idx}");
                 param_values.push(Box::new(until.clone()));
                 let _ = idx;
             }
-            sql.push_str(" ORDER BY created_at ASC");
+            sql.push_str(" ORDER BY m.created_at ASC");
 
             let mut stmt = conn.prepare(&sql)?;
             let params_ref: Vec<&dyn rusqlite::types::ToSql> =
@@ -1437,6 +1451,7 @@ impl Memory for SqliteMemory {
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
                     agent_alias: row.get(9)?,
+                    agent_id: row.get(10)?,
                 })
             })?;
 
@@ -3350,4 +3365,75 @@ mod tests {
         let results = mem.recall("Rust", 10, None, None, None).await.unwrap();
         assert!(!results.is_empty(), "Hybrid mode should find results");
     }
+
+    // Wires-crossed regression coverage. The user reported memory rows
+    // returning the agents table UUID in `agent_alias` — the dashboard
+    // then tried to route /config/agents/<uuid> and 404'd. These tests
+    // assert the read path emits the resolved alias text in
+    // `agent_alias` and keeps the raw UUID in `agent_id` so the
+    // scoping wrapper still works.
+
+    #[tokio::test]
+    async fn get_returns_alias_text_in_agent_alias_and_uuid_in_agent_id() {
+        let (_tmp, mem) = temp_sqlite();
+        let alpha_uuid = mem.ensure_agent_uuid("clamps").await.unwrap();
+        mem.store_with_agent(
+            "row1",
+            "v",
+            MemoryCategory::Core,
+            None,
+            None,
+            None,
+            Some(&alpha_uuid),
+        )
+        .await
+        .unwrap();
+
+        let entry = mem.get("row1").await.unwrap().expect("row1 must exist");
+        assert_eq!(
+            entry.agent_alias.as_deref(),
+            Some("clamps"),
+            "agent_alias must carry the human-readable alias, not the UUID"
+        );
+        assert_eq!(
+            entry.agent_id.as_deref(),
+            Some(alpha_uuid.as_str()),
+            "agent_id must carry the raw UUID FK so scoping equality works"
+        );
+        assert_ne!(
+            entry.agent_alias, entry.agent_id,
+            "alias and id must differ on a SQL backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_returns_alias_text_for_every_row() {
+        let (_tmp, mem) = temp_sqlite();
+        let a = mem.ensure_agent_uuid("clamps").await.unwrap();
+        let b = mem.ensure_agent_uuid("glados").await.unwrap();
+        for (key, owner) in [("r1", &a), ("r2", &b)] {
+            mem.store_with_agent(
+                key,
+                "v",
+                MemoryCategory::Core,
+                None,
+                None,
+                None,
+                Some(owner),
+            )
+            .await
+            .unwrap();
+        }
+
+        let mut rows = mem.list(None, None).await.unwrap();
+        rows.sort_by(|x, y| x.key.cmp(&y.key));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].agent_alias.as_deref(), Some("clamps"));
+        assert_eq!(rows[1].agent_alias.as_deref(), Some("glados"));
+        assert!(
+            rows.iter().all(|r| r.agent_id.is_some()),
+            "every row should carry agent_id"
+        );
+    }
+
 }

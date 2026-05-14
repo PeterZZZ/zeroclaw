@@ -253,6 +253,7 @@ mod tests {
             importance: None,
             superseded_by: None,
             agent_alias: None,
+            agent_id: None,
         };
         pipeline.store_in_cache(ck, vec![fake_entry]);
 

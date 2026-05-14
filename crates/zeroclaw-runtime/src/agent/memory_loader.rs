@@ -137,6 +137,7 @@ mod tests {
                 importance: None,
                 superseded_by: None,
                 agent_alias: None,
+                agent_id: None,
             }])
         }
 
@@ -301,6 +302,7 @@ mod tests {
                     importance: None,
                     superseded_by: None,
                     agent_alias: None,
+                agent_id: None,
                 },
                 MemoryEntry {
                     id: "2".into(),
@@ -314,6 +316,7 @@ mod tests {
                     importance: None,
                     superseded_by: None,
                     agent_alias: None,
+                agent_id: None,
                 },
             ]),
         };
@@ -344,6 +347,7 @@ mod tests {
                     importance: None,
                     superseded_by: None,
                     agent_alias: None,
+                agent_id: None,
                 },
                 MemoryEntry {
                     id: "2".into(),
@@ -357,6 +361,7 @@ mod tests {
                     importance: None,
                     superseded_by: None,
                     agent_alias: None,
+                agent_id: None,
                 },
             ]),
         };
