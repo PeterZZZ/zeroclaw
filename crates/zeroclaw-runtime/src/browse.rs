@@ -39,6 +39,8 @@ pub enum BrowseError {
     NotFound(String),
     #[error("path '{0}' is not a directory")]
     NotADirectory(String),
+    #[error("'{0}' is a system directory and cannot be removed via the dashboard")]
+    Protected(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -87,6 +89,57 @@ pub fn list_directory(config: &Config, raw: &str) -> Result<BrowseResult, Browse
         path: raw.trim_matches('/').to_string(),
         entries,
     })
+}
+
+/// Top-level shared/ entries that the runtime owns and the operator must
+/// not be able to remove via the dashboard. Backend-enforced so a
+/// compromised or buggy frontend cannot bypass this. Names match what
+/// the install scaffolds via `migrate_legacy_workspace_to_default_agent`
+/// and the `<install>/shared/` initializer.
+const PROTECTED_SHARED_TOP_LEVEL: &[&str] = &["skills", "skill-bundles", "knowledge"];
+
+/// Create a new directory at `<install>/shared/<raw>`. Idempotent — if the
+/// path already exists as a directory, returns Ok without re-creating.
+/// Rejects path traversal and refuses to create over an existing file.
+pub fn make_directory(config: &Config, raw: &str) -> Result<(), BrowseError> {
+    let shared = config.shared_workspace_dir();
+    let resolved: PathBuf = resolve_under(&shared, raw)?;
+    if let Ok(meta) = std::fs::metadata(&resolved) {
+        if meta.is_dir() {
+            return Ok(());
+        }
+        return Err(BrowseError::NotADirectory(raw.to_string()));
+    }
+    std::fs::create_dir_all(&resolved)?;
+    Ok(())
+}
+
+/// Delete the directory at `<install>/shared/<raw>` recursively. Refuses
+/// to remove protected top-level entries (skills/, skill-bundles/,
+/// knowledge/) or the shared root itself. Rejects path traversal.
+pub fn remove_directory(config: &Config, raw: &str) -> Result<(), BrowseError> {
+    let trimmed = raw.trim_matches('/');
+    if trimmed.is_empty() {
+        return Err(BrowseError::Protected("shared".to_string()));
+    }
+    let top = trimmed.split('/').next().unwrap_or("");
+    if PROTECTED_SHARED_TOP_LEVEL.contains(&top) && !trimmed.contains('/') {
+        return Err(BrowseError::Protected(format!("shared/{top}")));
+    }
+    let shared = config.shared_workspace_dir();
+    let resolved: PathBuf = resolve_under(&shared, raw)?;
+    let metadata = match std::fs::metadata(&resolved) {
+        Ok(m) => m,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(BrowseError::NotFound(raw.to_string()));
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if !metadata.is_dir() {
+        return Err(BrowseError::NotADirectory(raw.to_string()));
+    }
+    std::fs::remove_dir_all(&resolved)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -145,5 +198,85 @@ mod tests {
         let (_dir, cfg) = fixture();
         let err = list_directory(&cfg, "readme.txt").unwrap_err();
         assert!(matches!(err, BrowseError::NotADirectory(_)));
+    }
+
+    #[test]
+    fn make_directory_creates_nested_path() {
+        let (dir, cfg) = fixture();
+        make_directory(&cfg, "skills/gamma/sub").unwrap();
+        assert!(dir.path().join("shared/skills/gamma/sub").is_dir());
+    }
+
+    #[test]
+    fn make_directory_is_idempotent() {
+        let (_dir, cfg) = fixture();
+        make_directory(&cfg, "skills/alpha").unwrap();
+        make_directory(&cfg, "skills/alpha").unwrap();
+    }
+
+    #[test]
+    fn make_directory_rejects_escape() {
+        let (_dir, cfg) = fixture();
+        let err = make_directory(&cfg, "../etc").unwrap_err();
+        assert!(matches!(err, BrowseError::Escape(_)));
+    }
+
+    #[test]
+    fn make_directory_refuses_over_existing_file() {
+        let (_dir, cfg) = fixture();
+        let err = make_directory(&cfg, "readme.txt").unwrap_err();
+        assert!(matches!(err, BrowseError::NotADirectory(_)));
+    }
+
+    #[test]
+    fn remove_directory_recursively_drops_subtree() {
+        let (dir, cfg) = fixture();
+        make_directory(&cfg, "skills/alpha/nested/deep").unwrap();
+        remove_directory(&cfg, "skills/alpha").unwrap();
+        assert!(!dir.path().join("shared/skills/alpha").exists());
+        // sibling not touched
+        assert!(dir.path().join("shared/skills/beta").is_dir());
+    }
+
+    #[test]
+    fn remove_directory_refuses_protected_top_level() {
+        let (_dir, cfg) = fixture();
+        for name in ["skills", "skill-bundles", "knowledge"] {
+            let err = remove_directory(&cfg, name).unwrap_err();
+            assert!(
+                matches!(err, BrowseError::Protected(_)),
+                "must refuse to remove protected top-level '{name}', got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn remove_directory_refuses_empty_path() {
+        let (_dir, cfg) = fixture();
+        let err = remove_directory(&cfg, "").unwrap_err();
+        assert!(matches!(err, BrowseError::Protected(_)));
+    }
+
+    #[test]
+    fn remove_directory_rejects_escape() {
+        let (_dir, cfg) = fixture();
+        let err = remove_directory(&cfg, "../etc").unwrap_err();
+        assert!(matches!(err, BrowseError::Escape(_)));
+    }
+
+    #[test]
+    fn remove_directory_errors_on_missing() {
+        let (_dir, cfg) = fixture();
+        let err = remove_directory(&cfg, "skills/ghost").unwrap_err();
+        assert!(matches!(err, BrowseError::NotFound(_)));
+    }
+
+    #[test]
+    fn remove_directory_allows_nested_under_protected_top_level() {
+        // skills/ is protected, but skills/alpha is operator-owned.
+        let (dir, cfg) = fixture();
+        remove_directory(&cfg, "skills/alpha").unwrap();
+        assert!(!dir.path().join("shared/skills/alpha").exists());
+        assert!(dir.path().join("shared/skills").is_dir());
     }
 }

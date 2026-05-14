@@ -839,6 +839,20 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
     const m = entry.path.match(/^skill[-_]bundles\.([^.]+)\.directory$/);
     return m ? m[1] : null;
   })();
+  // Any field that names a filesystem directory gets the shared/ picker.
+  // Match on the dotted-path leaf: `directory`, `dir`, or `*_dir` / `*-dir`.
+  // Secrets and `path` (overloaded for URL paths) deliberately excluded.
+  const isDirectoryField = (() => {
+    if (entry.is_secret) return false;
+    const leaf = entry.path.split('.').pop() ?? '';
+    return (
+      leaf === 'directory' ||
+      leaf === 'dir' ||
+      leaf.endsWith('-dir') ||
+      leaf.endsWith('_dir')
+    );
+  })();
+  const showPicker = skillBundleAlias !== null || isDirectoryField;
   const [pickerOpen, setPickerOpen] = useState(false);
 
   // Agent-form alias pickers. Each `agents.<alias>.<field>` row that
@@ -1118,7 +1132,7 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
             onChange={(e) => onChange(e.target.value)}
             className="input-electric w-full px-3 py-2 text-sm"
           />
-        ) : skillBundleAlias ? (
+        ) : showPicker ? (
           <div className="relative">
             <div className="flex items-center gap-2">
               <input
@@ -1127,7 +1141,11 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 className="input-electric flex-1 px-3 py-2 text-sm"
-                placeholder={`shared/skills/${skillBundleAlias}/ (default — leave empty)`}
+                placeholder={
+                  skillBundleAlias
+                    ? `shared/skills/${skillBundleAlias}/ (default — leave empty)`
+                    : 'shared/… (leave empty to use the schema default)'
+                }
               />
               <button
                 type="button"

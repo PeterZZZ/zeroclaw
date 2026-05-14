@@ -772,6 +772,23 @@ export function browseShared(path = ''): Promise<BrowseResponse> {
   return apiFetch<BrowseResponse>(`/api/browse${q}`);
 }
 
+/** Create a new directory under `<install>/shared/`. Idempotent on success. */
+export function mkdirShared(path: string): Promise<{ created: string }> {
+  return apiFetch<{ created: string }>(`/api/browse/mkdir`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+/** Recursively remove a directory under `<install>/shared/`. Backend refuses
+ *  protected top-level entries (skills, skill-bundles, knowledge). */
+export function rmdirShared(path: string): Promise<{ removed: string }> {
+  return apiFetch<{ removed: string }>(`/api/browse/rmdir`, {
+    method: 'DELETE',
+    body: JSON.stringify({ path }),
+  });
+}
+
 /**
  * Create a new entry under a map-keyed or list-shaped section. For Map
  * kinds the `key` is the new HashMap key; for List kinds it's the new

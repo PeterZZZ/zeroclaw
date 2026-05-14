@@ -7,8 +7,14 @@
 // component is presentation-only.
 
 import { useEffect, useState } from 'react';
-import { ArrowUp, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
-import { ApiError, browseShared, type BrowseEntry } from '../../lib/api';
+import { ArrowUp, FolderOpen, ChevronRight, RefreshCw, FolderPlus, Trash2 } from 'lucide-react';
+import {
+  ApiError,
+  browseShared,
+  mkdirShared,
+  rmdirShared,
+  type BrowseEntry,
+} from '../../lib/api';
 
 interface DirectoryPickerProps {
   /** Current relative path (empty = `shared/`). */
@@ -24,6 +30,10 @@ export default function DirectoryPicker({ value, onSelect, onClose }: DirectoryP
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const [newDirName, setNewDirName] = useState('');
+  const [busyDir, setBusyDir] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +58,57 @@ export default function DirectoryPicker({ value, onSelect, onClose }: DirectoryP
     return () => {
       cancelled = true;
     };
-  }, [cwd]);
+  }, [cwd, reloadTick]);
+
+  const reload = () => setReloadTick((n) => n + 1);
+
+  const handleCreate = async () => {
+    const name = newDirName.trim();
+    if (!name) return;
+    if (name.includes('/') || name.includes('\\')) {
+      setError("Directory name cannot contain '/' or '\\\\'");
+      return;
+    }
+    const target = cwd ? `${cwd}/${name}` : name;
+    setError(null);
+    try {
+      await mkdirShared(target);
+      setCreating(false);
+      setNewDirName('');
+      reload();
+    } catch (e) {
+      setError(
+        e instanceof ApiError
+          ? `[${e.envelope.code}] ${e.envelope.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    const target = cwd ? `${cwd}/${name}` : name;
+    if (!window.confirm(`Delete shared/${target}? This removes the directory and everything inside it.`)) {
+      return;
+    }
+    setBusyDir(name);
+    setError(null);
+    try {
+      await rmdirShared(target);
+      reload();
+    } catch (e) {
+      setError(
+        e instanceof ApiError
+          ? `[${e.envelope.code}] ${e.envelope.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      setBusyDir(null);
+    }
+  };
 
   const parent = (() => {
     if (!cwd) return null;
@@ -80,13 +140,62 @@ export default function DirectoryPicker({ value, onSelect, onClose }: DirectoryP
         </code>
         <button
           type="button"
-          onClick={() => setCwd(cwd)}
+          onClick={() => setCreating((v) => !v)}
+          title="New folder here"
+          className="btn-icon"
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={reload}
           title="Refresh"
           className="btn-icon"
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {creating && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 border-b"
+          style={{ borderColor: 'var(--pc-border)' }}
+        >
+          <input
+            type="text"
+            value={newDirName}
+            onChange={(e) => setNewDirName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleCreate();
+              if (e.key === 'Escape') {
+                setCreating(false);
+                setNewDirName('');
+              }
+            }}
+            placeholder="new folder name"
+            className="input-electric flex-1 px-2 py-1 text-xs"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => void handleCreate()}
+            disabled={!newDirName.trim()}
+            className="btn-electric text-xs px-2 py-1 disabled:opacity-50"
+          >
+            Create
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCreating(false);
+              setNewDirName('');
+            }}
+            className="btn-secondary text-xs px-2 py-1"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       <ul className="max-h-72 overflow-y-auto divide-y" style={{ borderColor: 'var(--pc-border)' }}>
         {parent !== null && (
@@ -127,22 +236,34 @@ export default function DirectoryPicker({ value, onSelect, onClose }: DirectoryP
           entries.map((entry) => (
             <li key={`${entry.kind}-${entry.name}`}>
               {entry.kind === 'dir' ? (
-                <button
-                  type="button"
-                  onClick={() => enterDir(entry.name)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:opacity-90"
-                  style={{ color: 'var(--pc-text-primary)' }}
-                >
-                  <FolderOpen
-                    className="h-3.5 w-3.5 flex-shrink-0"
-                    style={{ color: 'var(--pc-accent)' }}
-                  />
-                  <span className="flex-1 min-w-0 truncate">{entry.name}</span>
-                  <ChevronRight
-                    className="h-3.5 w-3.5 flex-shrink-0"
-                    style={{ color: 'var(--pc-text-muted)' }}
-                  />
-                </button>
+                <div className="flex items-stretch">
+                  <button
+                    type="button"
+                    onClick={() => enterDir(entry.name)}
+                    className="flex-1 flex items-center gap-2 px-3 py-2 text-sm text-left hover:opacity-90"
+                    style={{ color: 'var(--pc-text-primary)' }}
+                  >
+                    <FolderOpen
+                      className="h-3.5 w-3.5 flex-shrink-0"
+                      style={{ color: 'var(--pc-accent)' }}
+                    />
+                    <span className="flex-1 min-w-0 truncate">{entry.name}</span>
+                    <ChevronRight
+                      className="h-3.5 w-3.5 flex-shrink-0"
+                      style={{ color: 'var(--pc-text-muted)' }}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(entry.name)}
+                    disabled={busyDir === entry.name}
+                    title={`Delete shared/${cwd ? `${cwd}/` : ''}${entry.name}`}
+                    className="px-2 hover:opacity-100 opacity-60 disabled:opacity-30"
+                    style={{ color: 'var(--color-status-error)' }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               ) : (
                 <div
                   className="flex items-center gap-2 px-3 py-2 text-sm"

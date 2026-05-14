@@ -1272,6 +1272,8 @@ pub async fn run_gateway(
             get(api_personality::handle_get).put(api_personality::handle_put),
         )
         .route("/api/browse", get(api_browse::handle_browse))
+        .route("/api/browse/mkdir", post(api_browse::handle_browse_mkdir))
+        .route("/api/browse/rmdir", delete(api_browse::handle_browse_rmdir))
         .route("/api/skills/bundles", get(api_skills::handle_list_bundles))
         .route(
             "/api/skills/bundles/{alias}/skills",
