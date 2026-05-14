@@ -11,6 +11,13 @@ use zeroclaw_config::schema::IdentityConfig;
 
 pub struct PromptContext<'a> {
     pub workspace_dir: &'a Path,
+    /// Per-agent persona workspace (where SOUL.md / IDENTITY.md / USER.md /
+    /// AGENTS.md live). Separate from `workspace_dir`, which is the security
+    /// sandbox root and can be overridden per session by an IDE-supplied cwd.
+    /// Channel-driven runs typically pass the same path for both; gateway and
+    /// ACP sessions pass the agent's own dir here while letting `workspace_dir`
+    /// follow the session cwd.
+    pub agent_workspace_dir: &'a Path,
     pub model_name: &'a str,
     pub tools: &'a [Box<dyn Tool>],
     pub skills: &'a [Skill],
@@ -97,7 +104,7 @@ impl PromptSection for IdentitySection {
         let mut has_aieos = false;
         if let Some(config) = ctx.identity_config
             && identity::is_aieos_configured(config)
-            && let Ok(Some(aieos)) = identity::load_aieos_identity(config, ctx.workspace_dir)
+            && let Ok(Some(aieos)) = identity::load_aieos_identity(config, ctx.agent_workspace_dir)
         {
             let rendered = identity::aieos_to_system_prompt(&aieos);
             if !rendered.is_empty() {
@@ -113,8 +120,7 @@ impl PromptSection for IdentitySection {
             );
         }
 
-        // Use the personality module for structured file loading.
-        let profile = personality::load_personality(ctx.workspace_dir);
+        let profile = personality::load_personality(ctx.agent_workspace_dir);
         prompt.push_str(&profile.render());
 
         Ok(prompt)
@@ -357,6 +363,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![];
         let ctx = PromptContext {
             workspace_dir: &workspace,
+            agent_workspace_dir: &workspace,
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -389,6 +396,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![Box::new(TestTool)];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -411,6 +419,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![Box::new(TestTool)];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -433,6 +442,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -478,6 +488,7 @@ mod tests {
 
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &skills,
@@ -521,6 +532,7 @@ mod tests {
 
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp/workspace"),
+            agent_workspace_dir: Path::new("/tmp/workspace"),
             model_name: "test-model",
             tools: &tools,
             skills: &skills,
@@ -550,6 +562,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -592,6 +605,7 @@ mod tests {
         }];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp/workspace"),
+            agent_workspace_dir: Path::new("/tmp/workspace"),
             model_name: "test-model",
             tools: &tools,
             skills: &skills,
@@ -627,6 +641,7 @@ mod tests {
             .to_string();
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -663,6 +678,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -691,6 +707,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],
@@ -727,6 +744,7 @@ mod tests {
         let tools: Vec<Box<dyn Tool>> = vec![];
         let ctx = PromptContext {
             workspace_dir: Path::new("/tmp"),
+            agent_workspace_dir: Path::new("/tmp"),
             model_name: "test-model",
             tools: &tools,
             skills: &[],

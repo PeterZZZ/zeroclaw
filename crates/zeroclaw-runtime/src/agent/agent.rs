@@ -38,6 +38,11 @@ pub struct Agent {
     model_name: String,
     temperature: f64,
     workspace_dir: std::path::PathBuf,
+    /// Per-agent persona workspace (`<install>/agents/<alias>/workspace/`).
+    /// Holds IDENTITY.md / SOUL.md / USER.md / AGENTS.md. Distinct from
+    /// `workspace_dir`, which is the security sandbox root and can be the
+    /// session cwd for IDE-driven sessions (ACP, gateway WS).
+    agent_workspace_dir: std::path::PathBuf,
     identity_config: zeroclaw_config::schema::IdentityConfig,
     skills: Vec<crate::skills::Skill>,
     skills_prompt_mode: zeroclaw_config::schema::SkillsPromptInjectionMode,
@@ -137,6 +142,7 @@ pub struct AgentBuilder {
     model_name: Option<String>,
     temperature: Option<f64>,
     workspace_dir: Option<std::path::PathBuf>,
+    agent_workspace_dir: Option<std::path::PathBuf>,
     identity_config: Option<zeroclaw_config::schema::IdentityConfig>,
     skills: Option<Vec<crate::skills::Skill>>,
     skills_prompt_mode: Option<zeroclaw_config::schema::SkillsPromptInjectionMode>,
@@ -175,6 +181,7 @@ impl AgentBuilder {
             model_name: None,
             temperature: None,
             workspace_dir: None,
+            agent_workspace_dir: None,
             identity_config: None,
             skills: None,
             skills_prompt_mode: None,
@@ -253,6 +260,11 @@ impl AgentBuilder {
 
     pub fn workspace_dir(mut self, workspace_dir: std::path::PathBuf) -> Self {
         self.workspace_dir = Some(workspace_dir);
+        self
+    }
+
+    pub fn agent_workspace_dir(mut self, agent_workspace_dir: std::path::PathBuf) -> Self {
+        self.agent_workspace_dir = Some(agent_workspace_dir);
         self
     }
 
@@ -388,7 +400,13 @@ impl AgentBuilder {
             temperature: self.temperature.unwrap_or(0.7),
             workspace_dir: self
                 .workspace_dir
+                .clone()
                 .unwrap_or_else(|| std::path::PathBuf::from(".")),
+            agent_workspace_dir: self.agent_workspace_dir.unwrap_or_else(|| {
+                self.workspace_dir
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+            }),
             identity_config: self.identity_config.unwrap_or_default(),
             skills: self.skills.unwrap_or_default(),
             skills_prompt_mode: self.skills_prompt_mode.unwrap_or_default(),
@@ -823,6 +841,7 @@ impl Agent {
                     .unwrap_or(0.7),
             )
             .workspace_dir(security.workspace_dir.clone())
+            .agent_workspace_dir(agent_workspace.clone())
             .classification_config(config.query_classification.clone())
             .available_hints(available_hints)
             .route_model_by_hint(route_model_by_hint)
@@ -908,6 +927,7 @@ impl Agent {
         let instructions = self.tool_dispatcher.prompt_instructions(&self.tools);
         let ctx = PromptContext {
             workspace_dir: &self.workspace_dir,
+            agent_workspace_dir: &self.agent_workspace_dir,
             model_name: &self.model_name,
             tools: &self.tools,
             skills: &self.skills,

@@ -1424,6 +1424,7 @@ impl DelegateTool {
         // Build structured operational context using SystemPromptBuilder sections.
         let ctx = PromptContext {
             workspace_dir,
+            agent_workspace_dir: workspace_dir,
             model_name,
             tools: sub_tools,
             skills: &skills,

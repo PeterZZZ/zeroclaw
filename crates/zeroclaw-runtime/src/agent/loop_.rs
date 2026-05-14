@@ -2591,8 +2591,9 @@ pub async fn run(
         None
     };
     let native_tools = model_provider.supports_native_tools();
+    let agent_workspace = config.agent_workspace_dir(agent_alias);
     let mut system_prompt = crate::agent::system_prompt::build_system_prompt_with_mode_and_autonomy(
-        &config.data_dir,
+        &agent_workspace,
         &model_name,
         &tool_descs,
         &skills,
@@ -3558,8 +3559,9 @@ pub async fn process_message(
         None
     };
     let native_tools = model_provider.supports_native_tools();
+    let agent_workspace = config.agent_workspace_dir(agent_alias);
     let mut system_prompt = crate::agent::system_prompt::build_system_prompt_with_mode_and_autonomy(
-        &config.data_dir,
+        &agent_workspace,
         &model_name,
         &tool_descs,
         &skills,
