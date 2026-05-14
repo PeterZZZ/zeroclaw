@@ -129,20 +129,34 @@ export interface CliTool {
 }
 
 export interface Session {
+  /** Display form: `gw_` stripped for gateway sessions, full composite for
+   * channel-driven sessions. */
   session_id: string;
+  /** Full DB key. Use this when calling DELETE / messages / abort
+   * endpoints — `session_id` is for display only. */
+  session_key: string;
   created_at: string;
   last_activity: string;
   message_count: number;
   name?: string;
-  /** Alias of the agent that owned this session (HashMap key in
-   * `config.agents`). `null` for sessions persisted before per-agent
-   * attribution, or for backends without per-agent tracking. */
+  /** Alias of the agent that owned this session. `null` for legacy rows
+   * with no attribution at all (channel_id null too). */
   agent_alias: string | null;
+  /** Owning channel as `<type>.<alias>` for channel-driven sessions
+   * (Discord, Matrix, …). `null` for gateway WebSocket sessions. */
+  channel_id: string | null;
 }
 
 export interface ChannelDetail {
+  /** Composite `<type>.<alias>` identifier (v0.8.0). */
   name: string;
+  /** Channel type as the schema emits it (kebab; e.g. `"discord"`). */
   type: string;
+  /** Per-alias HashMap key (e.g. `"loneliness"`). */
+  alias: string;
+  /** Agent whose `channels` list contains `<type>.<alias>`, or `null`
+   * when the block is orphaned. */
+  owning_agent: string | null;
   enabled: boolean;
   status: 'active' | 'inactive' | 'error';
   message_count: number;
@@ -188,6 +202,9 @@ export interface WsMessage {
 export interface SessionMessageRow {
   role: string;
   content: string;
+  /** RFC 3339 timestamp recorded when the row was persisted. `null` for
+   * backends that don't stamp per-row timestamps (JSONL / in-memory). */
+  created_at: string | null;
 }
 
 export interface SessionMessagesResponse {

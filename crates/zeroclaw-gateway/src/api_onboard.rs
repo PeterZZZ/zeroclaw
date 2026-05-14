@@ -936,6 +936,24 @@ pub async fn handle_section_select(
                 Ok(c) => c,
                 Err(resp) => return resp,
             };
+            // The per-channel-type struct's `enabled` field defaults to
+            // `false` (pre-v0.8.0 paste-safety rationale: don't fire a
+            // listener on a half-pasted block). For wizard-driven creation
+            // the operator has just consciously added the alias, so flip
+            // the new entry's `enabled` to true. Re-selecting an existing
+            // alias is a no-op (created=false), so user-edited values are
+            // never trampled.
+            if created {
+                let enabled_path = format!("channels.{key}.{alias}.enabled");
+                if let Err(e) = working.set_prop_persistent(&enabled_path, "true") {
+                    tracing::warn!(
+                        target: "config",
+                        path = %enabled_path,
+                        error = %e,
+                        "failed to default-enable newly created channel; operator must toggle manually"
+                    );
+                }
+            }
             (format!("channels.{key}.{alias}"), created)
         }
         Section::Agents

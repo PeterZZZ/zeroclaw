@@ -258,6 +258,36 @@ impl SessionBackend for SqliteSessionBackend {
         rows.filter_map(|r| r.ok()).collect()
     }
 
+    fn load_with_timestamps(&self, session_key: &str) -> Vec<crate::session_backend::TimestampedMessage> {
+        use crate::session_backend::TimestampedMessage;
+        let conn = self.conn.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT role, content, created_at FROM sessions WHERE session_key = ?1 ORDER BY id ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        let rows = match stmt.query_map(params![session_key], |row| {
+            let role: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let created_at_raw: Option<String> = row.get(2).ok();
+            let created_at = created_at_raw
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            Ok(TimestampedMessage {
+                message: ChatMessage { role, content },
+                created_at,
+            })
+        }) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
     fn append(&self, session_key: &str, message: &ChatMessage) -> std::io::Result<()> {
         let conn = self.conn.lock();
         let now = Utc::now().to_rfc3339();

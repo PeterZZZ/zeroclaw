@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Bot,
   Brain,
   Search,
   Plus,
@@ -10,8 +11,9 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import type { MemoryEntry } from '@/types/api';
-import { getMemory, storeMemory, deleteMemory } from '@/lib/api';
+import { getMemory, getMapKeys, storeMemory, deleteMemory } from '@/lib/api';
 import { t } from '@/lib/i18n';
+import EntityLink from '@/components/EntityLink';
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -30,6 +32,8 @@ export default function Memory() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [agentFilter, setAgentFilter] = useState('');
+  const [knownAgents, setKnownAgents] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -53,9 +57,9 @@ export default function Memory() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const fetchEntries = (q?: string, cat?: string) => {
+  const fetchEntries = (q?: string, cat?: string, agent?: string) => {
     setLoading(true);
-    getMemory(q || undefined, cat || undefined)
+    getMemory(q || undefined, cat || undefined, agent || undefined)
     .then(setEntries)
     .catch((err) => setError(err.message))
     .finally(() => setLoading(false));
@@ -63,10 +67,16 @@ export default function Memory() {
 
   useEffect(() => {
     fetchEntries();
+    // Populate the agent filter dropdown from the configured agents map.
+    getMapKeys('agents')
+      .then((r) => setKnownAgents(r.keys))
+      .catch(() => {
+        /* dropdown stays empty; the filter still works for hand-typed values */
+      });
   }, []);
 
   const handleSearch = () => {
-    fetchEntries(search, categoryFilter);
+    fetchEntries(search, categoryFilter, agentFilter);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -133,6 +143,15 @@ export default function Memory() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: 'var(--pc-text-faint)' }} />
           <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={handleKeyDown} placeholder={t('memory.search_placeholder')} className="input-electric w-full pl-10 pr-4 py-2.5 text-sm" />
+        </div>
+        <div className="relative">
+          <Bot className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: 'var(--pc-text-faint)' }} />
+          <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} className="input-electric pl-10 pr-8 py-2.5 text-sm appearance-none cursor-pointer" title="Filter by owning agent">
+            <option value="">All agents</option>
+            {knownAgents.map((alias) => (
+              <option key={alias} value={alias}>{alias}</option>
+            ))}
+          </select>
         </div>
         <div className="relative">
           <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: 'var(--pc-text-faint)' }} />
@@ -228,6 +247,7 @@ export default function Memory() {
             <thead>
               <tr>
                 <th>{t('memory.key')}</th>
+                <th>Agent</th>
                 <th>{t('memory.content')}</th>
                 <th>{t('memory.category')}</th>
                 <th>{t('memory.timestamp')}</th>
@@ -239,6 +259,35 @@ export default function Memory() {
                 <tr key={entry.id}>
                   <td className="font-mono text-xs" style={{ color: 'var(--pc-text-primary)' }}>
                     {entry.key}
+                  </td>
+                  <td className="text-xs whitespace-nowrap">
+                    {entry.agent_alias ? (
+                      <EntityLink
+                        kind="agent"
+                        id={entry.agent_alias}
+                        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border hover:underline"
+                        style={{
+                          borderColor: 'rgba(var(--pc-accent-rgb), 0.20)',
+                          background: 'rgba(var(--pc-accent-rgb), 0.10)',
+                          color: 'var(--pc-accent-light)',
+                        }}
+                        title={`Open agents.${entry.agent_alias} config`}
+                      >
+                        {entry.agent_alias}
+                      </EntityLink>
+                    ) : (
+                      <span
+                        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border"
+                        style={{
+                          borderColor: 'rgba(255, 170, 0, 0.20)',
+                          background: 'rgba(255, 170, 0, 0.08)',
+                          color: 'var(--color-status-warning)',
+                        }}
+                        title="Backend does not stamp agent_alias on this row (Markdown / Lucid / legacy)"
+                      >
+                        unattributed
+                      </span>
+                    )}
                   </td>
                   <td className="max-w-[300px] text-sm" style={{ color: 'var(--pc-text-secondary)' }}>
                     <span title={entry.content}>

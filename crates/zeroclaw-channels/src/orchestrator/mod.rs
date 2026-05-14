@@ -2586,6 +2586,7 @@ fn strip_isolated_tool_json_artifacts(message: &str, known_tool_names: &HashSet<
 
 fn spawn_supervised_listener(
     ch: Arc<dyn Channel>,
+    alias: Option<String>,
     tx: tokio::sync::mpsc::Sender<zeroclaw_api::channel::ChannelMessage>,
     initial_backoff_secs: u64,
     max_backoff_secs: u64,
@@ -2593,6 +2594,7 @@ fn spawn_supervised_listener(
 ) -> tokio::task::JoinHandle<()> {
     spawn_supervised_listener_with_health_interval(
         ch,
+        alias,
         tx,
         initial_backoff_secs,
         max_backoff_secs,
@@ -2603,6 +2605,7 @@ fn spawn_supervised_listener(
 
 fn spawn_supervised_listener_with_health_interval(
     ch: Arc<dyn Channel>,
+    alias: Option<String>,
     tx: tokio::sync::mpsc::Sender<zeroclaw_api::channel::ChannelMessage>,
     initial_backoff_secs: u64,
     max_backoff_secs: u64,
@@ -2616,7 +2619,13 @@ fn spawn_supervised_listener_with_health_interval(
     };
 
     tokio::spawn(async move {
-        let component = format!("channel:{}", ch.name());
+        // Per-alias component name so the health snapshot exposes one row
+        // per `[channels.<type>.<alias>]` block. Previously every alias of
+        // a type collapsed onto `channel:<type>` and the entries raced.
+        let component = match alias.as_deref() {
+            Some(a) if !a.is_empty() => format!("channel:{}.{}", ch.name(), a),
+            _ => format!("channel:{}", ch.name()),
+        };
         let mut backoff = initial_backoff_secs.max(1);
         let max_backoff = max_backoff_secs.max(backoff);
 
@@ -6544,9 +6553,10 @@ pub async fn start_channels(
             let (tx, rx) =
                 tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(100);
 
-            for ch in &channels {
+            for cc in &configured_channels {
                 listener_handles.push(spawn_supervised_listener(
-                    ch.clone(),
+                    cc.channel.clone(),
+                    cc.alias.clone(),
                     tx.clone(),
                     initial_backoff_secs,
                     max_backoff_secs,
@@ -13134,7 +13144,7 @@ This is an example JSON object for profile settings."#;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(1);
         let cancel = tokio_util::sync::CancellationToken::new();
-        let handle = spawn_supervised_listener(channel, tx, 1, 1, cancel.clone());
+        let handle = spawn_supervised_listener(channel, None, tx, 1, 1, cancel.clone());
 
         tokio::time::sleep(Duration::from_millis(80)).await;
         drop(rx);
@@ -13168,6 +13178,7 @@ This is an example JSON object for profile settings."#;
         let cancel = tokio_util::sync::CancellationToken::new();
         let handle = spawn_supervised_listener_with_health_interval(
             channel,
+            None,
             tx,
             1,
             1,

@@ -137,10 +137,13 @@ pub async fn handle_api_status(
     let config = state.config.read().clone();
     let health = zeroclaw_runtime::health::snapshot();
 
+    // Per-alias map keyed by composite `<type>.<alias>` (v0.8.0). Every
+    // populated `[channels.<type>.<alias>]` is a separate dashboard row;
+    // collapsing them to one-per-type was a pre-v0.8.0 holdover.
     let mut channels = serde_json::Map::new();
-
-    for (channel, present) in config.channels.channels() {
-        channels.insert(channel.name().to_string(), serde_json::Value::Bool(present));
+    for info in config.channels_by_alias() {
+        let composite = format!("{}.{}", info.channel_type, info.alias);
+        channels.insert(composite, serde_json::Value::Bool(true));
     }
 
     let locale = config
@@ -991,15 +994,18 @@ pub async fn handle_api_channels(
     }
 
     let config = state.config.read().clone();
+    // One entry per `[channels.<type>.<alias>]` block (v0.8.0). Owning
+    // agent comes from the agents.<alias>.channels reverse lookup.
     let channels: Vec<serde_json::Value> = config
-        .channels
-        .channels()
+        .channels_by_alias()
         .into_iter()
-        .filter(|(_, present)| *present)
-        .map(|(ch, _)| {
+        .map(|info| {
+            let composite = format!("{}.{}", info.channel_type, info.alias);
             serde_json::json!({
-                "name": ch.name(),
-                "type": ch.name(),
+                "name": composite,
+                "type": info.channel_type,
+                "alias": info.alias,
+                "owning_agent": info.owning_agent,
                 "enabled": true,
                 "status": "active",
                 "message_count": 0,
@@ -1046,26 +1052,51 @@ pub async fn handle_api_sessions_list(
         .into_response();
     };
 
+    // Include every session that's attributable in v0.8.0 (agent_alias
+    // stamped, or a channel_id that resolves to an owning agent).
+    // Pre-migration rows with neither set are skipped as orphans.
+    let config = state.config.read().clone();
     let all_metadata = backend.list_sessions_with_metadata();
-    let gw_sessions: Vec<serde_json::Value> = all_metadata
+    let sessions: Vec<serde_json::Value> = all_metadata
         .into_iter()
-        .filter_map(|meta| {
-            let session_id = meta.key.strip_prefix("gw_")?;
+        .filter(|meta| meta.agent_alias.is_some() || meta.channel_id.is_some())
+        .map(|meta| {
+            // Resolve owning agent: prefer the stamped alias, otherwise
+            // reverse-look-up via channel_id (= `<type>.<alias>`) against
+            // each agent's `channels` list.
+            let agent_alias = meta.agent_alias.clone().or_else(|| {
+                meta.channel_id
+                    .as_deref()
+                    .and_then(|c| config.agent_for_channel(c))
+                    .map(str::to_string)
+            });
+            // Drop the gw_ prefix for display; channel keys stay as-is so
+            // the frontend can show the channel context inline.
+            let session_id = meta
+                .key
+                .strip_prefix("gw_")
+                .map(str::to_string)
+                .unwrap_or_else(|| meta.key.clone());
             let mut entry = serde_json::json!({
+                // Display form: `gw_` stripped for gateway sessions, full
+                // composite for channel-driven sessions.
                 "session_id": session_id,
+                // Full DB key for API operations (delete, messages, abort).
+                "session_key": meta.key.clone(),
                 "created_at": meta.created_at.to_rfc3339(),
                 "last_activity": meta.last_activity.to_rfc3339(),
                 "message_count": meta.message_count,
-                "agent_alias": meta.agent_alias,
+                "agent_alias": agent_alias,
+                "channel_id": meta.channel_id,
             });
             if let Some(name) = meta.name {
                 entry["name"] = serde_json::Value::String(name);
             }
-            Some(entry)
+            entry
         })
         .collect();
 
-    Json(serde_json::json!({ "sessions": gw_sessions })).into_response()
+    Json(serde_json::json!({ "sessions": sessions })).into_response()
 }
 
 /// GET /api/sessions/{id}/messages — load persisted gateway WebSocket chat transcript
@@ -1087,11 +1118,24 @@ pub async fn handle_api_session_messages(
         .into_response();
     };
 
-    let session_key = format!("gw_{id}");
-    let msgs = backend.load(&session_key);
+    // Accept either the full DB key (channel-driven sessions like
+    // `discord.clamps_…`) or the stripped form (legacy callers that pass
+    // just the UUID for gateway sessions).
+    let session_key = if id.starts_with("gw_") || id.contains('_') {
+        id.clone()
+    } else {
+        format!("gw_{id}")
+    };
+    let msgs = backend.load_with_timestamps(&session_key);
     let messages: Vec<serde_json::Value> = msgs
         .into_iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .map(|m| {
+            serde_json::json!({
+                "role": m.message.role,
+                "content": m.message.content,
+                "created_at": m.created_at.map(|dt| dt.to_rfc3339()),
+            })
+        })
         .collect();
 
     Json(serde_json::json!({
@@ -1120,7 +1164,11 @@ pub async fn handle_api_session_delete(
             .into_response();
     };
 
-    let session_key = format!("gw_{id}");
+    let session_key = if id.starts_with("gw_") || id.contains('_') {
+        id.clone()
+    } else {
+        format!("gw_{id}")
+    };
 
     // If a turn is in flight for this session, cancel it and evict the entry
     // from `cancel_tokens` here rather than leaving the WebSocket handler's

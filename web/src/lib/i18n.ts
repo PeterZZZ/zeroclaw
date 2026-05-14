@@ -731,6 +731,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'dashboard.tab_overview': 'Overview',
     'dashboard.tab_sessions': 'Sessions',
     'dashboard.tab_channels': 'Channels',
+    'dashboard.tab_health': 'Health',
+    'dashboard.tab_cost': 'Cost',
     'dashboard.sessions_title': 'Active Sessions',
     'dashboard.no_sessions': 'No active sessions',
     'dashboard.session_id': 'Session ID',

@@ -1129,10 +1129,12 @@ export function runDoctor(): Promise<DiagResult[]> {
 export function getMemory(
   query?: string,
   category?: string,
+  agent?: string,
 ): Promise<MemoryEntry[]> {
   const params = new URLSearchParams();
   if (query) params.set('query', query);
   if (category) params.set('category', category);
+  if (agent) params.set('agent', agent);
   const qs = params.toString();
   return apiFetch<MemoryEntry[] | { entries: MemoryEntry[] }>(`/api/memory${qs ? `?${qs}` : ''}`).then(
     (data) => {
@@ -1197,6 +1199,14 @@ export function getSession(id: string): Promise<Session> {
 export function getSessionMessages(id: string): Promise<SessionMessagesResponse> {
   return apiFetch<SessionMessagesResponse>(
     `/api/sessions/${encodeURIComponent(id)}/messages`,
+  );
+}
+
+/** Delete a persisted session by its full DB key. */
+export function deleteSession(sessionKey: string): Promise<{ deleted: boolean }> {
+  return apiFetch<{ deleted: boolean }>(
+    `/api/sessions/${encodeURIComponent(sessionKey)}`,
+    { method: 'DELETE' },
   );
 }
 

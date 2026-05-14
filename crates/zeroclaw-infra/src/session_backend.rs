@@ -60,12 +60,34 @@ pub struct SessionQuery {
     pub limit: Option<usize>,
 }
 
+/// One persisted message with the optional `created_at` the backend
+/// stamped on it. JSONL / in-memory backends return `None`; SQLite
+/// returns the row's `created_at` column.
+#[derive(Debug, Clone)]
+pub struct TimestampedMessage {
+    pub message: ChatMessage,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 /// Trait for session persistence backends.
 ///
 /// Implementations must be `Send + Sync` for sharing across async tasks.
 pub trait SessionBackend: Send + Sync {
     /// Load all messages for a session. Returns empty vec if session doesn't exist.
     fn load(&self, session_key: &str) -> Vec<ChatMessage>;
+
+    /// Same as `load`, but each row carries its persisted `created_at`
+    /// when the backend has one. Default impl falls back to `load`
+    /// without timestamps so non-SQLite backends keep working.
+    fn load_with_timestamps(&self, session_key: &str) -> Vec<TimestampedMessage> {
+        self.load(session_key)
+            .into_iter()
+            .map(|message| TimestampedMessage {
+                message,
+                created_at: None,
+            })
+            .collect()
+    }
 
     /// Append a single message to a session.
     fn append(&self, session_key: &str, message: &ChatMessage) -> std::io::Result<()>;

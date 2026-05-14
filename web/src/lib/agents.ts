@@ -5,18 +5,47 @@ export interface AgentSummary {
   enabled: boolean;
   modelProvider: string;
   channels: string[];
-  /** Number of WebSocket sessions attributed to this agent. */
+  riskProfile: string;
+  runtimeProfile: string;
+  /** Memory backend kind from `[agents.<alias>.memory].backend`. Empty
+   * string when unset (the agent inherits the default — sqlite). */
+  memoryBackend: string;
+  skillBundles: string[];
+  knowledgeBundles: string[];
+  mcpBundles: string[];
+  /** Cron alias list from `[agents.<alias>].cron_jobs`. */
+  cronJobs: string[];
+  /** Peer-group aliases this agent appears in (reverse-resolved by
+   * walking `[peer-groups.<alias>].agents`). */
+  peerGroups: string[];
   sessionCount: number;
-  /** ISO timestamp of the most recent session activity for this agent, if any. */
   lastActivity: string | null;
-  /** Month-to-date USD spend attributed to this agent. `null` when
-   * `[cost].track_per_agent = false` or the rollup is unavailable. */
   monthCostUsd: number | null;
 }
 
 function entryValue(entry: { populated?: boolean; value?: unknown }): unknown {
   if (!entry.populated) return undefined;
   return entry.value;
+}
+
+// `listProps` returns array values as a JSON-encoded string (the macro's
+// display_value), not a parsed array. Decode here so callers can `Array.isArray`.
+function entryAsStringArray(entry: { populated?: boolean; value?: unknown } | undefined): string[] {
+  if (!entry || !entry.populated) return [];
+  const raw = entry.value;
+  if (Array.isArray(raw)) return raw.map((v) => String(v));
+  if (typeof raw !== 'string' || raw.length === 0) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map((v) => String(v));
+  } catch {
+    // fall through to comma/newline split for hand-typed display formats
+  }
+  return raw
+    .replace(/^\[|\]$/g, '')
+    .split(/[,\n]/)
+    .map((s) => s.trim().replace(/^"|"$/g, ''))
+    .filter((s) => s.length > 0);
 }
 
 /**
@@ -34,24 +63,50 @@ export async function loadAgentSummaries(): Promise<AgentSummary[]> {
   const sessionsPromise = getSessions().catch(() => []);
   const costPromise = getCost().catch(() => null);
 
+  // Reverse-build agent → peer-groups in parallel with the per-agent walks.
+  // listProps('peer-groups.<alias>.agents') is the field that names members.
+  const peerGroupsPromise = getMapKeys('peer-groups')
+    .then(async ({ keys: pgKeys }) => {
+      const memberships: Record<string, string[]> = {};
+      await Promise.all(
+        pgKeys.map(async (pg) => {
+          const { entries } = await listProps(`peer-groups.${pg}`);
+          const agentsEntry = entries.find(
+            (e) => e.path === `peer-groups.${pg}.agents`,
+          );
+          for (const a of entryAsStringArray(agentsEntry)) {
+            (memberships[a] ||= []).push(pg);
+          }
+        }),
+      );
+      return memberships;
+    })
+    .catch(() => ({}) as Record<string, string[]>);
+
   const summaries = await Promise.all(
     keys.map(async (alias): Promise<AgentSummary> => {
       const { entries } = await listProps(`agents.${alias}`);
-      const lookup = (suffix: string) =>
-        entries.find((e) => e.path === `agents.${alias}.${suffix}`);
-      const enabledEntry = lookup('enabled');
-      const modelProviderEntry = lookup('model_provider');
-      const channelsEntry = lookup('channels');
+      // Configurable-macro paths are kebab-case (snake field names
+      // converted via snake_to_kebab in zeroclaw-macros).
+      const lookup = (suffixKebab: string) =>
+        entries.find((e) => e.path === `agents.${alias}.${suffixKebab}`);
+      const stringField = (suffixKebab: string): string => {
+        const raw = entryValue(lookup(suffixKebab) ?? { populated: false });
+        return typeof raw === 'string' ? raw : '';
+      };
       return {
         alias,
-        enabled: Boolean(entryValue(enabledEntry ?? { populated: false })),
-        modelProvider:
-          typeof entryValue(modelProviderEntry ?? { populated: false }) === 'string'
-            ? (entryValue(modelProviderEntry!) as string)
-            : '',
-        channels: Array.isArray(entryValue(channelsEntry ?? { populated: false }))
-          ? (entryValue(channelsEntry!) as string[])
-          : [],
+        enabled: Boolean(entryValue(lookup('enabled') ?? { populated: false })),
+        modelProvider: stringField('model-provider'),
+        channels: entryAsStringArray(lookup('channels')),
+        riskProfile: stringField('risk-profile'),
+        runtimeProfile: stringField('runtime-profile'),
+        memoryBackend: stringField('memory.backend'),
+        skillBundles: entryAsStringArray(lookup('skill-bundles')),
+        knowledgeBundles: entryAsStringArray(lookup('knowledge-bundles')),
+        mcpBundles: entryAsStringArray(lookup('mcp-bundles')),
+        cronJobs: entryAsStringArray(lookup('cron-jobs')),
+        peerGroups: [],
         sessionCount: 0,
         lastActivity: null,
         monthCostUsd: null,
@@ -59,7 +114,11 @@ export async function loadAgentSummaries(): Promise<AgentSummary[]> {
     }),
   );
 
-  const [sessions, cost] = await Promise.all([sessionsPromise, costPromise]);
+  const [sessions, cost, peerGroups] = await Promise.all([
+    sessionsPromise,
+    costPromise,
+    peerGroupsPromise,
+  ]);
   for (const summary of summaries) {
     const owned = sessions.filter((s) => s.agent_alias === summary.alias);
     summary.sessionCount = owned.length;
@@ -70,6 +129,7 @@ export async function loadAgentSummaries(): Promise<AgentSummary[]> {
 
     const agentCost = cost?.by_agent?.[summary.alias];
     summary.monthCostUsd = agentCost ? agentCost.cost_usd : null;
+    summary.peerGroups = peerGroups[summary.alias] ?? [];
   }
 
   return summaries;

@@ -2922,6 +2922,22 @@ impl Default for AliasedAgentConfig {
     }
 }
 
+/// One `[channels.<type>.<alias>]` block, with the owning agent (if any)
+/// resolved via `agents.<agent>.channels`. Returned by
+/// `Config::channels_by_alias()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct ChannelAliasInfo {
+    /// Channel type as the schema emits it (kebab; e.g. `"discord"`,
+    /// `"nextcloud-talk"`).
+    pub channel_type: String,
+    /// Per-alias HashMap key (e.g. `"loneliness"`).
+    pub alias: String,
+    /// The agent whose `channels` list contains `<type>.<alias>`. `None`
+    /// when the block is orphaned (config error caught at startup).
+    pub owning_agent: Option<String>,
+}
+
 impl Config {
     /// Return the first concrete `model` string available for use as a
     /// default. Scans every typed slot's entries (iteration order is
@@ -3053,6 +3069,34 @@ impl Config {
             .iter()
             .find(|(_, agent)| agent.enabled && agent.channels.iter().any(|c| c == channel_alias))
             .map(|(alias, _)| alias.as_str())
+    }
+
+    /// Schema-walk: every populated `[channels.<type>.<alias>]` block.
+    /// Type names come from the `prop_fields()` enumeration (kebab as the
+    /// macro emits them) so adding a new channel type via the macro
+    /// surfaces here without touching this code. Alias keys are HashMap
+    /// keys; not kebab-converted.
+    #[must_use]
+    pub fn channels_by_alias(&self) -> Vec<ChannelAliasInfo> {
+        use std::collections::BTreeSet;
+        let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+        for field in self.prop_fields() {
+            let parts: Vec<&str> = field.name.split('.').collect();
+            if parts.len() >= 4 && parts[0] == "channels" {
+                seen.insert((parts[1].to_string(), parts[2].to_string()));
+            }
+        }
+        seen.into_iter()
+            .map(|(channel_type, alias)| {
+                let composite = format!("{channel_type}.{alias}");
+                let owning_agent = self.agent_for_channel(&composite).map(str::to_string);
+                ChannelAliasInfo {
+                    channel_type,
+                    alias,
+                    owning_agent,
+                }
+            })
+            .collect()
     }
 
     /// Reverse-lookup the agent alias that owns a declaratively-configured
