@@ -131,6 +131,16 @@ fn default_source() -> String {
     "imperative".to_string()
 }
 
+/// Default agent alias used when a cron job's `agent_alias` can't be
+/// resolved. Every v0.8.0 install carries an `[agents.default]` row from
+/// migration, so this is always a valid binding — unresolvable rows
+/// fall back here rather than being orphaned or silently disabled.
+pub const DEFAULT_AGENT_ALIAS: &str = "default";
+
+fn default_agent_alias() -> String {
+    DEFAULT_AGENT_ALIAS.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
     pub id: String,
@@ -142,6 +152,11 @@ pub struct CronJob {
     pub job_type: JobType,
     pub session_target: SessionTarget,
     pub model: Option<String>,
+    /// Agent alias this job runs under. Backfilled to
+    /// [`DEFAULT_AGENT_ALIAS`] for legacy rows that don't carry one;
+    /// new rows are required to set it explicitly.
+    #[serde(default = "default_agent_alias")]
+    pub agent_alias: String,
     pub enabled: bool,
     pub delivery: DeliveryConfig,
     pub delete_after_run: bool,

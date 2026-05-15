@@ -63,6 +63,7 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
             if prompt {
                 let job = add_agent_job(
                     config,
+                    &agent_alias,
                     None,
                     schedule,
                     &command,
@@ -107,6 +108,7 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
             if prompt {
                 let job = add_agent_job(
                     config,
+                    &agent_alias,
                     None,
                     schedule,
                     &command,
@@ -146,6 +148,7 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
             if prompt {
                 let job = add_agent_job(
                     config,
+                    &agent_alias,
                     None,
                     schedule,
                     &command,
@@ -189,6 +192,7 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
                 let schedule = Schedule::At { at };
                 let job = add_agent_job(
                     config,
+                    &agent_alias,
                     None,
                     schedule,
                     &command,

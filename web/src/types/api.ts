@@ -54,6 +54,13 @@ export interface ToolSpec {
   parameters: any;
 }
 
+export interface CronDeliveryConfig {
+  mode: string;
+  channel?: string | null;
+  to?: string | null;
+  best_effort?: boolean;
+}
+
 export interface CronJob {
   id: string;
   name: string | null;
@@ -63,12 +70,13 @@ export interface CronJob {
   job_type: string;
   schedule: unknown;
   enabled: boolean;
-  delivery: unknown;
+  delivery: CronDeliveryConfig;
   delete_after_run: boolean;
   session_target: string | null;
   model: string | null;
   allowed_tools: string[] | null;
   source: string | null;
+  agent_alias: string;
   created_at: string;
   next_run: string;
   last_run: string | null;

@@ -98,15 +98,38 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
     }
 }
 
-/// Resolve which agent owns a given cron job. Declarative jobs are owned
-/// by the agent listing the cron alias in its `cron_jobs` field.
-/// Imperative jobs (created at runtime via the `cron_add` tool) currently
-/// have UUID ids that won't match any agent's `cron_jobs`; the scheduler
-/// skips those with a warning and the user must explicitly bind them by
-/// adding the alias to an agent's `cron_jobs` list (or carry the owning
-/// agent on the DB row — tracked as a follow-up).
+/// Resolve which agent owns a given cron job. Lookup order:
+///
+/// 1. The row's persisted `agent_alias` field, when it names a
+///    configured agent.
+/// 2. Reverse-resolve via `[agents.<x>].cron_jobs` (declarative path —
+///    every alias that lists the cron alias claims ownership).
+/// 3. `DEFAULT_AGENT_ALIAS` when it names a configured agent (the
+///    `[agents.default]` row is guaranteed to exist by config
+///    migration in v0.8.0).
+///
+/// Returns `None` only when none of the above resolve, which means the
+/// install has neither the row's recorded owner nor `[agents.default]`
+/// nor any declarative claim — a misconfigured state worth surfacing
+/// loudly. Callers (process_due_jobs, execute_job_now) log when this
+/// happens and skip the job rather than crashing the scheduler loop.
 fn resolve_owning_agent<'a>(config: &'a Config, job: &CronJob) -> Option<&'a str> {
-    config.agent_for_cron_job(&job.id)
+    if !job.agent_alias.is_empty()
+        && let Some((alias, _)) = config
+            .agents
+            .iter()
+            .find(|(alias, _)| alias.as_str() == job.agent_alias)
+    {
+        return Some(alias.as_str());
+    }
+    if let Some(alias) = config.agent_for_cron_job(&job.id) {
+        return Some(alias);
+    }
+    config
+        .agents
+        .iter()
+        .find(|(alias, _)| alias.as_str() == crate::cron::types::DEFAULT_AGENT_ALIAS)
+        .map(|(alias, _)| alias.as_str())
 }
 
 /// Fetch **all** overdue jobs (ignoring `max_tasks`) and execute them.
@@ -468,14 +491,35 @@ async fn persist_job_result(
     let mut persisted_output = output.to_string();
 
     if let Err(e) = deliver_if_configured(config, job, output).await {
+        // Cron add-time accepts dangling delivery refs (the job's channel
+        // may not be provisioned yet); the loudly-logged warn here is
+        // the scheduler-side half of that contract — operators see the
+        // exact channel composite, target, and job id every time a
+        // dangling delivery fires.
+        let channel = job.delivery.channel.as_deref().unwrap_or("");
+        let target = job.delivery.to.as_deref().unwrap_or("");
         if job.delivery.best_effort {
-            tracing::warn!(error = ?e, "Cron delivery failed (best_effort)");
+            tracing::warn!(
+                job_id = %job.id,
+                agent_alias = %job.agent_alias,
+                channel = %channel,
+                target = %target,
+                error = ?e,
+                "Cron delivery failed (best_effort)"
+            );
             if success {
                 persisted_status = "degraded".to_string();
             }
         } else {
             success = false;
-            tracing::warn!(error = ?e, "Cron delivery failed");
+            tracing::warn!(
+                job_id = %job.id,
+                agent_alias = %job.agent_alias,
+                channel = %channel,
+                target = %target,
+                error = ?e,
+                "Cron delivery failed"
+            );
             persisted_status = "error".to_string();
         }
 
@@ -814,6 +858,7 @@ mod tests {
             job_type: JobType::Shell,
             session_target: SessionTarget::Isolated,
             model: None,
+            agent_alias: crate::cron::types::DEFAULT_AGENT_ALIAS.into(),
             enabled: true,
             delivery: DeliveryConfig::default(),
             delete_after_run: false,
@@ -1351,6 +1396,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = cron::add_agent_job(
             &config,
+            "default",
             Some("one-shot".into()),
             crate::cron::Schedule::At { at },
             "Hello",
@@ -1377,6 +1423,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = cron::add_agent_job(
             &config,
+            "default",
             Some("one-shot".into()),
             crate::cron::Schedule::At { at },
             "Hello",
@@ -1438,6 +1485,7 @@ mod tests {
         let config = test_config(&tmp).await;
         let job = cron::add_agent_job(
             &config,
+            "default",
             Some("announce-job".into()),
             crate::cron::Schedule::Cron {
                 expr: "*/5 * * * *".into(),
@@ -1519,6 +1567,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = cron::add_agent_job(
             &config,
+            "default",
             Some("at-no-autodelete".into()),
             crate::cron::Schedule::At { at },
             "Hello",

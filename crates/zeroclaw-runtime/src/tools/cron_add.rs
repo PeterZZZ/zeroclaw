@@ -387,6 +387,7 @@ impl Tool for CronAddTool {
 
                 cron::add_agent_job(
                     &self.config,
+                    &self.agent_alias,
                     name,
                     schedule,
                     prompt,

@@ -63,13 +63,15 @@ pub fn validate_delivery_config(delivery: Option<&DeliveryConfig>) -> Result<()>
         bail!("unsupported delivery mode: {}", delivery.mode);
     }
 
+    // Shape-only validation. Whether the named channel resolves to a
+    // configured `[channels.<type>.<alias>]` entry at the moment of add
+    // is checked separately and surfaced as a non-fatal warning, not a
+    // hard error — a cron job may be authored before its channel is
+    // provisioned, and the scheduler logs loudly on fire if the channel
+    // never materialises (see `process_due_jobs`).
     let channel = delivery.channel.as_deref().map(str::trim);
-    let Some(channel) = channel.filter(|value| !value.is_empty()) else {
+    if channel.filter(|value| !value.is_empty()).is_none() {
         bail!("delivery.channel is required for announce mode");
-    };
-    match channel.to_ascii_lowercase().as_str() {
-        "telegram" | "discord" | "slack" | "mattermost" | "signal" | "matrix" | "qq" => {}
-        other => bail!("unsupported delivery channel: {other}"),
     }
 
     let has_target = delivery
@@ -101,7 +103,7 @@ pub fn add_shell_job_with_approval(
 ) -> Result<CronJob> {
     validate_shell_command(config, agent_alias, command, approved)?;
     validate_delivery_config(delivery.as_ref())?;
-    store::add_shell_job(config, name, schedule, command, delivery)
+    store::add_shell_job(config, agent_alias, name, schedule, command, delivery)
 }
 
 /// Update a shell job's command with security validation.

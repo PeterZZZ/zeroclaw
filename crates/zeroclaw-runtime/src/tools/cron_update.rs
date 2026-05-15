@@ -599,6 +599,7 @@ mod tests {
         let cfg = test_config(&tmp).await;
         let job = cron::add_agent_job(
             &cfg,
+            "default",
             None,
             crate::cron::Schedule::Cron {
                 expr: "*/5 * * * *".into(),
@@ -636,6 +637,7 @@ mod tests {
         let cfg = test_config(&tmp).await;
         let job = cron::add_agent_job(
             &cfg,
+            "default",
             None,
             crate::cron::Schedule::Cron {
                 expr: "*/5 * * * *".into(),

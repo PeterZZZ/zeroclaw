@@ -1095,7 +1095,15 @@ export function getCronJobs(): Promise<CronJob[]> {
   });
 }
 
+export interface CronDelivery {
+  mode: 'none' | 'announce';
+  channel?: string;
+  to?: string;
+  best_effort?: boolean;
+}
+
 export function addCronJob(body: {
+  agent: string;
   name?: string;
   schedule: string;
   command?: string;
@@ -1105,6 +1113,7 @@ export function addCronJob(body: {
   session_target?: string;
   allowed_tools?: string[];
   enabled?: boolean;
+  delivery?: CronDelivery;
 }): Promise<CronJob> {
   return apiFetch<CronJob | { status: string; job: CronJob }>('/api/cron', {
     method: 'POST',

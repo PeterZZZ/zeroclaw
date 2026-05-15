@@ -25,11 +25,19 @@ pub fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJ
         expr: expression.to_string(),
         tz: None,
     };
-    add_shell_job(config, None, schedule, command, None)
+    add_shell_job(
+        config,
+        crate::cron::types::DEFAULT_AGENT_ALIAS,
+        None,
+        schedule,
+        command,
+        None,
+    )
 }
 
 pub fn add_shell_job(
     config: &Config,
+    agent_alias: &str,
     name: Option<String>,
     schedule: Schedule,
     command: &str,
@@ -45,13 +53,19 @@ pub fn add_shell_job(
     let delivery = delivery.unwrap_or_default();
 
     let delete_after_run = matches!(schedule, Schedule::At { .. });
+    let agent_alias = agent_alias.trim();
+    let agent_alias = if agent_alias.is_empty() {
+        crate::cron::types::DEFAULT_AGENT_ALIAS
+    } else {
+        agent_alias
+    };
 
     with_connection(config, |conn| {
         conn.execute(
             "INSERT INTO cron_jobs (
                 id, expression, command, schedule, job_type, prompt, name, session_target, model,
-                enabled, delivery, delete_after_run, created_at, next_run
-             ) VALUES (?1, ?2, ?3, ?4, 'shell', NULL, ?5, 'isolated', NULL, 1, ?6, ?7, ?8, ?9)",
+                enabled, delivery, delete_after_run, agent_alias, created_at, next_run
+             ) VALUES (?1, ?2, ?3, ?4, 'shell', NULL, ?5, 'isolated', NULL, 1, ?6, ?7, ?8, ?9, ?10)",
             params![
                 id,
                 expression,
@@ -60,6 +74,7 @@ pub fn add_shell_job(
                 name,
                 serde_json::to_string(&delivery)?,
                 if delete_after_run { 1 } else { 0 },
+                agent_alias,
                 now.to_rfc3339(),
                 next_run.to_rfc3339(),
             ],
@@ -74,6 +89,7 @@ pub fn add_shell_job(
 #[allow(clippy::too_many_arguments)]
 pub fn add_agent_job(
     config: &Config,
+    agent_alias: &str,
     name: Option<String>,
     schedule: Schedule,
     prompt: &str,
@@ -91,13 +107,19 @@ pub fn add_agent_job(
     let expression = schedule_cron_expression(&schedule).unwrap_or_default();
     let schedule_json = serde_json::to_string(&schedule)?;
     let delivery = delivery.unwrap_or_default();
+    let agent_alias = agent_alias.trim();
+    let agent_alias = if agent_alias.is_empty() {
+        crate::cron::types::DEFAULT_AGENT_ALIAS
+    } else {
+        agent_alias
+    };
 
     with_connection(config, |conn| {
         conn.execute(
             "INSERT INTO cron_jobs (
                 id, expression, command, schedule, job_type, prompt, name, session_target, model,
-                enabled, delivery, delete_after_run, allowed_tools, created_at, next_run
-             ) VALUES (?1, ?2, '', ?3, 'agent', ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12)",
+                enabled, delivery, delete_after_run, allowed_tools, agent_alias, created_at, next_run
+             ) VALUES (?1, ?2, '', ?3, 'agent', ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 expression,
@@ -109,6 +131,7 @@ pub fn add_agent_job(
                 serde_json::to_string(&delivery)?,
                 if delete_after_run { 1 } else { 0 },
                 encode_allowed_tools(allowed_tools.as_ref())?,
+                agent_alias,
                 now.to_rfc3339(),
                 next_run.to_rfc3339(),
             ],
@@ -125,7 +148,7 @@ pub fn list_jobs(config: &Config) -> Result<Vec<CronJob>> {
         let mut stmt = conn.prepare(
             "SELECT id, expression, command, schedule, job_type, prompt, name, session_target, model,
                     enabled, delivery, delete_after_run, created_at, next_run, last_run, last_status, last_output,
-                    allowed_tools, source, uses_memory
+                    allowed_tools, source, uses_memory, agent_alias
              FROM cron_jobs ORDER BY next_run ASC",
         )?;
 
@@ -144,7 +167,7 @@ pub fn get_job(config: &Config, job_id: &str) -> Result<CronJob> {
         let mut stmt = conn.prepare(
             "SELECT id, expression, command, schedule, job_type, prompt, name, session_target, model,
                     enabled, delivery, delete_after_run, created_at, next_run, last_run, last_status, last_output,
-                    allowed_tools, source, uses_memory
+                    allowed_tools, source, uses_memory, agent_alias
              FROM cron_jobs WHERE id = ?1",
         )?;
 
@@ -178,7 +201,7 @@ pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
         let mut stmt = conn.prepare(
             "SELECT id, expression, command, schedule, job_type, prompt, name, session_target, model,
                     enabled, delivery, delete_after_run, created_at, next_run, last_run, last_status, last_output,
-                    allowed_tools, source, uses_memory
+                    allowed_tools, source, uses_memory, agent_alias
              FROM cron_jobs
              WHERE enabled = 1 AND next_run <= ?1
              ORDER BY next_run ASC
@@ -208,7 +231,7 @@ pub fn all_overdue_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJ
         let mut stmt = conn.prepare(
             "SELECT id, expression, command, schedule, job_type, prompt, name, session_target, model,
                     enabled, delivery, delete_after_run, created_at, next_run, last_run, last_status, last_output,
-                    allowed_tools, source, uses_memory
+                    allowed_tools, source, uses_memory, agent_alias
              FROM cron_jobs
              WHERE enabled = 1 AND next_run <= ?1
              ORDER BY next_run ASC",
@@ -521,6 +544,7 @@ fn map_cron_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronJob> {
     let allowed_tools_raw: Option<String> = row.get(17)?;
     let source: Option<String> = row.get(18)?;
     let uses_memory: Option<i64> = row.get(19)?;
+    let agent_alias: Option<String> = row.get(20)?;
 
     Ok(CronJob {
         id: row.get(0)?,
@@ -532,6 +556,9 @@ fn map_cron_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronJob> {
         name: row.get(6)?,
         session_target: SessionTarget::parse(&row.get::<_, String>(7)?),
         model: row.get(8)?,
+        agent_alias: agent_alias
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::cron::types::DEFAULT_AGENT_ALIAS.to_string()),
         enabled: row.get::<_, i64>(9)? != 0,
         delivery,
         delete_after_run: row.get::<_, i64>(11)? != 0,
@@ -758,14 +785,20 @@ pub fn sync_declarative_jobs(
 
                 tracing::debug!(job_id = %id, "Updated declarative cron job");
             } else {
-                // Insert new declarative job.
+                // Insert new declarative job. Reverse-resolve the owning
+                // agent from `[agents.<x>].cron_jobs` membership; if no
+                // agent claims this id, bind to DEFAULT_AGENT_ALIAS so
+                // the row is always resolvable at fire time.
                 let next_run = next_run_for_schedule(&schedule, now)?;
+                let agent_alias = config
+                    .agent_for_cron_job(id)
+                    .unwrap_or(crate::cron::types::DEFAULT_AGENT_ALIAS);
                 conn.execute(
                     "INSERT INTO cron_jobs (
                         id, expression, command, schedule, job_type, prompt, name,
                         session_target, model, enabled, delivery, delete_after_run,
-                        allowed_tools, source, uses_memory, created_at, next_run
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'declarative', ?14, ?15, ?16)",
+                        allowed_tools, source, uses_memory, agent_alias, created_at, next_run
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'declarative', ?14, ?15, ?16, ?17)",
                     params![
                         id,
                         expression,
@@ -781,6 +814,7 @@ pub fn sync_declarative_jobs(
                         i32::from(delete_after_run),
                         allowed_tools_json,
                         i32::from(decl.uses_memory),
+                        agent_alias,
                         now.to_rfc3339(),
                         next_run.to_rfc3339(),
                     ],
@@ -952,6 +986,18 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
     add_column_if_missing(&conn, "allowed_tools", "TEXT")?;
     add_column_if_missing(&conn, "source", "TEXT DEFAULT 'imperative'")?;
     add_column_if_missing(&conn, "uses_memory", "INTEGER NOT NULL DEFAULT 1")?;
+    // Cron Set C — every job binds to an agent alias. Legacy rows from
+    // pre-v0.8.0 schemas backfill to `DEFAULT_AGENT_ALIAS`; the
+    // [agents.default] row is guaranteed to exist by config migration so
+    // the binding is always resolvable at scheduler-fire time.
+    add_column_if_missing(
+        &conn,
+        "agent_alias",
+        &format!(
+            "TEXT NOT NULL DEFAULT '{}'",
+            crate::cron::types::DEFAULT_AGENT_ALIAS
+        ),
+    )?;
 
     f(&conn)
 }
@@ -991,6 +1037,7 @@ mod tests {
 
         let one_shot = add_shell_job(
             &config,
+            "default",
             None,
             Schedule::At {
                 at: Utc::now() + ChronoDuration::minutes(10),
@@ -1003,6 +1050,7 @@ mod tests {
 
         let recurring = add_shell_job(
             &config,
+            "default",
             None,
             Schedule::Every { every_ms: 60_000 },
             "echo recurring",
@@ -1019,6 +1067,7 @@ mod tests {
 
         let job = add_shell_job(
             &config,
+            "default",
             Some("deliver-shell".into()),
             Schedule::Cron {
                 expr: "*/5 * * * *".into(),
@@ -1051,6 +1100,7 @@ mod tests {
 
         let err = add_agent_job(
             &config,
+            "default",
             Some("deliver-agent".into()),
             Schedule::Cron {
                 expr: "*/5 * * * *".into(),
@@ -1080,6 +1130,7 @@ mod tests {
 
         let err = add_shell_job(
             &config,
+            "default",
             Some("deliver-shell".into()),
             Schedule::Cron {
                 expr: "*/5 * * * *".into(),
@@ -1201,6 +1252,7 @@ mod tests {
 
         let job = add_agent_job(
             &config,
+            "default",
             Some("agent".into()),
             Schedule::Every { every_ms: 60_000 },
             "do work",
@@ -1228,6 +1280,7 @@ mod tests {
 
         let job = add_agent_job(
             &config,
+            "default",
             Some("agent".into()),
             Schedule::Every { every_ms: 60_000 },
             "do work",
@@ -1424,7 +1477,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
         let at = Utc::now() + ChronoDuration::minutes(10);
-        let job = add_shell_job(&config, None, Schedule::At { at }, "echo once", None).unwrap();
+        let job = add_shell_job(&config, crate::cron::types::DEFAULT_AGENT_ALIAS, None, Schedule::At { at }, "echo once", None).unwrap();
 
         reschedule_after_run(&config, &job, true, "done").unwrap();
 
@@ -1441,7 +1494,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
         let at = Utc::now() + ChronoDuration::minutes(10);
-        let job = add_shell_job(&config, None, Schedule::At { at }, "echo once", None).unwrap();
+        let job = add_shell_job(&config, crate::cron::types::DEFAULT_AGENT_ALIAS, None, Schedule::At { at }, "echo once", None).unwrap();
 
         reschedule_after_run(&config, &job, false, "failed").unwrap();
 

@@ -327,6 +327,7 @@ pub async fn handle_api_cron_add(
 
         zeroclaw_runtime::cron::add_agent_job(
             &config,
+            &agent_alias,
             name,
             schedule,
             prompt,
