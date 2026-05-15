@@ -195,7 +195,7 @@ pub async fn flash_uf2(mount_point: &Path, firmware_dir: &Path) -> Result<()> {
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 tracing::warn!("sudo cp failed: {}", stderr.trim());
             }
-            Ok(Err(e)) => tracing::warn!("sudo cp spawn failed: {}", e),
+            Ok(Err(e)) => tracing::warn!(error = ?e, "sudo cp spawn failed"),
         }
     }
 

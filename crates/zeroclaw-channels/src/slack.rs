@@ -3081,7 +3081,7 @@ impl SlackChannel {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Slack poll error for channel {channel_id}");
+                    tracing::warn!(error = ?e, "poll error for channel {channel_id}");
                     return None;
                 }
             };
@@ -3686,7 +3686,7 @@ impl Channel for SlackChannel {
             .get("error")
             .and_then(|e| e.as_str())
             .unwrap_or("unknown");
-        tracing::debug!("chat.update (finalize) failed: {err}; falling back to delete+send");
+        tracing::debug!(error = ?err, "chat.update (finalize) failed; falling back to delete+send");
 
         let _ = self.delete_message(recipient, &real_ts).await;
         let msg = SendMessage::new(text, recipient).in_thread(draft_thread_ts);

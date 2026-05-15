@@ -34,7 +34,7 @@ impl LandlockSandbox {
         match test_ruleset {
             Ok(_) => Ok(Self { workspace_dir }),
             Err(e) => {
-                tracing::debug!("Landlock not available: {}", e);
+                tracing::debug!(error = ?e, "Landlock not available");
                 Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "Landlock not available",
@@ -117,7 +117,7 @@ impl LandlockSandbox {
                 Ok(())
             }
             Err(e) => {
-                tracing::warn!("Failed to apply Landlock restrictions: {}", e);
+                tracing::warn!(error = ?e, "Failed to apply Landlock restrictions");
                 Err(std::io::Error::other(e.to_string()))
             }
         }

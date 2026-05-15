@@ -2179,6 +2179,7 @@ pub struct AgentRunOverrides {
 #[tracing::instrument(
     skip_all,
     fields(
+        category = "agent",
         agent_alias = %agent_alias,
         risk_profile = tracing::field::Empty,
         runtime_profile = tracing::field::Empty,
@@ -2404,7 +2405,7 @@ pub async fn run(
                 }
             }
             Err(e) => {
-                tracing::error!("MCP registry failed to initialize: {e:#}");
+                tracing::error!(error = ?e, "MCP registry failed to initialize");
             }
         }
     }
@@ -3452,7 +3453,7 @@ pub async fn process_message(
                 }
             }
             Err(e) => {
-                tracing::error!("MCP registry failed to initialize: {e:#}");
+                tracing::error!(error = ?e, "MCP registry failed to initialize");
             }
         }
     }

@@ -378,7 +378,7 @@ impl Channel for SignalChannel {
                     continue;
                 }
                 Err(e) => {
-                    tracing::warn!("SSE connect error: {e}, retrying...");
+                    tracing::warn!(error = ?e, "SSE connect error, retrying...");
                     tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
                     retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
                     continue;
@@ -403,7 +403,7 @@ impl Channel for SignalChannel {
                 let text = match String::from_utf8(chunk.to_vec()) {
                     Ok(t) => t,
                     Err(e) => {
-                        tracing::debug!("SSE invalid UTF-8, skipping chunk: {}", e);
+                        tracing::debug!(error = ?e, "SSE invalid UTF-8, skipping chunk");
                         continue;
                     }
                 };

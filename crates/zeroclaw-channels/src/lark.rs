@@ -364,12 +364,12 @@ fn ensure_lark_send_success(
     context: &str,
 ) -> anyhow::Result<()> {
     if !status.is_success() {
-        anyhow::bail!("Lark send failed {context}: status={status}, body={body}");
+        anyhow::bail!("send failed {context}: status={status}, body={body}");
     }
 
     let code = extract_lark_response_code(body).unwrap_or(0);
     if code != 0 {
-        anyhow::bail!("Lark send failed {context}: code={code}, body={body}");
+        anyhow::bail!("send failed {context}: code={code}, body={body}");
     }
 
     Ok(())
@@ -707,14 +707,14 @@ impl LarkChannel {
             .await?;
         if resp.code != 0 {
             anyhow::bail!(
-                "Lark WS endpoint failed: code={} msg={}",
+                "WS endpoint failed: code={} msg={}",
                 resp.code,
                 resp.msg.as_deref().unwrap_or("(none)")
             );
         }
         let ep = resp
             .data
-            .ok_or_else(|| anyhow::anyhow!("Lark WS endpoint: empty data"))?;
+            .ok_or_else(|| anyhow::anyhow!("WS endpoint: empty data"))?;
         Ok((ep.url, ep.client_config.unwrap_or_default()))
     }
 
@@ -894,7 +894,7 @@ impl LarkChannel {
 
                     let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
                     if !self.is_user_allowed(sender_open_id) {
-                        tracing::warn!("Lark WS: ignoring {sender_open_id} (not in peer group)");
+                        tracing::warn!("WS: ignoring {sender_open_id} (not in peer group)");
                         continue;
                     }
 
@@ -907,7 +907,7 @@ impl LarkChannel {
                         // GC
                         seen.retain(|_, t| now.duration_since(*t) < Duration::from_secs(30 * 60));
                         if seen.contains_key(&lark_msg.message_id) {
-                            tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
+                            tracing::debug!("WS: dup {}", lark_msg.message_id);
                             continue;
                         }
                         seen.insert(lark_msg.message_id.clone(), now);
@@ -936,12 +936,12 @@ impl LarkChannel {
                             };
                             let image_key = match v.get("image_key").and_then(|k| k.as_str()) {
                                 Some(k) => k.to_string(),
-                                None => { tracing::debug!("Lark WS: image message missing image_key"); continue; }
+                                None => { tracing::debug!("WS: image message missing image_key"); continue; }
                             };
                             match self.download_image_as_marker(&image_key).await {
                                 Some(marker) => (marker, Vec::new()),
                                 None => {
-                                    tracing::warn!("Lark WS: failed to download image {image_key}");
+                                    tracing::warn!("WS: failed to download image {image_key}");
                                     (format!("[IMAGE:{image_key} | download failed]"), Vec::new())
                                 }
                             }
@@ -953,7 +953,7 @@ impl LarkChannel {
                             };
                             let file_key = match v.get("file_key").and_then(|k| k.as_str()) {
                                 Some(k) => k.to_string(),
-                                None => { tracing::debug!("Lark WS: file message missing file_key"); continue; }
+                                None => { tracing::debug!("WS: file message missing file_key"); continue; }
                             };
                             let file_name = v.get("file_name")
                                 .and_then(|n| n.as_str())
@@ -962,14 +962,14 @@ impl LarkChannel {
                             match self.download_file_as_content(&lark_msg.message_id, &file_key, &file_name).await {
                                 Some(content) => (content, Vec::new()),
                                 None => {
-                                    tracing::warn!("Lark WS: failed to download file {file_key}");
+                                    tracing::warn!("WS: failed to download file {file_key}");
                                     (format!("[ATTACHMENT:{file_name} | download failed]"), Vec::new())
                                 }
                             }
                         }
                         "audio" => {
                             let Some(manager) = self.transcription_manager.as_deref() else {
-                                tracing::debug!("Lark WS: audio message in {} (transcription not configured)", lark_msg.chat_id);
+                                tracing::debug!("WS: audio message in {} (transcription not configured)", lark_msg.chat_id);
                                 continue;
                             };
                             let transcript = self.try_transcribe_audio_message(
@@ -982,9 +982,9 @@ impl LarkChannel {
                         }
                         "list" => match parse_list_content(&lark_msg.content) {
                             Some(t) => (t, Vec::new()),
-                            None => { tracing::debug!("Lark WS: list message with no extractable text"); continue; }
+                            None => { tracing::debug!("WS: list message with no extractable text"); continue; }
                         },
-                        _ => { tracing::debug!("Lark WS: skipping unsupported type '{}'", lark_msg.message_type); continue; }
+                        _ => { tracing::debug!("WS: skipping unsupported type '{}'", lark_msg.message_type); continue; }
                     };
 
                     // Strip @_user_N placeholders
@@ -1031,7 +1031,7 @@ impl LarkChannel {
                     attachments: vec![],
                     };
 
-                    tracing::debug!("Lark WS: message in {}", lark_msg.chat_id);
+                    tracing::debug!("WS: message in {}", lark_msg.chat_id);
                     if tx.send(channel_msg).await.is_err() { break; }
                 }
             }
@@ -1068,7 +1068,7 @@ impl LarkChannel {
         let data: serde_json::Value = resp.json().await?;
 
         if !status.is_success() {
-            anyhow::bail!("Lark tenant_access_token request failed: status={status}, body={data}");
+            anyhow::bail!("tenant_access_token request failed: status={status}, body={data}");
         }
 
         let code = data.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
@@ -1077,7 +1077,7 @@ impl LarkChannel {
                 .get("msg")
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown error");
-            anyhow::bail!("Lark tenant_access_token failed: {msg}");
+            anyhow::bail!("tenant_access_token failed: {msg}");
         }
 
         let token = data
@@ -1312,20 +1312,20 @@ impl LarkChannel {
             let (retry_status, retry_body) = self.fetch_bot_open_id_with_token(&refreshed).await?;
             if !retry_status.is_success() {
                 anyhow::bail!(
-                    "Lark bot info request failed after token refresh: status={retry_status}, body={retry_body}"
+                    "bot info request failed after token refresh: status={retry_status}, body={retry_body}"
                 );
             }
             retry_body
         } else {
             if !status.is_success() {
-                anyhow::bail!("Lark bot info request failed: status={status}, body={body}");
+                anyhow::bail!("bot info request failed: status={status}, body={body}");
             }
             body
         };
 
         let code = body.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
         if code != 0 {
-            anyhow::bail!("Lark bot info failed: code={code}, body={body}");
+            anyhow::bail!("bot info failed: code={code}, body={body}");
         }
 
         let bot_open_id = body
@@ -1368,7 +1368,7 @@ impl LarkChannel {
             body.extend_from_slice(&chunk);
             if body.len() as u64 > MAX_LARK_AUDIO_BYTES {
                 anyhow::bail!(
-                    "Lark audio download exceeds {} byte limit",
+                    "audio download exceeds {} byte limit",
                     MAX_LARK_AUDIO_BYTES
                 );
             }
@@ -1410,7 +1410,7 @@ impl LarkChannel {
                     .await?;
                 if !resp.status().is_success() {
                     anyhow::bail!(
-                        "Lark audio download failed after token refresh: {}",
+                        "audio download failed after token refresh: {}",
                         resp.status()
                     );
                 }
@@ -1418,7 +1418,7 @@ impl LarkChannel {
                 return Ok((bytes, inferred_audio_filename(file_key)));
             }
 
-            anyhow::bail!("Lark audio download failed: {}", status);
+            anyhow::bail!("audio download failed: {}", status);
         }
         let bytes = Self::stream_audio_bytes(resp).await?;
         Ok((bytes, inferred_audio_filename(file_key)))
@@ -1481,7 +1481,7 @@ impl LarkChannel {
         }
 
         let Some(manager) = self.transcription_manager.as_deref() else {
-            tracing::debug!("Lark webhook: audio message (transcription not configured)");
+            tracing::debug!("webhook: audio message (transcription not configured)");
             return vec![];
         };
 
@@ -1806,7 +1806,7 @@ impl Channel for LarkChannel {
 
                 if should_refresh_lark_tenant_token(retry_status, &retry_response) {
                     anyhow::bail!(
-                        "Lark send failed after token refresh: status={retry_status}, body={retry_response}"
+                        "send failed after token refresh: status={retry_status}, body={retry_response}"
                     );
                 }
 
@@ -1902,7 +1902,7 @@ impl LarkChannel {
         }
 
         let port = self.port.ok_or_else(|| {
-            anyhow::anyhow!("Lark webhook mode requires `port` to be set in [channels_config.lark]")
+            anyhow::anyhow!("webhook mode requires `port` to be set in [channels_config.lark]")
         })?;
 
         let state = AppState {
@@ -1916,7 +1916,7 @@ impl LarkChannel {
             .with_state(state);
 
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-        tracing::info!("Lark event callback server listening on {addr}");
+        tracing::info!("event callback server listening on {addr}");
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;

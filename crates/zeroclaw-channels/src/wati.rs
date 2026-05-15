@@ -131,7 +131,7 @@ impl WatiChannel {
         // Check allowlist
         if !self.is_number_allowed(&normalized_phone) {
             tracing::warn!(
-                "WATI: ignoring message from unauthorized sender: {normalized_phone}. \
+                "ignoring message from unauthorized sender: {normalized_phone}. \
                 Add to channels.wati.allowed_numbers in config.toml, \
                 or run `zeroclaw onboard --channels-only` to configure interactively."
             );
@@ -229,7 +229,7 @@ impl WatiChannel {
             .unwrap_or(false);
 
         if from_me {
-            tracing::debug!("WATI: skipping fromMe message");
+            tracing::debug!("skipping fromMe message");
             return messages;
         }
 
@@ -281,7 +281,7 @@ impl WatiChannel {
         match (api_host, media_host) {
             (Some(ref expected), Some(ref actual)) if actual == expected => {}
             _ => {
-                tracing::warn!("WATI: blocked media URL with unexpected host: {media_url}");
+                tracing::warn!("blocked media URL with unexpected host: {media_url}");
                 return None;
             }
         }
@@ -294,7 +294,7 @@ impl WatiChannel {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         if from_me {
-            tracing::debug!("WATI: skipping fromMe audio before download");
+            tracing::debug!("skipping fromMe audio before download");
             return None;
         }
 
@@ -317,13 +317,13 @@ impl WatiChannel {
         {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(error = ?e, "WATI: media download request failed");
+                tracing::warn!(error = ?e, "media download request failed");
                 return None;
             }
         };
 
         if !resp.status().is_success() {
-            tracing::warn!("WATI: media download failed: {}", resp.status());
+            tracing::warn!("media download failed: {}", resp.status());
             return None;
         }
 
@@ -332,7 +332,7 @@ impl WatiChannel {
             audio_bytes.extend_from_slice(&chunk);
             if audio_bytes.len() as u64 > MAX_WATI_AUDIO_BYTES {
                 tracing::warn!(
-                    "WATI: audio download exceeds {} byte limit",
+                    "audio download exceeds {} byte limit",
                     MAX_WATI_AUDIO_BYTES
                 );
                 return None;
@@ -342,7 +342,7 @@ impl WatiChannel {
         match manager.transcribe(&audio_bytes, file_name).await {
             Ok(transcript) => Some(transcript),
             Err(e) => {
-                tracing::warn!(error = ?e, "WATI: transcription failed");
+                tracing::warn!(error = ?e, "transcription failed");
                 None
             }
         }
@@ -368,12 +368,12 @@ impl WatiChannel {
             .unwrap_or(false);
 
         if from_me {
-            tracing::debug!("WATI: skipping fromMe audio message");
+            tracing::debug!("skipping fromMe audio message");
             return messages;
         }
 
         if transcript.trim().is_empty() {
-            tracing::debug!("WATI: skipping empty audio transcript");
+            tracing::debug!("skipping empty audio transcript");
             return messages;
         }
 
@@ -428,7 +428,7 @@ impl Channel for WatiChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            tracing::error!("WATI send failed: {status} — {error_body}");
+            tracing::error!("send failed: {status} — {error_body}");
             anyhow::bail!("WATI API error: {status}");
         }
 

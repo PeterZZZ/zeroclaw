@@ -714,7 +714,7 @@ pub async fn run_gateway(
                 }
             }
             Err(e) => {
-                tracing::error!("Gateway MCP registry failed to initialize: {e:#}");
+                tracing::error!(error = ?e, "MCP registry failed to initialize");
             }
         }
     }
@@ -1903,7 +1903,7 @@ async fn handle_webhook(
     // ── Bearer token auth (pairing) with auth rate limiting ──
     if state.pairing.require_pairing() {
         if let Err(e) = state.auth_limiter.check_rate_limit(&rate_key) {
-            tracing::warn!("Webhook: auth rate limit exceeded for {rate_key}");
+            tracing::warn!("webhook: auth rate limit exceeded for {rate_key}");
             let err = serde_json::json!({
                 "error": format!("Too many auth attempts. Try again in {}s.", e.retry_after_secs),
                 "retry_after": e.retry_after_secs,
@@ -1917,7 +1917,7 @@ async fn handle_webhook(
         let token = auth.strip_prefix("Bearer ").unwrap_or("");
         if !state.pairing.is_authenticated(token) {
             state.auth_limiter.record_attempt(&rate_key);
-            tracing::warn!("Webhook: rejected — not paired / invalid bearer token");
+            tracing::warn!("webhook: rejected — not paired / invalid bearer token");
             let err = serde_json::json!({
                 "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
             });
@@ -1936,7 +1936,7 @@ async fn handle_webhook(
         match header_hash {
             Some(val) if constant_time_eq(&val, secret_hash.as_ref()) => {}
             _ => {
-                tracing::warn!("Webhook: rejected request — invalid or missing X-Webhook-Secret");
+                tracing::warn!("webhook: rejected request — invalid or missing X-Webhook-Secret");
                 let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
                 return (StatusCode::UNAUTHORIZED, Json(err));
             }
@@ -1947,7 +1947,7 @@ async fn handle_webhook(
     let Json(webhook_body) = match body {
         Ok(b) => b,
         Err(e) => {
-            tracing::warn!(error = ?e, "Webhook JSON parse error");
+            tracing::warn!(error = ?e, "webhook JSON parse error");
             let err = serde_json::json!({
                 "error": "Invalid JSON body. Expected: {\"message\": \"...\"}"
             });
@@ -1963,7 +1963,7 @@ async fn handle_webhook(
         .filter(|value| !value.is_empty())
         && !state.idempotency_store.record_if_new(idempotency_key)
     {
-        tracing::info!("Webhook duplicate ignored (idempotency key: {idempotency_key})");
+        tracing::info!(%idempotency_key, "webhook duplicate ignored");
         let body = serde_json::json!({
             "status": "duplicate",
             "idempotent": true,
@@ -2100,7 +2100,7 @@ async fn handle_webhook(
                 });
                 (StatusCode::SERVICE_UNAVAILABLE, Json(body))
             } else {
-                tracing::error!("Webhook model_provider error: {}", sanitized);
+                tracing::error!(error = %sanitized, "webhook model_provider error");
                 let err = serde_json::json!({"error": "LLM request failed"});
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
             }
@@ -2135,13 +2135,13 @@ async fn handle_whatsapp_verify(
         .is_some_and(|t| constant_time_eq(t, wa.verify_token()));
     if params.mode.as_deref() == Some("subscribe") && token_matches {
         if let Some(ch) = params.challenge {
-            tracing::info!("WhatsApp webhook verified successfully");
+            tracing::info!(channel = "whatsapp", "webhook verified successfully");
             return (StatusCode::OK, ch);
         }
         return (StatusCode::BAD_REQUEST, "Missing hub.challenge".to_string());
     }
 
-    tracing::warn!("WhatsApp webhook verification failed — token mismatch");
+    tracing::warn!(channel = "whatsapp", "webhook verification failed — token mismatch");
     (StatusCode::FORBIDDEN, "Forbidden".to_string())
 }
 
@@ -2194,7 +2194,7 @@ async fn handle_whatsapp_message(
 
         if !verify_whatsapp_signature(app_secret, &body, signature) {
             tracing::warn!(
-                "WhatsApp webhook signature verification failed (signature: {})",
+                channel = "whatsapp", "webhook signature verification failed (signature: {})",
                 if signature.is_empty() {
                     "missing"
                 } else {
@@ -2283,7 +2283,7 @@ async fn handle_whatsapp_message(
                     );
                     needs_onboarding_channel_reply()
                 } else {
-                    tracing::error!("LLM error for WhatsApp message: {e:#}");
+                    tracing::error!(channel = "whatsapp", error = ?e, "LLM error");
                     "Sorry, I couldn't process your message right now.".to_string()
                 };
                 let _ = wa.send(&SendMessage::new(reply, &msg.reply_target)).await;
@@ -2408,7 +2408,7 @@ async fn handle_linq_webhook(
                     );
                     needs_onboarding_channel_reply()
                 } else {
-                    tracing::error!("LLM error for Linq message: {e:#}");
+                    tracing::error!(channel = "linq", error = ?e, "LLM error");
                     "Sorry, I couldn't process your message right now.".to_string()
                 };
                 let _ = linq.send(&SendMessage::new(reply, &msg.reply_target)).await;
@@ -2431,7 +2431,7 @@ async fn handle_wati_verify(
 
     // WATI may use Meta-style webhook verification; echo the challenge
     if let Some(challenge) = params.challenge {
-        tracing::info!("WATI webhook verified successfully");
+        tracing::info!(channel = "wati", "webhook verified successfully");
         return (StatusCode::OK, challenge);
     }
 
@@ -2528,7 +2528,7 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
                     );
                     needs_onboarding_channel_reply()
                 } else {
-                    tracing::error!("LLM error for WATI message: {e:#}");
+                    tracing::error!(channel = "wati", error = ?e, "LLM error");
                     "Sorry, I couldn't process your message right now.".to_string()
                 };
                 let _ = wati.send(&SendMessage::new(reply, &msg.reply_target)).await;
@@ -2655,7 +2655,7 @@ async fn handle_nextcloud_talk_webhook(
                         );
                         needs_onboarding_channel_reply()
                     } else {
-                        tracing::error!("LLM error for Nextcloud Talk message: {e:#}");
+                        tracing::error!(channel = "nextcloud_talk", error = ?e, "LLM error");
                         "Sorry, I couldn't process your message right now.".to_string()
                     };
                     let _ = nextcloud_talk
@@ -2704,7 +2704,7 @@ async fn handle_gmail_push_webhook(
             .unwrap_or("");
 
         if provided != secret {
-            tracing::warn!("Gmail push webhook: unauthorized request");
+            tracing::warn!(channel = "gmail_push", "webhook: unauthorized request");
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "Unauthorized"})),
@@ -2717,7 +2717,7 @@ async fn handle_gmail_push_webhook(
         match serde_json::from_str(&body_str) {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!(error = ?e, "Gmail push webhook: invalid payload");
+                tracing::warn!(error = ?e, channel = "gmail_push", "webhook: invalid payload");
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(serde_json::json!({"error": "Invalid Pub/Sub envelope"})),
@@ -2729,7 +2729,7 @@ async fn handle_gmail_push_webhook(
     let channel = Arc::clone(gmail_push);
     tokio::spawn(async move {
         if let Err(e) = channel.handle_notification(&envelope).await {
-            tracing::error!("Gmail push notification processing failed: {e:#}");
+            tracing::error!(channel = "gmail_push", error = ?e, "push notification processing failed");
         }
     });
 

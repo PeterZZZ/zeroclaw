@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Filter, RefreshCw, X } from 'lucide-react';
+import { Activity, ChevronDown, ChevronUp, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import type { LogEvent, LogsQueryParams, LogsResponse } from '@/lib/api';
 
 const DEFAULT_SEVERITY_MIN = 9;
 const PAGE_LIMIT = 200;
+const POLL_INTERVAL_MS = 3000;
+const RING_CAPACITY = 2000;
 
 const SEVERITY_OPTIONS: { label: string; value: number | '' }[] = [
   { label: 'TRACE+', value: 1 },
@@ -29,22 +31,6 @@ const CATEGORY_OPTIONS = [
 ];
 
 const OUTCOME_OPTIONS = ['', 'success', 'failure', 'unknown'];
-
-interface PageState {
-  events: LogEvent[];
-  nextCursor: [string, string] | null;
-  atEnd: boolean;
-  attributionKeys: string[];
-  daemonStartedAt: string;
-}
-
-const EMPTY_PAGE: PageState = {
-  events: [],
-  nextCursor: null,
-  atEnd: false,
-  attributionKeys: [],
-  daemonStartedAt: '',
-};
 
 interface FilterState {
   q: string;
@@ -107,8 +93,7 @@ function formatTimestamp(raw: string): string {
 
 function buildQueryParams(
   filter: FilterState,
-  daemonStartedAt: string,
-  cursor?: [string, string],
+  options: { sinceTs?: string; untilTs?: string; untilId?: string } = {},
 ): LogsQueryParams {
   const params: LogsQueryParams = {
     limit: PAGE_LIMIT,
@@ -119,13 +104,9 @@ function buildQueryParams(
   if (filter.category) params.category = filter.category;
   if (filter.outcome) params.outcome = filter.outcome;
   if (filter.action.trim()) params.action = filter.action.trim();
-  if (filter.sinceDaemonStart && daemonStartedAt) {
-    params.since_ts = daemonStartedAt;
-  }
-  if (cursor) {
-    params.until_ts = cursor[0];
-    params.until_id = cursor[1];
-  }
+  if (options.sinceTs) params.since_ts = options.sinceTs;
+  if (options.untilTs) params.until_ts = options.untilTs;
+  if (options.untilId) params.until_id = options.untilId;
   const fieldEq: Record<string, string> = {};
   for (const [key, value] of Object.entries(filter.fieldEq)) {
     if (value.trim()) fieldEq[key] = value.trim();
@@ -134,7 +115,7 @@ function buildQueryParams(
   return params;
 }
 
-function loadLogs(params: LogsQueryParams): Promise<LogsResponse> {
+function fetchLogs(params: LogsQueryParams): Promise<LogsResponse> {
   const usp = new URLSearchParams();
   const { field_eq, ...rest } = params;
   for (const [key, value] of Object.entries(rest)) {
@@ -153,81 +134,139 @@ function loadLogs(params: LogsQueryParams): Promise<LogsResponse> {
 
 export default function Logs() {
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
-  const [page, setPage] = useState<PageState>(EMPTY_PAGE);
+  const [events, setEvents] = useState<LogEvent[]>([]);
+  const [daemonStartedAt, setDaemonStartedAt] = useState('');
+  const [attributionKeys, setAttributionKeys] = useState<string[]>([]);
+  const [cursorOlder, setCursorOlder] = useState<[string, string] | null>(null);
+  const [atEnd, setAtEnd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [addingField, setAddingField] = useState(false);
+
+  // Ring-buffer dedupe by id. Kept in a ref so the poll loop can read the
+  // current state without re-binding via deps every tick.
+  const eventsRef = useRef<LogEvent[]>([]);
+  eventsRef.current = events;
   const filterRef = useRef(filter);
   filterRef.current = filter;
+  const daemonStartedAtRef = useRef(daemonStartedAt);
+  daemonStartedAtRef.current = daemonStartedAt;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
-  const refresh = useCallback(async () => {
+  const mergeNewer = useCallback((incoming: LogEvent[]) => {
+    if (incoming.length === 0) return;
+    setEvents((prev) => {
+      const byId = new Map<string, LogEvent>();
+      // incoming arrives newest-first per API contract
+      for (const event of incoming) byId.set(event.id, event);
+      for (const event of prev) if (!byId.has(event.id)) byId.set(event.id, event);
+      const merged = Array.from(byId.values());
+      merged.sort((left, right) =>
+        right['@timestamp'].localeCompare(left['@timestamp']),
+      );
+      return merged.slice(0, RING_CAPACITY);
+    });
+  }, []);
+
+  const initialLoad = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const current = filterRef.current;
-      // First fetch (no cursor) so we don't have daemon_started_at yet.
-      // Fall back to current daemon_started_at from the page state if we
-      // already loaded once; otherwise omit since_ts and let the server
-      // tell us what to use on the next refresh.
-      const response = await loadLogs(
-        buildQueryParams(current, page.daemonStartedAt),
-      );
-      setPage({
-        events: response.events,
-        nextCursor: response.next_cursor,
-        atEnd: response.at_end,
-        attributionKeys: response.attribution_keys ?? [],
-        daemonStartedAt: response.daemon_started_at,
-      });
+      const sinceTs = filterRef.current.sinceDaemonStart
+        ? daemonStartedAtRef.current || undefined
+        : undefined;
+      const response = await fetchLogs(buildQueryParams(filterRef.current, { sinceTs }));
+      setEvents(response.events);
+      setCursorOlder(response.next_cursor);
+      setAtEnd(response.at_end);
+      setAttributionKeys(response.attribution_keys ?? []);
+      setDaemonStartedAt(response.daemon_started_at);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [page.daemonStartedAt]);
+  }, []);
 
   useEffect(() => {
-    void refresh();
-    // refresh is intentionally invoked on mount only; subsequent refreshes
-    // happen via the Refresh button or filter changes.
+    void initialLoad();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Incremental polling — fetch newer-than-newest, append.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || pausedRef.current) return;
+      const newest = eventsRef.current[0];
+      const sinceTs = newest
+        ? newest['@timestamp']
+        : daemonStartedAtRef.current || undefined;
+      try {
+        const response = await fetchLogs(
+          buildQueryParams(filterRef.current, { sinceTs }),
+        );
+        if (cancelled) return;
+        if (response.events.length > 0) mergeNewer(response.events);
+        if (response.daemon_started_at) setDaemonStartedAt(response.daemon_started_at);
+        if (response.attribution_keys?.length) setAttributionKeys(response.attribution_keys);
+      } catch {
+        // Polling errors are silent — they'd cascade otherwise. Manual
+        // Refresh surfaces errors prominently.
+      }
+    };
+    const handle = window.setInterval(() => void tick(), POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [mergeNewer]);
+
   const loadOlder = useCallback(async () => {
-    if (!page.nextCursor || page.atEnd || loadingOlder) return;
+    if (!cursorOlder || atEnd || loadingOlder) return;
     setLoadingOlder(true);
     setError(null);
     try {
-      const response = await loadLogs(
-        buildQueryParams(filterRef.current, page.daemonStartedAt, page.nextCursor),
+      const response = await fetchLogs(
+        buildQueryParams(filterRef.current, {
+          untilTs: cursorOlder[0],
+          untilId: cursorOlder[1],
+        }),
       );
-      setPage((prev) => ({
-        events: [...prev.events, ...response.events],
-        nextCursor: response.next_cursor,
-        atEnd: response.at_end,
-        attributionKeys: response.attribution_keys ?? prev.attributionKeys,
-        daemonStartedAt: prev.daemonStartedAt || response.daemon_started_at,
-      }));
+      setEvents((prev) => {
+        const byId = new Map<string, LogEvent>();
+        for (const event of prev) byId.set(event.id, event);
+        for (const event of response.events) if (!byId.has(event.id)) byId.set(event.id, event);
+        const merged = Array.from(byId.values());
+        merged.sort((left, right) =>
+          right['@timestamp'].localeCompare(left['@timestamp']),
+        );
+        return merged.slice(0, RING_CAPACITY);
+      });
+      setCursorOlder(response.next_cursor);
+      setAtEnd(response.at_end);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingOlder(false);
     }
-  }, [loadingOlder, page.atEnd, page.daemonStartedAt, page.nextCursor]);
+  }, [atEnd, cursorOlder, loadingOlder]);
 
-  // Re-fetch when filters change (debounced).
+  // Filter changes invalidate the ring — re-base from the new constraints.
   const filterKey = useMemo(() => JSON.stringify(filter), [filter]);
-  const skipFirstRefetch = useRef(true);
+  const skipFirstFilterRefetch = useRef(true);
   useEffect(() => {
-    if (skipFirstRefetch.current) {
-      skipFirstRefetch.current = false;
+    if (skipFirstFilterRefetch.current) {
+      skipFirstFilterRefetch.current = false;
       return;
     }
-    const timer = setTimeout(() => {
-      void refresh();
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [filterKey, refresh]);
+    const timer = window.setTimeout(() => void initialLoad(), 200);
+    return () => window.clearTimeout(timer);
+  }, [filterKey, initialLoad]);
 
   const setFieldEq = (key: string, value: string) => {
     setFilter((prev) => {
@@ -238,15 +277,16 @@ export default function Logs() {
     });
   };
 
-  const clearFieldEq = (key: string) => setFieldEq(key, '');
+  const activeFieldKeys = Object.entries(filter.fieldEq)
+    .filter(([, value]) => value !== '')
+    .map(([key]) => key);
 
-  const activeFieldKeys = Object.keys(filter.fieldEq).filter(
-    (key) => filter.fieldEq[key],
+  const inactiveAttributionKeys = attributionKeys.filter(
+    (key) => !(key in filter.fieldEq),
   );
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
       <div
         className="flex items-center justify-between px-6 py-3 border-b"
         style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-surface)' }}
@@ -263,20 +303,43 @@ export default function Logs() {
             className="text-[10px] font-mono ml-2"
             style={{ color: 'var(--pc-text-faint)' }}
           >
-            {page.events.length} events {page.atEnd ? '(end)' : ''}
+            {events.length} events {atEnd ? '(end)' : ''}
           </span>
         </div>
-        <button
-          onClick={() => void refresh()}
-          disabled={loading}
-          className="btn-electric flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPaused((value) => !value)}
+            className="btn-electric flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+            style={{
+              background: paused
+                ? 'var(--color-status-warning)'
+                : 'var(--color-status-success)',
+              color: 'white',
+            }}
+          >
+            {paused ? (
+              <>
+                <Play className="h-3.5 w-3.5" /> Resume
+              </>
+            ) : (
+              <>
+                <Pause className="h-3.5 w-3.5" /> Pause
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => void initialLoad()}
+            disabled={loading}
+            className="btn-electric flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
-      {/* Filters */}
       <div
         className="flex flex-wrap items-center gap-3 px-6 py-3 border-b"
         style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-base)' }}
@@ -284,9 +347,7 @@ export default function Logs() {
         <input
           type="search"
           value={filter.q}
-          onChange={(event) =>
-            setFilter((prev) => ({ ...prev, q: event.target.value }))
-          }
+          onChange={(event) => setFilter((prev) => ({ ...prev, q: event.target.value }))}
           placeholder="Search message + attributes"
           className="px-2 py-1 text-xs rounded border min-w-[220px] flex-1"
           style={{
@@ -301,9 +362,7 @@ export default function Logs() {
             setFilter((prev) => ({
               ...prev,
               severityMin:
-                event.target.value === ''
-                  ? ''
-                  : Number.parseInt(event.target.value, 10),
+                event.target.value === '' ? '' : Number.parseInt(event.target.value, 10),
             }))
           }
           className="px-2 py-1 text-xs rounded border"
@@ -321,9 +380,7 @@ export default function Logs() {
         </select>
         <select
           value={filter.category}
-          onChange={(event) =>
-            setFilter((prev) => ({ ...prev, category: event.target.value }))
-          }
+          onChange={(event) => setFilter((prev) => ({ ...prev, category: event.target.value }))}
           className="px-2 py-1 text-xs rounded border"
           style={{
             background: 'var(--pc-bg-surface)',
@@ -339,9 +396,7 @@ export default function Logs() {
         </select>
         <select
           value={filter.outcome}
-          onChange={(event) =>
-            setFilter((prev) => ({ ...prev, outcome: event.target.value }))
-          }
+          onChange={(event) => setFilter((prev) => ({ ...prev, outcome: event.target.value }))}
           className="px-2 py-1 text-xs rounded border"
           style={{
             background: 'var(--pc-bg-surface)',
@@ -358,11 +413,9 @@ export default function Logs() {
         <input
           type="text"
           value={filter.action}
-          onChange={(event) =>
-            setFilter((prev) => ({ ...prev, action: event.target.value }))
-          }
+          onChange={(event) => setFilter((prev) => ({ ...prev, action: event.target.value }))}
           placeholder="event.action"
-          className="px-2 py-1 text-xs rounded border w-[180px]"
+          className="px-2 py-1 text-xs rounded border w-[160px]"
           style={{
             background: 'var(--pc-bg-surface)',
             borderColor: 'var(--pc-border)',
@@ -391,84 +444,118 @@ export default function Logs() {
             type="checkbox"
             checked={filter.sinceDaemonStart}
             onChange={(event) =>
-              setFilter((prev) => ({
-                ...prev,
-                sinceDaemonStart: event.target.checked,
-              }))
+              setFilter((prev) => ({ ...prev, sinceDaemonStart: event.target.checked }))
             }
             style={{ accentColor: 'var(--pc-accent)' }}
           />
           Since daemon start
         </label>
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((value) => !value)}
+          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border"
+          style={{
+            background: 'var(--pc-bg-surface)',
+            borderColor: 'var(--pc-border)',
+            color: 'var(--pc-text-muted)',
+          }}
+        >
+          {filtersOpen ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )}
+          zeroclaw.* {activeFieldKeys.length > 0 && `(${activeFieldKeys.length})`}
+        </button>
       </div>
 
-      {/* Per-attribution filters */}
-      {page.attributionKeys.length > 0 && (
+      {filtersOpen && (
         <div
           className="flex flex-wrap items-center gap-2 px-6 py-2 border-b"
           style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-surface)' }}
         >
-          <Filter
-            className="h-3.5 w-3.5 flex-shrink-0"
-            style={{ color: 'var(--pc-text-faint)' }}
-          />
-          <span
-            className="text-[10px] uppercase tracking-wider flex-shrink-0"
-            style={{ color: 'var(--pc-text-faint)' }}
-          >
-            zeroclaw.*
-          </span>
-          {page.attributionKeys.map((key) => {
-            const value = filter.fieldEq[key] ?? '';
-            return (
-              <label
-                key={key}
-                className="flex items-center gap-1 text-[10px]"
-                style={{ color: 'var(--pc-text-muted)' }}
+          {activeFieldKeys.map((key) => (
+            <span
+              key={key}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-mono"
+              style={{
+                background: 'var(--pc-bg-base)',
+                borderColor: 'var(--pc-border)',
+                color: 'var(--pc-text-primary)',
+              }}
+            >
+              <span style={{ color: 'var(--pc-text-faint)' }}>{key}=</span>
+              <input
+                type="text"
+                value={filter.fieldEq[key] ?? ''}
+                onChange={(event) => setFieldEq(key, event.target.value)}
+                className="bg-transparent outline-none w-[100px] text-[10px] font-mono"
+                style={{ color: 'var(--pc-text-primary)' }}
+              />
+              <button
+                type="button"
+                onClick={() => setFieldEq(key, '')}
+                style={{ color: 'var(--pc-text-faint)' }}
+                aria-label={`Remove ${key} filter`}
               >
-                <span className="font-mono">{key}=</span>
-                <input
-                  type="text"
-                  value={value}
-                  onChange={(event) => setFieldEq(key, event.target.value)}
-                  placeholder="…"
-                  className="px-1.5 py-0.5 text-[10px] rounded border w-[110px] font-mono"
-                  style={{
-                    background: 'var(--pc-bg-base)',
-                    borderColor: 'var(--pc-border)',
-                    color: 'var(--pc-text-primary)',
-                  }}
-                />
-                {value && (
-                  <button
-                    type="button"
-                    onClick={() => clearFieldEq(key)}
-                    style={{ color: 'var(--pc-text-faint)' }}
-                    className="ml-0.5"
-                    aria-label={`Clear ${key} filter`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </label>
-            );
-          })}
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          {addingField ? (
+            <select
+              autoFocus
+              onChange={(event) => {
+                const key = event.target.value;
+                if (key) setFieldEq(key, '');
+                setAddingField(false);
+              }}
+              onBlur={() => setAddingField(false)}
+              defaultValue=""
+              className="px-2 py-1 text-[10px] rounded border"
+              style={{
+                background: 'var(--pc-bg-base)',
+                borderColor: 'var(--pc-border)',
+                color: 'var(--pc-text-primary)',
+              }}
+            >
+              <option value="" disabled>
+                Pick a key…
+              </option>
+              {inactiveAttributionKeys.map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddingField(true)}
+              disabled={inactiveAttributionKeys.length === 0}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px]"
+              style={{
+                background: 'var(--pc-bg-base)',
+                borderColor: 'var(--pc-border)',
+                color: 'var(--pc-text-muted)',
+              }}
+            >
+              <Plus className="h-3 w-3" /> Add filter
+            </button>
+          )}
           {activeFieldKeys.length > 0 && (
             <button
               type="button"
-              onClick={() =>
-                setFilter((prev) => ({ ...prev, fieldEq: {} }))
-              }
+              onClick={() => setFilter((prev) => ({ ...prev, fieldEq: {} }))}
               className="text-[10px] ml-1"
               style={{ color: 'var(--pc-accent)' }}
             >
-              clear all
+              clear
             </button>
           )}
         </div>
       )}
 
-      {/* Errors */}
       {error && (
         <div
           className="px-6 py-2 text-xs border-b"
@@ -482,9 +569,8 @@ export default function Logs() {
         </div>
       )}
 
-      {/* Events */}
       <div className="flex-1 overflow-y-auto p-4 space-y-1 min-h-0">
-        {page.events.length === 0 && !loading ? (
+        {events.length === 0 && !loading ? (
           <div
             className="flex flex-col items-center justify-center h-full"
             style={{ color: 'var(--pc-text-muted)' }}
@@ -496,14 +582,14 @@ export default function Logs() {
             <p className="text-sm">No events match the current filters.</p>
           </div>
         ) : (
-          page.events.map((event) => <LogRow key={event.id} event={event} />)
+          events.map((event) => <LogRow key={event.id} event={event} />)
         )}
-        {!page.atEnd && page.events.length > 0 && (
+        {!atEnd && events.length > 0 && (
           <div className="flex justify-center pt-3">
             <button
               type="button"
               onClick={() => void loadOlder()}
-              disabled={loadingOlder || !page.nextCursor}
+              disabled={loadingOlder || !cursorOlder}
               className="btn-electric px-3 py-1.5 text-xs font-semibold"
             >
               {loadingOlder ? 'Loading…' : 'Load older'}
@@ -521,6 +607,7 @@ function LogRow({ event }: { event: LogEvent }) {
   const attributionEntries = Object.entries(attribution).filter(
     ([key, value]) => key !== 'duration_ms' && value !== '' && value !== null,
   );
+  const hasMessage = typeof event.message === 'string' && event.message.length > 0;
   return (
     <div
       className="rounded-md px-3 py-2 border text-xs"
@@ -550,15 +637,17 @@ function LogRow({ event }: { event: LogEvent }) {
           {event.event.category}.{event.event.action}
         </span>
         <div className="flex-1 min-w-0">
-          <p
-            className="text-sm break-words"
-            style={{ color: 'var(--pc-text-primary)' }}
-          >
-            {event.message || <em style={{ opacity: 0.5 }}>(no message)</em>}
-          </p>
+          {hasMessage && (
+            <p
+              className="text-sm break-words"
+              style={{ color: 'var(--pc-text-primary)' }}
+            >
+              {event.message}
+            </p>
+          )}
           {attributionEntries.length > 0 && (
             <div
-              className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] font-mono"
+              className={`${hasMessage ? 'mt-1' : ''} flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] font-mono`}
               style={{ color: 'var(--pc-text-muted)' }}
             >
               {attributionEntries.map(([key, value]) => (

@@ -255,7 +255,7 @@ pub fn emergency_history_trim(
             dropped += 1;
         }
     }
-    dropped += remove_orphaned_tool_messages(history);
+    dropped += remove_orphaned_tool_messages(history).removed;
     dropped
 }
 

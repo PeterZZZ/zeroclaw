@@ -108,7 +108,7 @@ impl Channel for WeComChannel {
         // handled via the gateway webhook subsystem.
         //
         // This listener keeps the channel alive and waits for the sender to close.
-        tracing::info!("WeCom: channel ready (send-only via Bot Webhook)");
+        tracing::info!("channel ready (send-only via Bot Webhook)");
         tx.closed().await;
         Ok(())
     }

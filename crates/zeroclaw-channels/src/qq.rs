@@ -390,14 +390,14 @@ impl QQChannel {
                 Ok(result) => {
                     if attempt > 1 {
                         tracing::info!(
-                            "QQ: getAppAccessToken succeeded on attempt {attempt}/{AUTH_RETRY_MAX_ATTEMPTS}"
+                            "getAppAccessToken succeeded on attempt {attempt}/{AUTH_RETRY_MAX_ATTEMPTS}"
                         );
                     }
                     return Ok(result);
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "QQ: getAppAccessToken failed (attempt {attempt}/{AUTH_RETRY_MAX_ATTEMPTS}): {e}"
+                        "getAppAccessToken failed (attempt {attempt}/{AUTH_RETRY_MAX_ATTEMPTS}): {e}"
                     );
                     last_err = Some(e);
 
@@ -414,7 +414,7 @@ impl QQChannel {
         }
 
         Err(last_err.unwrap_or_else(|| {
-            anyhow::anyhow!("QQ: getAppAccessToken failed after {AUTH_RETRY_MAX_ATTEMPTS} attempts")
+            anyhow::anyhow!("getAppAccessToken failed after {AUTH_RETRY_MAX_ATTEMPTS} attempts")
         }))
     }
 
@@ -703,7 +703,7 @@ impl QQChannel {
 
             // Check upload cache
             if let Some(cached_file_info) = self.get_cached_upload(&cache_key).await {
-                tracing::debug!("QQ: using cached upload for {target}");
+                tracing::debug!("using cached upload for {target}");
                 self.send_media_message(recipient, &cached_file_info)
                     .await?;
                 return Ok(());
@@ -800,7 +800,7 @@ impl QQChannel {
                     {
                         Ok(local_path) => local_path.display().to_string(),
                         Err(e) => {
-                            tracing::warn!(error = ?e, "QQ: failed to download attachment");
+                            tracing::warn!(error = ?e, "failed to download attachment");
                             url.clone()
                         }
                     }
@@ -964,7 +964,7 @@ impl Channel for QQChannel {
                 tracing::warn!(
                     target = attachment.target,
                     error = %e,
-                    "QQ: failed to send media attachment; falling back to text"
+                    "failed to send media attachment; falling back to text"
                 );
                 // Degrade to text fallback
                 let fallback = format!(
@@ -987,13 +987,13 @@ impl Channel for QQChannel {
 
     #[allow(clippy::too_many_lines)]
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        tracing::info!("QQ: authenticating...");
+        tracing::info!("authenticating...");
         let token = self.get_token().await?;
 
-        tracing::info!("QQ: fetching gateway URL...");
+        tracing::info!("fetching gateway URL...");
         let gw_url = self.get_gateway_url(&token).await?;
 
-        tracing::info!("QQ: connecting to gateway WebSocket...");
+        tracing::info!("connecting to gateway WebSocket...");
         let (ws_stream, _) = zeroclaw_config::schema::ws_connect_with_proxy(
             &gw_url,
             "channel.qq",
@@ -1006,7 +1006,7 @@ impl Channel for QQChannel {
         let hello = read
             .next()
             .await
-            .ok_or(anyhow::anyhow!("QQ: no hello frame"))??;
+            .ok_or(anyhow::anyhow!("no hello frame"))??;
         let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
         let heartbeat_interval = hello_data
             .get("d")
@@ -1020,7 +1020,7 @@ impl Channel for QQChannel {
 
         if let (Some(sid), Some(seq)) = (&stored_session, stored_seq) {
             // Attempt Resume (opcode 6)
-            tracing::info!("QQ: attempting session resume (session_id={sid}, seq={seq})");
+            tracing::info!("attempting session resume (session_id={sid}, seq={seq})");
             let resume = json!({
                 "op": 6,
                 "d": {
@@ -1049,7 +1049,7 @@ impl Channel for QQChannel {
             write
                 .send(Message::Text(identify.to_string().into()))
                 .await?;
-            tracing::info!("QQ: connected and sent Identify");
+            tracing::info!("connected and sent Identify");
         }
 
         let mut sequence: i64 = stored_seq.unwrap_or(-1);
@@ -1106,7 +1106,7 @@ impl Channel for QQChannel {
                     if missed_ack_count > 0 {
                         if missed_ack_count >= MAX_MISSED_ACKS {
                             tracing::warn!(
-                                "QQ: {missed_ack_count} consecutive heartbeat ACKs missed \
+                                "{missed_ack_count} consecutive heartbeat ACKs missed \
                                  (interval {hb_interval}ms + {grace_ms}ms grace); \
                                  connection appears zombied"
                             );
@@ -1114,7 +1114,7 @@ impl Channel for QQChannel {
                             break;
                         }
                         tracing::info!(
-                            "QQ: heartbeat ACK missed ({missed_ack_count}/{MAX_MISSED_ACKS}); \
+                            "heartbeat ACK missed ({missed_ack_count}/{MAX_MISSED_ACKS}); \
                              tolerating transient delay"
                         );
                     }
@@ -1181,13 +1181,13 @@ impl Channel for QQChannel {
                         }
                         // Reconnect
                         7 => {
-                            tracing::warn!("QQ: received Reconnect (op 7); will resume");
+                            tracing::warn!("received Reconnect (op 7); will resume");
                             exit_reason = ExitReason::Reconnect;
                             break;
                         }
                         // Invalid Session
                         9 => {
-                            tracing::warn!("QQ: received Invalid Session (op 9); clearing session for fresh auth");
+                            tracing::warn!("received Invalid Session (op 9); clearing session for fresh auth");
                             exit_reason = ExitReason::InvalidSession;
                             break;
                         }
@@ -1214,12 +1214,12 @@ impl Channel for QQChannel {
                     if event_type == "READY" || event_type == "RESUMED" {
                         if let Some(sid) = d.get("session_id").and_then(|s| s.as_str()) {
                             *self.session_id.write().await = Some(sid.to_string());
-                            tracing::info!("QQ: session established (session_id={sid}, event={event_type})");
+                            tracing::info!("session established (session_id={sid}, event={event_type})");
                         }
                         continue;
                     }
 
-                    tracing::debug!("QQ: event_type={event_type} payload={d}");
+                    tracing::debug!("event_type={event_type} payload={d}");
 
                     match event_type {
                         "C2C_MESSAGE_CREATE" => {
@@ -1237,7 +1237,7 @@ impl Channel for QQChannel {
                             let user_openid = d.get("author").and_then(|a| a.get("user_openid")).and_then(|u| u.as_str()).unwrap_or(author_id);
 
                             if !self.is_user_allowed(user_openid) {
-                                tracing::warn!("QQ: ignoring C2C message from unauthorized user: {user_openid}");
+                                tracing::warn!("ignoring C2C message from unauthorized user: {user_openid}");
                                 continue;
                             }
 
@@ -1260,7 +1260,7 @@ impl Channel for QQChannel {
                             };
 
                             if tx.send(channel_msg).await.is_err() {
-                                tracing::warn!("QQ: message channel closed");
+                                tracing::warn!("message channel closed");
                                 exit_reason = ExitReason::ChannelClosed;
                                 break 'outer;
                             }
@@ -1278,7 +1278,7 @@ impl Channel for QQChannel {
                             let author_id = d.get("author").and_then(|a| a.get("member_openid")).and_then(|m| m.as_str()).unwrap_or("unknown");
 
                             if !self.is_user_allowed(author_id) {
-                                tracing::warn!("QQ: ignoring group message from unauthorized user: {author_id}");
+                                tracing::warn!("ignoring group message from unauthorized user: {author_id}");
                                 continue;
                             }
 
@@ -1302,7 +1302,7 @@ impl Channel for QQChannel {
                             };
 
                             if tx.send(channel_msg).await.is_err() {
-                                tracing::warn!("QQ: message channel closed");
+                                tracing::warn!("message channel closed");
                                 exit_reason = ExitReason::ChannelClosed;
                                 break 'outer;
                             }
@@ -1337,7 +1337,7 @@ impl Channel for QQChannel {
                     .map(|f| (f.code.to_string(), f.reason.to_string()))
                     .unwrap_or_else(|| ("unknown".into(), "none".into()));
                 tracing::warn!(
-                    "QQ: WebSocket closed with code={code}, reason=\"{reason}\"; \
+                    "WebSocket closed with code={code}, reason=\"{reason}\"; \
                      resume will be attempted on reconnect"
                 );
                 anyhow::bail!(
@@ -1346,13 +1346,13 @@ impl Channel for QQChannel {
             }
             ExitReason::StreamEnded => {
                 tracing::warn!(
-                    "QQ: WebSocket stream ended unexpectedly; resume will be attempted on reconnect"
+                    "WebSocket stream ended unexpectedly; resume will be attempted on reconnect"
                 );
                 anyhow::bail!("QQ WebSocket connection closed: stream ended unexpectedly")
             }
             ExitReason::HeartbeatTimeout => {
                 tracing::warn!(
-                    "QQ: heartbeat timeout after {MAX_MISSED_ACKS} consecutive missed ACKs; \
+                    "heartbeat timeout after {MAX_MISSED_ACKS} consecutive missed ACKs; \
                      resume will be attempted on reconnect"
                 );
                 anyhow::bail!(
@@ -1361,7 +1361,7 @@ impl Channel for QQChannel {
                 )
             }
             ExitReason::WriteFailed => {
-                tracing::warn!("QQ: WebSocket write failed; resume will be attempted on reconnect");
+                tracing::warn!("WebSocket write failed; resume will be attempted on reconnect");
                 anyhow::bail!("QQ WebSocket connection closed: write failed")
             }
             ExitReason::ChannelClosed => {

@@ -197,9 +197,9 @@ impl Channel for TwitterChannel {
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        tracing::info!("Twitter: authenticating...");
+        tracing::info!("authenticating...");
         let bot_user_id = self.get_authenticated_user_id().await?;
-        tracing::info!("Twitter: authenticated as user {bot_user_id}");
+        tracing::info!("authenticated as user {bot_user_id}");
 
         // Poll mentions timeline (filtered stream requires elevated access).
         // Using mentions timeline polling as a more accessible approach.
@@ -227,7 +227,7 @@ impl Channel for TwitterChannel {
                     let data: serde_json::Value = match resp.json().await {
                         Ok(d) => d,
                         Err(e) => {
-                            tracing::warn!(error = ?e, "Twitter: failed to parse mentions response");
+                            tracing::warn!(error = ?e, "failed to parse mentions response");
                             tokio::time::sleep(poll_interval).await;
                             continue;
                         }
@@ -277,7 +277,7 @@ impl Channel for TwitterChannel {
                             if !self.is_user_allowed(&username) && !self.is_user_allowed(author_id)
                             {
                                 tracing::debug!(
-                                    "Twitter: ignoring mention from unauthorized user: {username}"
+                                    "ignoring mention from unauthorized user: {username}"
                                 );
                                 continue;
                             }
@@ -311,7 +311,7 @@ impl Channel for TwitterChannel {
                             };
 
                             if tx.send(channel_msg).await.is_err() {
-                                tracing::warn!("Twitter: message channel closed");
+                                tracing::warn!("message channel closed");
                                 return Ok(());
                             }
 
@@ -335,15 +335,15 @@ impl Channel for TwitterChannel {
                     let status = resp.status();
                     if status.as_u16() == 429 {
                         // Rate limited — back off
-                        tracing::warn!("Twitter: rate limited, backing off 60s");
+                        tracing::warn!("rate limited, backing off 60s");
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                         continue;
                     }
                     let err = resp.text().await.unwrap_or_default();
-                    tracing::warn!(error = ?err, "Twitter: mentions request failed ({status})");
+                    tracing::warn!(error = ?err, "mentions request failed ({status})");
                 }
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Twitter: mentions request error");
+                    tracing::warn!(error = ?e, "mentions request error");
                 }
             }
 

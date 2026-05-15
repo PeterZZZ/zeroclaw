@@ -473,7 +473,7 @@ impl Channel for IrcChannel {
                         }
                     } else if msg.params.iter().any(|p| p.contains("NAK")) {
                         // CAP * NAK :sasl — server rejected SASL, proceed without it
-                        tracing::warn!("IRC server does not support SASL, continuing without it");
+                        tracing::warn!("server does not support SASL, continuing without it");
                         sasl_pending = false;
                         let mut guard = self.writer.lock().await;
                         if let Some(ref mut w) = *guard {
@@ -515,7 +515,7 @@ impl Channel for IrcChannel {
 
                 // SASL failure (904, 905, 906, 907)
                 "904" | "905" | "906" | "907" => {
-                    tracing::warn!("IRC SASL authentication failed ({})", msg.command);
+                    tracing::warn!("SASL authentication failed ({})", msg.command);
                     sasl_pending = false;
                     let mut guard = self.writer.lock().await;
                     if let Some(ref mut w) = *guard {
@@ -526,7 +526,7 @@ impl Channel for IrcChannel {
                 // RPL_WELCOME — registration complete
                 "001" => {
                     registered = true;
-                    tracing::info!("IRC registered as {}", current_nick);
+                    tracing::info!("registered as {}", current_nick);
 
                     // NickServ authentication
                     if let Some(ref pass) = self.nickserv_password {
@@ -549,7 +549,7 @@ impl Channel for IrcChannel {
                 // ERR_NICKNAMEINUSE (433)
                 "433" => {
                     let alt = format!("{current_nick}_");
-                    tracing::warn!("IRC nickname {current_nick} is in use, trying {alt}");
+                    tracing::warn!("nickname {current_nick} is in use, trying {alt}");
                     let mut guard = self.writer.lock().await;
                     if let Some(ref mut w) = *guard {
                         Self::send_raw(w, &format!("NICK {alt}")).await?;

@@ -91,12 +91,12 @@ impl MattermostChannel {
                 }
                 let login_id = self.login_id.as_deref().ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Mattermost: bot_token is unset; configure either bot_token or both login_id and password"
+                        "bot_token is unset; configure either bot_token or both login_id and password"
                     )
                 })?;
                 let password = self.password.as_deref().ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Mattermost: bot_token is unset and password is missing; both login_id and password must be set"
+                        "bot_token is unset and password is missing; both login_id and password must be set"
                     )
                 })?;
                 self.login(login_id, password).await
@@ -118,21 +118,21 @@ impl MattermostChannel {
             }))
             .send()
             .await
-            .context("Mattermost login request failed")?;
+            .context("login request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("Mattermost login failed ({status}): {body}");
+            bail!("login failed ({status}): {body}");
         }
         let token = resp
             .headers()
             .get("Token")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| {
-                anyhow::anyhow!("Mattermost login succeeded but the response had no Token header")
+                anyhow::anyhow!("login succeeded but the response had no Token header")
             })?
             .to_string();
-        tracing::info!("Mattermost login succeeded; session token cached");
+        tracing::info!("login succeeded; session token cached");
         Ok(token)
     }
 
@@ -197,7 +197,7 @@ impl MattermostChannel {
         let token = match self.token().await {
             Ok(t) => t.to_string(),
             Err(e) => {
-                tracing::warn!(error = ?e, "Mattermost auth failed in get_bot_identity");
+                tracing::warn!(error = ?e, "auth failed in get_bot_identity");
                 return (String::new(), String::new());
             }
         };
@@ -246,7 +246,7 @@ impl MattermostChannel {
                 tracing::debug!(
                     duration_secs,
                     max = config.max_duration_secs,
-                    "Mattermost audio attachment exceeds max duration, skipping"
+                    "audio attachment exceeds max duration, skipping"
                 );
                 return None;
             }
@@ -261,7 +261,7 @@ impl MattermostChannel {
         let token = match self.token().await {
             Ok(t) => t.to_string(),
             Err(e) => {
-                tracing::warn!(error = ?e, "Mattermost: audio download auth failed for {file_id}");
+                tracing::warn!(error = ?e, "audio download auth failed for {file_id}");
                 return None;
             }
         };
@@ -274,14 +274,14 @@ impl MattermostChannel {
         {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(error = ?e, "Mattermost: audio download failed for {file_id}");
+                tracing::warn!(error = ?e, "audio download failed for {file_id}");
                 return None;
             }
         };
 
         if !response.status().is_success() {
             tracing::warn!(
-                "Mattermost: audio download returned {}: {file_id}",
+                "audio download returned {}: {file_id}",
                 response.status()
             );
             return None;
@@ -290,14 +290,14 @@ impl MattermostChannel {
         if let Some(content_length) = response.content_length()
             && content_length > MAX_MATTERMOST_AUDIO_BYTES
         {
-            tracing::warn!("Mattermost: audio file too large ({content_length} bytes): {file_id}");
+            tracing::warn!("audio file too large ({content_length} bytes): {file_id}");
             return None;
         }
 
         let bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                tracing::warn!(error = ?e, "Mattermost: failed to read audio bytes for {file_id}");
+                tracing::warn!(error = ?e, "failed to read audio bytes for {file_id}");
                 return None;
             }
         };
@@ -306,14 +306,14 @@ impl MattermostChannel {
             Ok(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
-                    tracing::info!("Mattermost: transcription returned empty text, skipping");
+                    tracing::info!("transcription returned empty text, skipping");
                     None
                 } else {
                     Some(format!("[Voice] {trimmed}"))
                 }
             }
             Err(e) => {
-                tracing::warn!(error = ?e, "Mattermost audio transcription failed");
+                tracing::warn!(error = ?e, "audio transcription failed");
                 None
             }
         }
@@ -362,7 +362,7 @@ impl Channel for MattermostChannel {
                 .text()
                 .await
                 .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            bail!("Mattermost post failed ({status}): {body}");
+            bail!("post failed ({status}): {body}");
         }
 
         Ok(())
@@ -370,11 +370,11 @@ impl Channel for MattermostChannel {
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
         let channel_id = self.channel_ids.first().cloned().ok_or_else(|| {
-            anyhow::anyhow!("Mattermost channel_ids must contain at least one entry for listening")
+            anyhow::anyhow!("channel_ids must contain at least one entry for listening")
         })?;
         if self.channel_ids.len() > 1 {
             tracing::warn!(
-                "Mattermost channel_ids has {} entries; only the first ({channel_id}) is currently used for listening",
+                "channel_ids has {} entries; only the first ({channel_id}) is currently used for listening",
                 self.channel_ids.len()
             );
         }
@@ -389,7 +389,7 @@ impl Channel for MattermostChannel {
             .unwrap_or_default()
             .as_millis()) as i64;
 
-        tracing::info!("Mattermost channel listening on {}...", channel_id);
+        tracing::info!("channel listening on {}...", channel_id);
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -407,7 +407,7 @@ impl Channel for MattermostChannel {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Mattermost poll error");
+                    tracing::warn!(error = ?e, "poll error");
                     continue;
                 }
             };
@@ -415,7 +415,7 @@ impl Channel for MattermostChannel {
             let data: serde_json::Value = match resp.json().await {
                 Ok(d) => d,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Mattermost parse error");
+                    tracing::warn!(error = ?e, "parse error");
                     continue;
                 }
             };
@@ -507,7 +507,7 @@ impl Channel for MattermostChannel {
                     .await
                     && !r.status().is_success()
                 {
-                    tracing::debug!(status = %r.status(), "Mattermost typing indicator failed");
+                    tracing::debug!(status = %r.status(), "typing indicator failed");
                 }
 
                 // Mattermost typing events expire after ~6s; re-fire every 4s.
@@ -557,7 +557,7 @@ impl MattermostChannel {
         };
 
         if !self.is_user_allowed(user_id) {
-            tracing::warn!("Mattermost: ignoring message from unauthorized user: {user_id}");
+            tracing::warn!("ignoring message from unauthorized user: {user_id}");
             return None;
         }
 

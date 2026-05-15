@@ -738,7 +738,7 @@ impl Agent {
                     }
                 }
                 Err(e) => {
-                    tracing::error!("MCP registry failed to initialize: {e:#}");
+                    tracing::error!(error = ?e, "MCP registry failed to initialize");
                 }
             }
         }

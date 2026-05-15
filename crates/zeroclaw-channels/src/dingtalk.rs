@@ -127,7 +127,7 @@ impl DingTalkChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("DingTalk gateway registration failed ({status}): {err}");
+            anyhow::bail!("gateway registration failed ({status}): {err}");
         }
 
         let gw: GatewayResponse = resp.json().await?;
@@ -170,19 +170,19 @@ impl Channel for DingTalkChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("DingTalk webhook reply failed ({status}): {err}");
+            anyhow::bail!("webhook reply failed ({status}): {err}");
         }
 
         Ok(())
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        tracing::info!("DingTalk: registering gateway connection...");
+        tracing::info!("registering gateway connection...");
 
         let gw = self.register_connection().await?;
         let ws_url = format!("{}?ticket={}", gw.endpoint, gw.ticket);
 
-        tracing::info!("DingTalk: connecting to stream WebSocket...");
+        tracing::info!("connecting to stream WebSocket...");
         let (ws_stream, _) = zeroclaw_config::schema::ws_connect_with_proxy(
             &ws_url,
             "channel.dingtalk",
@@ -191,14 +191,14 @@ impl Channel for DingTalkChannel {
         .await?;
         let (mut write, mut read) = ws_stream.split();
 
-        tracing::info!("DingTalk: connected and listening for messages...");
+        tracing::info!("connected and listening for messages...");
 
         while let Some(msg) = read.next().await {
             let msg = match msg {
                 Ok(Message::Text(t)) => t,
                 Ok(Message::Close(_)) => break,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "DingTalk WebSocket error");
+                    tracing::warn!(error = ?e, "WebSocket error");
                     break;
                 }
                 _ => continue,
@@ -231,7 +231,7 @@ impl Channel for DingTalkChannel {
                     });
 
                     if let Err(e) = write.send(Message::Text(pong.to_string().into())).await {
-                        tracing::warn!(error = ?e, "DingTalk: failed to send pong");
+                        tracing::warn!(error = ?e, "failed to send pong");
                         break;
                     }
                 }
@@ -240,7 +240,7 @@ impl Channel for DingTalkChannel {
                     let data = match Self::parse_stream_data(&frame) {
                         Some(v) => v,
                         None => {
-                            tracing::debug!("DingTalk: frame has no parseable data payload");
+                            tracing::debug!("frame has no parseable data payload");
                             continue;
                         }
                     };
@@ -264,7 +264,7 @@ impl Channel for DingTalkChannel {
 
                     if !self.is_user_allowed(sender_id) {
                         tracing::warn!(
-                            "DingTalk: ignoring message from unauthorized user: {sender_id}"
+                            "ignoring message from unauthorized user: {sender_id}"
                         );
                         continue;
                     }
@@ -316,7 +316,7 @@ impl Channel for DingTalkChannel {
                     };
 
                     if tx.send(channel_msg).await.is_err() {
-                        tracing::warn!("DingTalk: message channel closed");
+                        tracing::warn!("message channel closed");
                         break;
                     }
                 }
@@ -324,7 +324,7 @@ impl Channel for DingTalkChannel {
             }
         }
 
-        anyhow::bail!("DingTalk WebSocket stream ended")
+        anyhow::bail!("WebSocket stream ended")
     }
 
     async fn health_check(&self) -> bool {

@@ -2573,6 +2573,7 @@ fn spawn_supervised_listener_with_health_interval(
     };
     let span = tracing::info_span!(
         "channel_listener",
+        category = "channel",
         channel = %composite,
     );
     tokio::spawn(
@@ -2610,7 +2611,7 @@ fn spawn_supervised_listener_with_health_interval(
                         backoff = initial_backoff_secs.max(1);
                     }
                     Err(e) => {
-                        tracing::error!("Channel {} error: {e}; restarting", ch.name());
+                        tracing::error!(error = ?e, "channel listener error; restarting");
                         zeroclaw_runtime::health::mark_component_error(&component, e.to_string());
                     }
                 }
@@ -2649,7 +2650,7 @@ fn spawn_scoped_typing_task(
 ) -> tokio::task::JoinHandle<()> {
     let stop_signal = cancellation_token;
     let refresh_interval = Duration::from_secs(CHANNEL_TYPING_REFRESH_INTERVAL_SECS);
-    tokio::spawn(async move {
+    zeroclaw_log::spawn!(async move {
         let mut interval = tokio::time::interval(refresh_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -2658,14 +2659,14 @@ fn spawn_scoped_typing_task(
                 () = stop_signal.cancelled() => break,
                 _ = interval.tick() => {
                     if let Err(e) = channel.start_typing(&recipient).await {
-                        tracing::debug!(error = ?e, "Failed to start typing on {}", channel.name());
+                        tracing::debug!(error = ?e, "failed to start typing");
                     }
                 }
             }
         }
 
         if let Err(e) = channel.stop_typing(&recipient).await {
-            tracing::debug!(error = ?e, "Failed to stop typing on {}", channel.name());
+            tracing::debug!(error = ?e, "failed to stop typing");
         }
     })
 }
@@ -2688,6 +2689,7 @@ async fn process_channel_message(
     let message_id = msg.id.clone();
     let composite_for_body = channel_composite.clone();
     zeroclaw_log::scope!(
+        category: "channel",
         agent_alias: agent_alias.as_str(),
         channel: channel_composite.as_str(),
         sender: sender.as_str(),
@@ -3144,7 +3146,7 @@ async fn process_channel_message_body(
         }
         runtime_trace::record_event(
             "channel_message_no_reply",
-            Some(msg.channel.as_str()),
+            Some(channel_composite.as_str()),
             Some(route.model_provider.as_str()),
             Some(route.model.as_str()),
             None,
@@ -3218,7 +3220,7 @@ async fn process_channel_message_body(
             let channel = Arc::clone(channel_ref);
             let reply_target = msg.reply_target.clone();
             let draft_id = draft_id_ref.to_string();
-            Some(tokio::spawn(async move {
+            Some(zeroclaw_log::spawn!(async move {
                 use zeroclaw_runtime::agent::loop_::StreamDelta;
                 let mut accumulated = String::new();
                 while let Some(event) = rx.recv().await {
@@ -3293,11 +3295,11 @@ async fn process_channel_message_body(
     let notify_reply_target = msg.reply_target.clone();
     let notify_thread_root = followup_thread_id(&msg);
     let notify_task = if msg.channel == "cli" || !ctx.show_tool_calls {
-        Some(tokio::spawn(async move {
+        Some(zeroclaw_log::spawn!(async move {
             while notify_rx.recv().await.is_some() {}
         }))
     } else {
-        Some(tokio::spawn(async move {
+        Some(zeroclaw_log::spawn!(async move {
             let thread_ts = notify_thread_root;
             while let Some(text) = notify_rx.recv().await {
                 if let Some(ref ch) = notify_channel {
@@ -3512,7 +3514,7 @@ async fn process_channel_message_body(
             );
             runtime_trace::record_event(
                 "channel_message_cancelled",
-                Some(msg.channel.as_str()),
+                Some(channel_composite.as_str()),
                 Some(route.model_provider.as_str()),
                 Some(route.model.as_str()),
                 None,
@@ -3625,7 +3627,7 @@ async fn process_channel_message_body(
 
             runtime_trace::record_event(
                 "channel_message_outbound",
-                Some(msg.channel.as_str()),
+                Some(channel_composite.as_str()),
                 Some(route.model_provider.as_str()),
                 Some(route.model.as_str()),
                 None,
@@ -3672,7 +3674,7 @@ async fn process_channel_message_body(
                 let memory = Arc::clone(&ctx.memory);
                 let user_msg = msg.content.clone();
                 let assistant_resp = delivered_response.clone();
-                tokio::spawn(async move {
+                zeroclaw_log::spawn!(async move {
                     if let Err(e) = zeroclaw_memory::consolidation::consolidate_turn(
                         model_provider.as_ref(),
                         &model,
@@ -3721,7 +3723,7 @@ async fn process_channel_message_body(
                         .finalize_draft(&msg.reply_target, draft_id, &delivered_response)
                         .await
                     {
-                        tracing::warn!("Failed to finalize draft: {e}; sending as new message");
+                        tracing::warn!(error = ?e, "Failed to finalize draft; sending as new message");
                         let _ = channel
                             .send(
                                 &SendMessage::new(&delivered_response, &msg.reply_target)
@@ -3770,7 +3772,7 @@ async fn process_channel_message_body(
                 );
                 runtime_trace::record_event(
                     "channel_message_cancelled",
-                    Some(msg.channel.as_str()),
+                    Some(channel_composite.as_str()),
                     Some(route.model_provider.as_str()),
                     Some(route.model.as_str()),
                     None,
@@ -3801,7 +3803,7 @@ async fn process_channel_message_body(
                 );
                 runtime_trace::record_event(
                     "channel_message_error",
-                    Some(msg.channel.as_str()),
+                    Some(channel_composite.as_str()),
                     Some(route.model_provider.as_str()),
                     Some(route.model.as_str()),
                     None,
@@ -3849,7 +3851,7 @@ async fn process_channel_message_body(
                 let safe_error = zeroclaw_providers::sanitize_api_error(&e.to_string());
                 runtime_trace::record_event(
                     "channel_message_error",
-                    Some(msg.channel.as_str()),
+                    Some(channel_composite.as_str()),
                     Some(route.model_provider.as_str()),
                     Some(route.model.as_str()),
                     None,
@@ -3896,7 +3898,7 @@ async fn process_channel_message_body(
             );
             runtime_trace::record_event(
                 "channel_message_timeout",
-                Some(msg.channel.as_str()),
+                Some(channel_composite.as_str()),
                 Some(route.model_provider.as_str()),
                 Some(route.model.as_str()),
                 None,
@@ -6260,7 +6262,7 @@ pub async fn start_channels(
                     }
                 }
                 Err(e) => {
-                    tracing::error!(agent = %agent_alias, "MCP registry failed to initialize: {e:#}");
+                    tracing::error!(agent_alias = %agent_alias, error = ?e, "MCP registry failed to initialize");
                 }
             }
         }
@@ -6731,7 +6733,7 @@ pub async fn start_channels(
                         .and_then(|cid| cid.split_once('.').map(|(b, _)| b.to_string()))
                         .and_then(|b| owner_by_channel_key.get(&b).cloned())
                 });
-            let target_ctx = match owner_agent.and_then(|a| agent_ctxs.get(&a)) {
+            let target_ctx = match owner_agent.as_ref().and_then(|a| agent_ctxs.get(a)) {
                 Some(ctx) => ctx,
                 None => continue,
             };
@@ -6751,7 +6753,19 @@ pub async fn start_channels(
                 msgs.push(closure);
                 orphans_closed += 1;
             }
-            zeroclaw_runtime::agent::history_pruner::remove_orphaned_tool_messages(&mut msgs);
+            let pruned =
+                zeroclaw_runtime::agent::history_pruner::remove_orphaned_tool_messages(&mut msgs);
+            if !pruned.is_empty() {
+                tracing::warn!(
+                    category = "agent",
+                    agent_alias = %owner_agent.as_deref().unwrap_or(""),
+                    channel = %m.channel_id.as_deref().unwrap_or(""),
+                    session_key = %m.key,
+                    removed = pruned.removed,
+                    orphan_tool_call_ids = ?pruned.orphan_tool_call_ids,
+                    "removed orphaned tool messages from restored history (tool_use/tool_result pairing inconsistency auto-healed)"
+                );
+            }
 
             let mut histories = target_ctx
                 .conversation_histories

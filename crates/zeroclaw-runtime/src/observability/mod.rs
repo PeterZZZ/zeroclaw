@@ -138,7 +138,7 @@ fn create_primary_observer(config: &ObservabilityConfig) -> Box<dyn Observer> {
                     Box::new(obs)
                 }
                 Err(e) => {
-                    tracing::error!("Failed to create OTel observer: {e}. Falling back to noop.");
+                    tracing::error!(error = ?e, "Failed to create OTel observer. Falling back to noop.");
                     Box::new(NoopObserver)
                 }
             }

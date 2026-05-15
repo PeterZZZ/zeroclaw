@@ -1431,7 +1431,7 @@ impl Channel for DiscordChannel {
                         }
                         Some(Ok(Message::Close(_))) | None => break,
                         Some(Err(e)) => {
-                            tracing::warn!("websocket read error: {e}, reconnecting");
+                            tracing::warn!(error = ?e, "websocket read error, reconnecting");
                             break;
                         }
                         _ => continue,

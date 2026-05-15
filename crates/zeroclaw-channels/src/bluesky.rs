@@ -135,7 +135,7 @@ impl BlueskyChannel {
                 .text()
                 .await
                 .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            bail!("Bluesky createSession failed ({status}): {body}");
+            bail!("createSession failed ({status}): {body}");
         }
 
         let session: CreateSessionResponse = resp.json().await?;
@@ -168,7 +168,7 @@ impl BlueskyChannel {
 
         if !resp.status().is_success() {
             // Refresh failed — fall back to full re-auth
-            tracing::warn!("Bluesky session refresh failed, re-authenticating");
+            tracing::warn!("session refresh failed, re-authenticating");
             return self.create_session().await;
         }
 
@@ -270,7 +270,7 @@ impl BlueskyChannel {
             .await?;
 
         if !resp.status().is_success() {
-            tracing::warn!("Bluesky updateSeen failed: {}", resp.status());
+            tracing::warn!("updateSeen failed: {}", resp.status());
         }
         Ok(())
     }
@@ -344,7 +344,7 @@ impl Channel for BlueskyChannel {
                 .text()
                 .await
                 .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            bail!("Bluesky post failed ({status}): {body}");
+            bail!("post failed ({status}): {body}");
         }
 
         Ok(())
@@ -354,7 +354,7 @@ impl Channel for BlueskyChannel {
         // Initial auth
         self.create_session().await?;
 
-        tracing::info!("Bluesky channel listening as @{}...", self.handle);
+        tracing::info!("channel listening as @{}...", self.handle);
 
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -362,7 +362,7 @@ impl Channel for BlueskyChannel {
             let token = match self.get_access_jwt().await {
                 Ok(t) => t,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Bluesky auth error");
+                    tracing::warn!(error = ?e, "auth error");
                     continue;
                 }
             };
@@ -379,20 +379,20 @@ impl Channel for BlueskyChannel {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Bluesky poll error");
+                    tracing::warn!(error = ?e, "poll error");
                     continue;
                 }
             };
 
             if !resp.status().is_success() {
-                tracing::warn!("Bluesky notifications failed: {}", resp.status());
+                tracing::warn!("notifications failed: {}", resp.status());
                 continue;
             }
 
             let listing: NotificationListResponse = match resp.json().await {
                 Ok(l) => l,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Bluesky parse error");
+                    tracing::warn!(error = ?e, "parse error");
                     continue;
                 }
             };
@@ -411,7 +411,7 @@ impl Channel for BlueskyChannel {
             if let Some(ref seen_at) = latest_indexed_at
                 && let Err(e) = self.update_seen(seen_at).await
             {
-                tracing::warn!(error = ?e, "Bluesky updateSeen error");
+                tracing::warn!(error = ?e, "updateSeen error");
             }
 
             let _ = &listing.cursor; // cursor available for pagination if needed

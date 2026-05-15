@@ -110,7 +110,7 @@ impl RedditChannel {
                 .text()
                 .await
                 .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            bail!("Reddit token refresh failed ({status}): {body}");
+            bail!("token refresh failed ({status}): {body}");
         }
 
         let token_resp: RedditTokenResponse = resp.json().await?;
@@ -153,7 +153,7 @@ impl RedditChannel {
                 .text()
                 .await
                 .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            tracing::warn!("Reddit inbox fetch failed ({status}): {body}");
+            tracing::warn!("inbox fetch failed ({status}): {body}");
             return Ok(Vec::new());
         }
 
@@ -179,7 +179,7 @@ impl RedditChannel {
             .await?;
 
         if !resp.status().is_success() {
-            tracing::warn!("Reddit mark_read failed: {}", resp.status());
+            tracing::warn!("mark_read failed: {}", resp.status());
         }
         Ok(())
     }
@@ -270,7 +270,7 @@ impl Channel for RedditChannel {
                     .text()
                     .await
                     .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-                bail!("Reddit comment reply failed ({status}): {body}");
+                bail!("comment reply failed ({status}): {body}");
             }
         } else {
             // Direct message
@@ -296,7 +296,7 @@ impl Channel for RedditChannel {
                     .text()
                     .await
                     .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-                bail!("Reddit DM failed ({status}): {body}");
+                bail!("DM failed ({status}): {body}");
             }
         }
 
@@ -320,7 +320,7 @@ impl Channel for RedditChannel {
             )
         };
         tracing::info!(
-            "Reddit channel listening as u/{} {}...",
+            "channel listening as u/{} {}...",
             self.username,
             scope
         );
@@ -331,7 +331,7 @@ impl Channel for RedditChannel {
             let items = match self.fetch_inbox().await {
                 Ok(items) => items,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Reddit poll error");
+                    tracing::warn!(error = ?e, "poll error");
                     continue;
                 }
             };
@@ -349,7 +349,7 @@ impl Channel for RedditChannel {
             }
 
             if let Err(e) = self.mark_read(&read_ids).await {
-                tracing::warn!(error = ?e, "Reddit mark_read error");
+                tracing::warn!(error = ?e, "mark_read error");
             }
         }
     }

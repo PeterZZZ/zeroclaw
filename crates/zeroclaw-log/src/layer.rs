@@ -30,6 +30,14 @@ use crate::event::{
 };
 use crate::writer::record_event;
 
+/// Span-extension marker carrying the subsystem's `EventCategory`. The
+/// Layer walks the span scope leaf→root when an event doesn't carry an
+/// explicit `category` field, so the closest enclosing span wins. The
+/// agent loop / channel listener / cron tick top-level spans set this
+/// once on entry and every descendant inherits.
+#[derive(Clone, Copy)]
+struct SpanCategory(EventCategory);
+
 const ACTION_FIELD: &str = "event";
 const CATEGORY_FIELD: &str = "category";
 const FIELD_OUTCOME: &str = "outcome";
@@ -55,14 +63,14 @@ where
         let mut visitor = FieldCollector::default();
         attrs.record(&mut visitor);
         visitor.finalize();
-        install_span_marker(visitor.attribution, id, &ctx);
+        install_span_marker(&visitor, id, &ctx);
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
         let mut visitor = FieldCollector::default();
         values.record(&mut visitor);
         visitor.finalize();
-        install_span_marker(visitor.attribution, id, &ctx);
+        install_span_marker(&visitor, id, &ctx);
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
@@ -83,7 +91,14 @@ where
             .category
             .as_deref()
             .and_then(EventCategory::parse)
-            .unwrap_or_else(|| infer_category(target));
+            .or_else(|| {
+                // Walk leaf→root for the closest enclosing-span category.
+                ctx.lookup_current()
+                    .into_iter()
+                    .flat_map(|span| span.scope())
+                    .find_map(|span| span.extensions().get::<SpanCategory>().map(|c| c.0))
+            })
+            .unwrap_or(EventCategory::Internal);
 
         let action = visitor
             .action
@@ -259,12 +274,20 @@ impl FieldCollector {
             _ => {}
         }
 
-        // Composite prefix? Set all three keys.
+        // Composite prefix? When the value carries an alias suffix
+        // (`<type>.<alias>`), split it into the three composite keys.
+        // When it's bare (no dot) we treat it as type-only — set just
+        // `<prefix>_type` so it doesn't clobber a parent span's full
+        // composite via the leaf→root merge in `on_event`.
         for prefix in COMPOSITE_PREFIXES {
             if name == *prefix
                 && let Value::String(s) = &value
             {
-                self.attribution.set_composite(prefix, s);
+                if s.contains('.') {
+                    self.attribution.set_composite(prefix, s);
+                } else {
+                    self.attribution.set(format!("{prefix}_type"), s.clone());
+                }
                 return;
             }
         }
@@ -282,39 +305,34 @@ impl FieldCollector {
     }
 }
 
-fn install_span_marker<S>(mut attribution: ZeroclawAttribution, id: &Id, ctx: &Context<'_, S>)
+fn install_span_marker<S>(visitor: &FieldCollector, id: &Id, ctx: &Context<'_, S>)
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
     let Some(span) = ctx.span(id) else {
         return;
     };
-    // Drop empty markers so we don't shadow a useful parent with an empty child.
-    if attribution.fields.is_empty() && attribution.duration_ms.is_none() {
-        return;
-    }
-    // The span-walk in `on_event` reads merge order leaf→root; merge the
-    // existing marker (if any) into the new one so we never accidentally
-    // clear a previously-stamped key by re-recording on the same span.
-    let exts_read = span.extensions();
-    if let Some(existing) = exts_read.get::<ZeroclawAttribution>() {
-        attribution.merge_from(existing);
-    }
-    drop(exts_read);
-    span.extensions_mut().insert(attribution);
-}
 
-fn infer_category(target: &str) -> EventCategory {
-    let head = target.split("::").next().unwrap_or(target);
-    match head {
-        "zeroclaw_runtime" => EventCategory::System,
-        "zeroclaw_channels" => EventCategory::Channel,
-        "zeroclaw_memory" => EventCategory::Memory,
-        "zeroclaw_providers" => EventCategory::Provider,
-        "zeroclaw_gateway" => EventCategory::System,
-        "zeroclaw_log" => EventCategory::Internal,
-        "matrix_sdk" | "matrix_sdk_base" | "matrix_sdk_crypto" => EventCategory::Internal,
-        _ => EventCategory::System,
+    // Attribution: merge with any existing marker so re-recording on the
+    // same span never clears a previously-stamped key.
+    if !visitor.attribution.fields.is_empty() || visitor.attribution.duration_ms.is_some() {
+        let mut attribution = visitor.attribution.clone();
+        let exts_read = span.extensions();
+        if let Some(existing) = exts_read.get::<ZeroclawAttribution>() {
+            attribution.merge_from(existing);
+        }
+        drop(exts_read);
+        span.extensions_mut().insert(attribution);
+    }
+
+    // Category: stash the closest enclosing-span category so descendants
+    // inherit. Routed through the same span-walk machinery as attribution.
+    if let Some(category) = visitor
+        .category
+        .as_deref()
+        .and_then(EventCategory::parse)
+    {
+        span.extensions_mut().insert(SpanCategory(category));
     }
 }
 

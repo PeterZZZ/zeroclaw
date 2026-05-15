@@ -159,7 +159,7 @@ impl Channel for NostrChannel {
             .context("Failed to subscribe to Nostr events")?;
 
         tracing::info!(
-            "Nostr channel listening as {}",
+            "channel listening as {}",
             self.public_key.to_bech32().unwrap_or_default()
         );
 
@@ -260,13 +260,13 @@ impl Channel for NostrChannel {
                             attachments: vec![],
                         };
                         if tx.send(msg).await.is_err() {
-                            tracing::info!("Nostr listener: message bus closed, stopping");
+                            tracing::info!("listener: message bus closed, stopping");
                             break;
                         }
                     }
                 }
                 RelayPoolNotification::Shutdown => {
-                    tracing::info!("Nostr relay pool shut down");
+                    tracing::info!("relay pool shut down");
                     break;
                 }
                 RelayPoolNotification::Message { .. } => {}

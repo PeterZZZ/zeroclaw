@@ -130,7 +130,7 @@ async fn download_audio_content(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        anyhow::bail!("LINE: audio download failed ({status}) for message {message_id}");
+        anyhow::bail!("audio download failed ({status}) for message {message_id}");
     }
 
     let mut bytes = Vec::new();
@@ -139,7 +139,7 @@ async fn download_audio_content(
         bytes.extend_from_slice(&chunk);
         if bytes.len() as u64 > MAX_LINE_AUDIO_BYTES {
             anyhow::bail!(
-                "LINE: audio exceeds {} byte limit for message {message_id}",
+                "audio exceeds {} byte limit for message {message_id}",
                 MAX_LINE_AUDIO_BYTES
             );
         }
@@ -170,7 +170,7 @@ async fn persist_line_paired_identity(state: &LineState, user_id: &str) -> anyho
     use zeroclaw_config::providers::ChannelRef;
 
     let Some(config) = &state.persist else {
-        tracing::warn!("LINE: paired userId {user_id} not persisted (no persistence handle wired)");
+        tracing::warn!("paired userId {user_id} not persisted (no persistence handle wired)");
         return Ok(());
     };
     let normalized = user_id.trim().to_string();
@@ -236,7 +236,7 @@ async fn handle_webhook(
     };
 
     if !sig_valid {
-        tracing::warn!("LINE: rejected request with invalid signature");
+        tracing::warn!("rejected request with invalid signature");
         return StatusCode::UNAUTHORIZED;
     }
 
@@ -244,7 +244,7 @@ async fn handle_webhook(
     let payload: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error = ?e, "LINE: invalid JSON payload");
+            tracing::warn!(error = ?e, "invalid JSON payload");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -288,7 +288,7 @@ async fn handle_webhook(
             }
             "audio" => {
                 let Some(ref manager) = state.transcription_manager else {
-                    tracing::debug!("LINE: audio message ignored (transcription not configured)");
+                    tracing::debug!("audio message ignored (transcription not configured)");
                     continue;
                 };
                 let audio = match download_audio_content(
@@ -301,18 +301,18 @@ async fn handle_webhook(
                 {
                     Ok(b) => b,
                     Err(e) => {
-                        tracing::warn!(error = ?e, "LINE: audio download failed for {msg_id}");
+                        tracing::warn!(error = ?e, "audio download failed for {msg_id}");
                         continue;
                     }
                 };
                 let transcript = match manager.transcribe(&audio, "audio.m4a").await {
                     Ok(t) if !t.trim().is_empty() => t,
                     Ok(_) => {
-                        tracing::debug!("LINE: empty transcript for {msg_id}");
+                        tracing::debug!("empty transcript for {msg_id}");
                         continue;
                     }
                     Err(e) => {
-                        tracing::warn!(error = ?e, "LINE: transcription failed for {msg_id}");
+                        tracing::warn!(error = ?e, "transcription failed for {msg_id}");
                         continue;
                     }
                 };
@@ -343,7 +343,7 @@ async fn handle_webhook(
                     let mention_span = LineChannel::find_bot_mention(msg_obj, &state.bot_user_id);
                     if mention_span.is_none() {
                         tracing::debug!(
-                            "LINE: skipping group message without bot mention (userId: {})",
+                            "skipping group message without bot mention (userId: {})",
                             state.bot_user_id
                         );
                         continue;
@@ -359,7 +359,7 @@ async fn handle_webhook(
                 LineDmPolicy::Allowlist => {
                     if !is_line_user_allowed(&*state, user_id) {
                         tracing::warn!(
-                            "LINE: ignoring DM from unauthorized user: {user_id}. \
+                            "ignoring DM from unauthorized user: {user_id}. \
                             Add to the channel peer group or use dm_policy = pairing."
                         );
                         continue;
@@ -376,20 +376,20 @@ async fn handle_webhook(
                                             persist_line_paired_identity(&*state, user_id).await
                                         {
                                             tracing::warn!(
-                                                "LINE: paired userId={user_id} but persist failed: {e}"
+                                                "paired userId={user_id} but persist failed: {e}"
                                             );
                                         } else {
-                                            tracing::info!("LINE: paired userId={user_id}");
+                                            tracing::info!("paired userId={user_id}");
                                         }
                                     }
                                     Ok(None) => {
                                         tracing::warn!(
-                                            "LINE: invalid bind code from userId={user_id}"
+                                            "invalid bind code from userId={user_id}"
                                         );
                                     }
                                     Err(wait_ms) => {
                                         tracing::warn!(
-                                            "LINE: bind rate-limited for userId={user_id}, retry after {wait_ms}ms"
+                                            "bind rate-limited for userId={user_id}, retry after {wait_ms}ms"
                                         );
                                     }
                                 }
@@ -398,7 +398,7 @@ async fn handle_webhook(
                         }
 
                         tracing::warn!(
-                            "LINE: ignoring message from unpaired user: {user_id}. \
+                            "ignoring message from unpaired user: {user_id}. \
                             Send `{LINE_BIND_COMMAND} <code>` to pair."
                         );
                         continue;
@@ -475,7 +475,7 @@ async fn handle_webhook(
         };
 
         if state.tx.send(channel_msg).await.is_err() {
-            tracing::warn!("LINE: receiver dropped, shutting down webhook server");
+            tracing::warn!("receiver dropped, shutting down webhook server");
             return StatusCode::SERVICE_UNAVAILABLE;
         }
     }
@@ -586,7 +586,7 @@ impl LineChannel {
             }
             Err(e) => {
                 tracing::warn!(
-                    "LINE: transcription manager init failed, audio transcription disabled: {e}"
+                    "transcription manager init failed, audio transcription disabled: {e}"
                 );
             }
         }
@@ -641,7 +641,7 @@ impl LineChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LINE: failed to fetch bot info ({status}): {err}");
+            anyhow::bail!("failed to fetch bot info ({status}): {err}");
         }
 
         resp.json::<BotInfo>().await.map_err(Into::into)
@@ -791,7 +791,7 @@ impl LineChannel {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let err = resp.text().await.unwrap_or_default();
-                anyhow::bail!("LINE Reply API failed ({status}): {err}");
+                anyhow::bail!("Reply API failed ({status}): {err}");
             }
         }
         Ok(())
@@ -821,7 +821,7 @@ impl LineChannel {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let err = resp.text().await.unwrap_or_default();
-                anyhow::bail!("LINE Push API failed ({status}): {err}");
+                anyhow::bail!("Push API failed ({status}): {err}");
             }
         }
         Ok(())
@@ -858,7 +858,7 @@ impl LineChannel {
         let app = build_webhook_router(state);
         axum::serve(listener, app)
             .await
-            .map_err(|e| anyhow::anyhow!("LINE webhook server error: {e}"))
+            .map_err(|e| anyhow::anyhow!("webhook server error: {e}"))
     }
 }
 
@@ -881,7 +881,7 @@ impl Channel for LineChannel {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     tracing::warn!(
-                        "LINE: Reply API failed (token may be expired), falling back to Push: {e}"
+                        "Reply API failed (token may be expired), falling back to Push: {e}"
                     );
                 }
             }
@@ -899,14 +899,14 @@ impl Channel for LineChannel {
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let bot_info = self.fetch_bot_info().await?;
         tracing::info!(
-            "LINE: connected as '{}' (userId: {})",
+            "connected as '{}' (userId: {})",
             bot_info.display_name,
             bot_info.user_id
         );
 
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], self.webhook_port));
         tracing::info!(
-            "LINE: webhook server listening on http://0.0.0.0:{}/line/webhook",
+            "webhook server listening on http://0.0.0.0:{}/line/webhook",
             self.webhook_port
         );
 

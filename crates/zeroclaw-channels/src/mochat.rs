@@ -128,7 +128,7 @@ impl Channel for MochatChannel {
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        tracing::info!("Mochat: starting message poller");
+        tracing::info!("starting message poller");
 
         let poll_interval = std::time::Duration::from_secs(self.poll_interval_secs);
         let mut last_message_id: Option<String> = None;
@@ -151,7 +151,7 @@ impl Channel for MochatChannel {
                     let data: serde_json::Value = match resp.json().await {
                         Ok(d) => d,
                         Err(e) => {
-                            tracing::warn!(error = ?e, "Mochat: failed to parse response");
+                            tracing::warn!(error = ?e, "failed to parse response");
                             tokio::time::sleep(poll_interval).await;
                             continue;
                         }
@@ -182,7 +182,7 @@ impl Channel for MochatChannel {
 
                             if !self.is_user_allowed(sender) {
                                 tracing::debug!(
-                                    "Mochat: ignoring message from unauthorized user: {sender}"
+                                    "ignoring message from unauthorized user: {sender}"
                                 );
                                 continue;
                             }
@@ -218,7 +218,7 @@ impl Channel for MochatChannel {
                             };
 
                             if tx.send(channel_msg).await.is_err() {
-                                tracing::warn!("Mochat: message channel closed");
+                                tracing::warn!("message channel closed");
                                 return Ok(());
                             }
 
@@ -231,10 +231,10 @@ impl Channel for MochatChannel {
                 Ok(resp) => {
                     let status = resp.status();
                     let err = resp.text().await.unwrap_or_default();
-                    tracing::warn!(error = ?err, "Mochat: poll request failed ({status})");
+                    tracing::warn!(error = ?err, "poll request failed ({status})");
                 }
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Mochat: poll request error");
+                    tracing::warn!(error = ?e, "poll request error");
                 }
             }
 

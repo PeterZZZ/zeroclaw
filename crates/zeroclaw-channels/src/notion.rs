@@ -116,9 +116,9 @@ impl NotionChannel {
                         let body_text = resp.text().await.unwrap_or_default();
                         let truncated =
                             crate::util::truncate_with_ellipsis(&body_text, MAX_ERROR_BODY_CHARS);
-                        bail!("Notion API error {status_code}: {truncated}");
+                        bail!("API error {status_code}: {truncated}");
                     }
-                    last_err = Some(anyhow::anyhow!("Notion API error: {status_code}"));
+                    last_err = Some(anyhow::anyhow!("API error: {status_code}"));
                 }
                 Err(e) => {
                     last_err = Some(anyhow::anyhow!("HTTP request failed: {e}"));
@@ -126,14 +126,14 @@ impl NotionChannel {
             }
             let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt);
             tracing::warn!(
-                "Notion API call failed (attempt {}/{}), retrying in {}ms",
+                "API call failed (attempt {}/{}), retrying in {}ms",
                 attempt + 1,
                 MAX_RETRIES,
                 delay
             );
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Notion API call failed after retries")))
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("API call failed after retries")))
     }
 
     /// Query the database schema and detect whether Status uses "select" or "status" type.
@@ -280,7 +280,7 @@ impl Channel for NotionChannel {
         // Detect status property type
         match self.detect_status_type().await {
             Ok(st) => {
-                tracing::info!("Notion status property type: {st}");
+                tracing::info!("status property type: {st}");
                 *self.status_type.write().await = st;
             }
             Err(e) => {
@@ -292,7 +292,7 @@ impl Channel for NotionChannel {
         if self.recover_stale
             && let Err(e) = self.recover_stale().await
         {
-            tracing::error!(error = ?e, "Notion stale task recovery failed");
+            tracing::error!(error = ?e, "stale task recovery failed");
         }
 
         // Polling loop
@@ -300,7 +300,7 @@ impl Channel for NotionChannel {
             match self.query_pending().await {
                 Ok(tasks) => {
                     if !tasks.is_empty() {
-                        tracing::info!("Notion: found {} pending task(s)", tasks.len());
+                        tracing::info!("found {} pending task(s)", tasks.len());
                     }
                     for task in tasks {
                         let page_id = match task.get("id").and_then(|v| v.as_str()) {
@@ -316,7 +316,7 @@ impl Channel for NotionChannel {
                         if input_text.trim().is_empty() {
                             let short_end = floor_utf8_char_boundary(&page_id, 8);
                             tracing::warn!(
-                                "Notion: empty input for task {}, skipping",
+                                "empty input for task {}, skipping",
                                 &page_id[..short_end]
                             );
                             continue;
@@ -328,7 +328,7 @@ impl Channel for NotionChannel {
 
                         // Set status to running
                         if let Err(e) = self.set_status(&page_id, "running").await {
-                            tracing::error!(error = ?e, "Notion: failed to set running status");
+                            tracing::error!(error = ?e, "failed to set running status");
                             self.release_task(&page_id).await;
                             continue;
                         }
@@ -354,13 +354,13 @@ impl Channel for NotionChannel {
                             .await
                             .is_err()
                         {
-                            tracing::info!("Notion channel shutting down");
+                            tracing::info!("channel shutting down");
                             return Ok(());
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::error!(error = ?e, "Notion poll error");
+                    tracing::error!(error = ?e, "poll error");
                 }
             }
 

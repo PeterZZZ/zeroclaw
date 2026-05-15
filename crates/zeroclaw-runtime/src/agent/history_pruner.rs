@@ -54,19 +54,34 @@ fn protected_indices(messages: &[ChatMessage], keep_recent: usize) -> Vec<bool> 
 // Orphaned tool-message sanitiser
 // ---------------------------------------------------------------------------
 
+/// Outcome of a single `remove_orphaned_tool_messages` pass. The caller
+/// is responsible for logging — that's where the agent/channel/session
+/// context lives.
+#[derive(Debug, Default, Clone)]
+pub struct PrunedOrphans {
+    /// Total tool / assistant messages removed across both passes.
+    pub removed: usize,
+    /// `tool_call_id`s that lost their pairing.
+    pub orphan_tool_call_ids: Vec<String>,
+}
+
+impl PrunedOrphans {
+    pub fn is_empty(&self) -> bool {
+        self.removed == 0
+    }
+}
+
 /// Remove `tool`-role messages whose `tool_call_id` has no matching
 /// `tool_use` / `tool_calls` entry in a preceding assistant message.
 ///
 /// After any history truncation (drain, remove, prune) the first surviving
 /// message(s) may be `tool` results whose assistant request was trimmed away.
 /// The Anthropic API (and others) reject these with a 400 error.
-///
-/// Returns the number of messages removed.
-pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> usize {
+pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> PrunedOrphans {
+    let mut outcome = PrunedOrphans::default();
     // Pass 1: Remove assistant(tool_calls) + their tool_results when the
     // assistant is preceded by another assistant. Normalization would merge
     // them, destroying structured tool_use blocks and orphaning the results.
-    let mut removed = 0usize;
     let mut i = 0;
     while i < messages.len() {
         if messages[i].role == "assistant"
@@ -76,8 +91,9 @@ pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> usize {
         {
             let doomed_ids =
                 extract_assistant_tool_call_ids(&messages[i].content).unwrap_or_default();
+            outcome.orphan_tool_call_ids.extend(doomed_ids.iter().cloned());
             messages.remove(i);
-            removed += 1;
+            outcome.removed += 1;
             while i < messages.len() && messages[i].role == "tool" {
                 let dominated = match extract_tool_call_id(&messages[i].content) {
                     Some(id) => doomed_ids.iter().any(|d| d == &id),
@@ -85,7 +101,7 @@ pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> usize {
                 };
                 if dominated {
                     messages.remove(i);
-                    removed += 1;
+                    outcome.removed += 1;
                 } else {
                     break;
                 }
@@ -99,8 +115,7 @@ pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> usize {
     // is not in the preceding assistant's structured tool_calls array.
     // A substring match on the assistant's *text* is NOT sufficient —
     // compaction summaries are instructed to preserve identifiers, so an
-    // id can appear in prose without an actual tool_use block backing it
-    //.
+    // id can appear in prose without an actual tool_use block backing it.
     i = 0;
     while i < messages.len() {
         if messages[i].role != "tool" {
@@ -125,20 +140,16 @@ pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> usize {
         };
 
         if is_orphan {
+            if let Some(id) = extract_tool_call_id(&messages[i].content) {
+                outcome.orphan_tool_call_ids.push(id);
+            }
             messages.remove(i);
-            removed += 1;
+            outcome.removed += 1;
         } else {
             i += 1;
         }
     }
-    if removed > 0 {
-        tracing::warn!(
-            count = removed,
-            "Removed {removed} orphaned tool message(s) from history — this indicates a prior \
-             tool_use/tool_result pairing inconsistency that was auto-healed"
-        );
-    }
-    removed
+    outcome
 }
 
 /// Try to extract a `tool_call_id` from a tool-role message's JSON content.
@@ -290,8 +301,7 @@ pub fn prune_history(messages: &mut Vec<ChatMessage>, config: &HistoryPrunerConf
     }
 
     // Phase 3 – remove orphaned tool messages left behind by phases 1-2.
-    let orphans_removed = remove_orphaned_tool_messages(messages);
-    dropped_messages += orphans_removed;
+    dropped_messages += remove_orphaned_tool_messages(messages).removed;
 
     PruneStats {
         messages_before,
@@ -619,8 +629,8 @@ mod tests {
             msg("user", "thanks"),
             msg("assistant", "done"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 2);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 2);
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
@@ -639,8 +649,8 @@ mod tests {
             msg("tool", tool_result),
             msg("assistant", "done"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 0);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 0);
         assert_eq!(messages.len(), 5);
     }
 
@@ -657,8 +667,8 @@ mod tests {
             msg("tool", r#"{"content":"r3","tool_call_id":"toolu_ccc"}"#),
             msg("assistant", "all done"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 0);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 0);
         assert_eq!(messages.len(), 7);
     }
 
@@ -674,8 +684,8 @@ mod tests {
             msg("tool", r#"{"content":"stale","tool_call_id":"toolu_GONE"}"#),
             msg("assistant", "done"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 1);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 1);
         assert_eq!(messages.len(), 5);
         // The valid tool result stays, the orphan is gone.
         assert_eq!(messages[3].role, "tool");
@@ -696,8 +706,8 @@ mod tests {
             msg("user", "next"),
             msg("assistant", "ok"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 1);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 1);
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[1].role, "assistant");
         assert_eq!(messages[2].role, "user");
@@ -721,9 +731,9 @@ mod tests {
                 "The model_provider returned an empty response.",
             ),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
         assert_eq!(
-            removed, 2,
+            pruned.removed, 2,
             "should remove assistant(tool_calls) + tool_result"
         );
         assert_eq!(messages.len(), 4);
@@ -750,8 +760,8 @@ mod tests {
             msg("tool", "plain text result without json"),
             msg("assistant", "done"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 0);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 0);
         assert_eq!(messages.len(), 5);
     }
 
@@ -810,9 +820,9 @@ mod tests {
             ),
             msg("user", "new question"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
+        let pruned = remove_orphaned_tool_messages(&mut messages);
         assert_eq!(
-            removed, 1,
+            pruned.removed, 1,
             "orphan must be removed even if its id is mentioned in summary text"
         );
         assert!(!messages.iter().any(|m| m.role == "tool"));
@@ -834,8 +844,8 @@ mod tests {
             msg("assistant", "Here are the search results"),
             msg("user", "Thanks, now summarize them"),
         ];
-        let removed = remove_orphaned_tool_messages(&mut messages);
-        assert_eq!(removed, 1, "orphaned tool message should be removed");
+        let pruned = remove_orphaned_tool_messages(&mut messages);
+        assert_eq!(pruned.removed, 1, "orphaned tool message should be removed");
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "assistant");

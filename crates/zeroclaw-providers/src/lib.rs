@@ -304,7 +304,7 @@ pub(crate) fn refresh_qwen_oauth_access_token(
             ("client_id", client_id),
         ])
         .send()
-        .map_err(|error| anyhow::anyhow!("Qwen OAuth refresh request failed: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("OAuth refresh request failed: {error}"))?;
 
     let status = response.status();
     let body = response
@@ -320,11 +320,11 @@ pub(crate) fn refresh_qwen_oauth_access_token(
             .or_else(|| parsed.as_ref().and_then(|payload| payload.error.as_deref()))
             .filter(|msg| !msg.trim().is_empty())
             .unwrap_or(body.as_str());
-        anyhow::bail!("Qwen OAuth refresh failed (HTTP {status}): {detail}");
+        anyhow::bail!("OAuth refresh failed (HTTP {status}): {detail}");
     }
 
     let payload =
-        parsed.ok_or_else(|| anyhow::anyhow!("Qwen OAuth refresh response is not JSON"))?;
+        parsed.ok_or_else(|| anyhow::anyhow!("OAuth refresh response is not JSON"))?;
 
     if let Some(error_code) = payload
         .error
@@ -332,7 +332,7 @@ pub(crate) fn refresh_qwen_oauth_access_token(
         .filter(|value| !value.trim().is_empty())
     {
         let detail = payload.error_description.as_deref().unwrap_or(error_code);
-        anyhow::bail!("Qwen OAuth refresh failed: {detail}");
+        anyhow::bail!("OAuth refresh failed: {detail}");
     }
 
     let access_token = payload
@@ -340,7 +340,7 @@ pub(crate) fn refresh_qwen_oauth_access_token(
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Qwen OAuth refresh response missing access_token"))?
+        .ok_or_else(|| anyhow::anyhow!("OAuth refresh response missing access_token"))?
         .to_string();
 
     let expiry_date = payload.expires_in.and_then(|seconds| {
@@ -500,7 +500,7 @@ fn resolve_qwen_oauth_context(credential_override: Option<&str>) -> QwenOauthPro
                 cached = Some(refreshed);
             }
             Err(error) => {
-                tracing::warn!(error = %error, "Qwen OAuth refresh failed");
+                tracing::warn!(error = %error, "OAuth refresh failed");
             }
         }
     }

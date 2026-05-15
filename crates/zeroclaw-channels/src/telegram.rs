@@ -3023,7 +3023,7 @@ impl Channel for TelegramChannel {
             });
             match self.http_client().post(&url).json(&probe).send().await {
                 Err(e) => {
-                    tracing::warn!("startup probe error: {e}; retrying in 5s");
+                    tracing::warn!(error = ?e, "startup probe error; retrying in 5s");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 Ok(resp) => {

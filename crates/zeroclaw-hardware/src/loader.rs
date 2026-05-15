@@ -44,7 +44,7 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
     let tools_dir = match plugin_tools_dir() {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("[registry] cannot resolve plugin tools dir: {}", e);
+            tracing::warn!(error = ?e, "cannot resolve plugin tools dir");
             return Vec::new();
         }
     };
@@ -84,7 +84,7 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
     let entries = match fs::read_dir(&tools_dir) {
         Ok(e) => e,
         Err(e) => {
-            tracing::warn!("[registry] cannot read tools dir: {}", e);
+            tracing::warn!(error = ?e, "cannot read tools dir");
             return Vec::new();
         }
     };
@@ -93,7 +93,7 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!("[registry] skipping unreadable dir entry: {}", e);
+                tracing::warn!(error = ?e, "skipping unreadable dir entry");
                 continue;
             }
         };

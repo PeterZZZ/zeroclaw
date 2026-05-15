@@ -172,7 +172,7 @@ impl NextcloudTalkChannel {
 
         // Legacy/custom format.
         if !event_type.eq_ignore_ascii_case("message") {
-            tracing::debug!("Nextcloud Talk: skipping non-message event: {event_type}");
+            tracing::debug!("Talk: skipping non-message event: {event_type}");
             return messages;
         }
 
@@ -191,7 +191,7 @@ impl NextcloudTalkChannel {
         // Only handle Note objects (= chat messages). Ignore reactions, etc.
         let object_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if !object_type.eq_ignore_ascii_case("note") {
-            tracing::debug!("Nextcloud Talk: skipping AS2 Create with object.type={object_type}");
+            tracing::debug!("Talk: skipping AS2 Create with object.type={object_type}");
             return messages;
         }
 
@@ -204,7 +204,7 @@ impl NextcloudTalkChannel {
             .filter(|t| !t.is_empty());
 
         let Some(room_token) = room_token else {
-            tracing::warn!("Nextcloud Talk: missing target.id (room token) in AS2 payload");
+            tracing::warn!("Talk: missing target.id (room token) in AS2 payload");
             return messages;
         };
 
@@ -213,7 +213,7 @@ impl NextcloudTalkChannel {
         let actor_type = actor.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if actor_type.eq_ignore_ascii_case("application") {
             tracing::debug!(
-                "Nextcloud Talk: skipping bot-originated AS2 message (type=Application)"
+                "Talk: skipping bot-originated AS2 message (type=Application)"
             );
             return messages;
         }
@@ -230,7 +230,7 @@ impl NextcloudTalkChannel {
             .filter(|id| !id.is_empty());
 
         let Some(actor_id) = actor_id else {
-            tracing::warn!("Nextcloud Talk: missing actor.id in AS2 payload");
+            tracing::warn!("Talk: missing actor.id in AS2 payload");
             return messages;
         };
 
@@ -239,7 +239,7 @@ impl NextcloudTalkChannel {
         let raw_actor_id = actor.get("id").and_then(|v| v.as_str()).unwrap_or("");
         if raw_actor_id.starts_with("bots/") {
             tracing::debug!(
-                "Nextcloud Talk: skipping bot-originated AS2 message (id prefix=bots/)"
+                "Talk: skipping bot-originated AS2 message (id prefix=bots/)"
             );
             return messages;
         }
@@ -250,14 +250,14 @@ impl NextcloudTalkChannel {
             .to_ascii_lowercase();
         if self.is_bot_name(&actor_name) {
             tracing::debug!(
-                "Nextcloud Talk: skipping bot-originated AS2 message (name={actor_name})"
+                "Talk: skipping bot-originated AS2 message (name={actor_name})"
             );
             return messages;
         }
 
         if !self.is_user_allowed(actor_id) {
             tracing::warn!(
-                "Nextcloud Talk: ignoring message from unauthorized actor: {actor_id}. \
+                "Talk: ignoring message from unauthorized actor: {actor_id}. \
                 Add to channels.nextcloud_talk.allowed_users in config.toml, \
                 or run `zeroclaw onboard --channels-only` to configure interactively."
             );
@@ -279,7 +279,7 @@ impl NextcloudTalkChannel {
             .filter(|s| !s.is_empty());
 
         let Some(content) = content else {
-            tracing::debug!("Nextcloud Talk: empty or unparseable AS2 message content");
+            tracing::debug!("Talk: empty or unparseable AS2 message content");
             return messages;
         };
 
@@ -319,7 +319,7 @@ impl NextcloudTalkChannel {
             .filter(|token| !token.is_empty());
 
         let Some(room_token) = room_token else {
-            tracing::warn!("Nextcloud Talk: missing room token in webhook payload");
+            tracing::warn!("Talk: missing room token in webhook payload");
             return messages;
         };
 
@@ -334,7 +334,7 @@ impl NextcloudTalkChannel {
         if actor_type.eq_ignore_ascii_case("bots") || actor_type.eq_ignore_ascii_case("application")
         {
             tracing::debug!(
-                "Nextcloud Talk: skipping bot-originated message (actorType={actor_type})"
+                "Talk: skipping bot-originated message (actorType={actor_type})"
             );
             return messages;
         }
@@ -347,19 +347,19 @@ impl NextcloudTalkChannel {
             .filter(|id| !id.is_empty());
 
         let Some(actor_id) = actor_id else {
-            tracing::warn!("Nextcloud Talk: missing actorId in webhook payload");
+            tracing::warn!("Talk: missing actorId in webhook payload");
             return messages;
         };
 
         // Also skip by known bot names in case actorType is not set reliably.
         if self.is_bot_name(actor_id) {
-            tracing::debug!("Nextcloud Talk: skipping bot-originated message (actorId={actor_id})");
+            tracing::debug!("Talk: skipping bot-originated message (actorId={actor_id})");
             return messages;
         }
 
         if !self.is_user_allowed(actor_id) {
             tracing::warn!(
-                "Nextcloud Talk: ignoring message from unauthorized actor: {actor_id}. \
+                "Talk: ignoring message from unauthorized actor: {actor_id}. \
                 Add to channels.nextcloud_talk.allowed_users in config.toml, \
                 or run `zeroclaw onboard --channels-only` to configure interactively."
             );
@@ -371,7 +371,7 @@ impl NextcloudTalkChannel {
             .and_then(|v| v.as_str())
             .unwrap_or("comment");
         if !message_type.eq_ignore_ascii_case("comment") {
-            tracing::debug!("Nextcloud Talk: skipping non-comment messageType: {message_type}");
+            tracing::debug!("Talk: skipping non-comment messageType: {message_type}");
             return messages;
         }
 
@@ -382,7 +382,7 @@ impl NextcloudTalkChannel {
             .map(str::trim)
             .is_some_and(|value| !value.is_empty());
         if has_system_message {
-            tracing::debug!("Nextcloud Talk: skipping system message event");
+            tracing::debug!("Talk: skipping system message event");
             return messages;
         }
 
@@ -439,8 +439,8 @@ impl NextcloudTalkChannel {
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        tracing::error!("Nextcloud Talk send failed: {status} — {body}");
-        anyhow::bail!("Nextcloud Talk API error: {status}");
+        tracing::error!("Talk send failed: {status} — {body}");
+        anyhow::bail!("Talk API error: {status}");
     }
 
     /// Send a message and return the numeric message ID assigned by Nextcloud Talk.
@@ -468,8 +468,8 @@ impl NextcloudTalkChannel {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::warn!("Nextcloud Talk send_to_room_with_id failed: {status} — {body}");
-            anyhow::bail!("Nextcloud Talk API error: {status}");
+            tracing::warn!("Talk send_to_room_with_id failed: {status} — {body}");
+            anyhow::bail!("Talk API error: {status}");
         }
 
         // Response: { "ocs": { "data": { "id": 42, ... } } }
@@ -479,7 +479,7 @@ impl NextcloudTalkChannel {
             .and_then(|v| v.as_u64())
             .map(|id| id.to_string())
             .ok_or_else(|| {
-                anyhow::anyhow!("Nextcloud Talk: missing message ID in send response")
+                anyhow::anyhow!("Talk: missing message ID in send response")
             })?;
 
         Ok(message_id)
@@ -516,8 +516,8 @@ impl NextcloudTalkChannel {
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        tracing::warn!("Nextcloud Talk edit_message failed ({status}): {body}");
-        anyhow::bail!("Nextcloud Talk edit API error: {status}");
+        tracing::warn!("Talk edit_message failed ({status}): {body}");
+        anyhow::bail!("Talk edit API error: {status}");
     }
 
     /// Delete a message via the Nextcloud Talk OCS API.
@@ -545,8 +545,8 @@ impl NextcloudTalkChannel {
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        tracing::warn!("Nextcloud Talk delete_message failed ({status}): {body}");
-        anyhow::bail!("Nextcloud Talk delete API error: {status}");
+        tracing::warn!("Talk delete_message failed ({status}): {body}");
+        anyhow::bail!("Talk delete API error: {status}");
     }
 
     /// Truncate text to the Nextcloud Talk character limit (UTF-8 char boundary safe).
@@ -596,7 +596,7 @@ impl Channel for NextcloudTalkChannel {
                 tracing::debug!(
                     room = %message.recipient,
                     message_id = %id,
-                    "Nextcloud Talk: draft message sent"
+                    "Talk: draft message sent"
                 );
                 self.last_draft_edit
                     .lock()
@@ -605,7 +605,7 @@ impl Channel for NextcloudTalkChannel {
             }
             Err(e) => {
                 tracing::warn!(
-                    "Nextcloud Talk: send_draft failed, falling back to final send: {e}"
+                    "Talk: send_draft failed, falling back to final send: {e}"
                 );
                 Err(e)
             }
@@ -640,7 +640,7 @@ impl Channel for NextcloudTalkChannel {
             Err(e) => {
                 // Non-fatal: log and continue. The final send will still deliver the
                 // complete response even if mid-stream edits fail.
-                tracing::debug!(error = ?e, "Nextcloud Talk update_draft skipped");
+                tracing::debug!(error = ?e, "Talk update_draft skipped");
             }
         }
 
@@ -660,14 +660,14 @@ impl Channel for NextcloudTalkChannel {
                 tracing::debug!(
                     room = %recipient,
                     message_id = %message_id,
-                    "Nextcloud Talk: draft finalized"
+                    "Talk: draft finalized"
                 );
                 Ok(())
             }
             Err(e) => {
                 // Edit failed (e.g. message too old, permissions) — delete and re-send.
                 tracing::warn!(
-                    "Nextcloud Talk finalize_draft edit failed ({e}); attempting delete+resend"
+                    "Talk finalize_draft edit failed ({e}); attempting delete+resend"
                 );
                 let _ = self.delete_message(recipient, message_id).await;
                 self.send_to_room(recipient, display_text).await
@@ -677,7 +677,7 @@ impl Channel for NextcloudTalkChannel {
 
     async fn cancel_draft(&self, recipient: &str, message_id: &str) -> anyhow::Result<()> {
         if let Err(e) = self.delete_message(recipient, message_id).await {
-            tracing::debug!(error = ?e, "Nextcloud Talk cancel_draft delete failed (non-fatal)");
+            tracing::debug!(error = ?e, "Talk cancel_draft delete failed (non-fatal)");
         }
         self.last_draft_edit.lock().remove(recipient);
         Ok(())
@@ -685,7 +685,7 @@ impl Channel for NextcloudTalkChannel {
 
     async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         tracing::info!(
-            "Nextcloud Talk channel active (webhook mode). \
+            "Talk channel active (webhook mode). \
             Configure Nextcloud Talk bot webhook to POST to your gateway's /nextcloud-talk endpoint."
         );
 
@@ -719,7 +719,7 @@ pub fn verify_nextcloud_talk_signature(
 ) -> bool {
     let random = random.trim();
     if random.is_empty() {
-        tracing::warn!("Nextcloud Talk: missing X-Nextcloud-Talk-Random header");
+        tracing::warn!("Talk: missing X-Nextcloud-Talk-Random header");
         return false;
     }
 
@@ -730,7 +730,7 @@ pub fn verify_nextcloud_talk_signature(
         .trim();
 
     let Ok(provided) = hex::decode(signature_hex) else {
-        tracing::warn!("Nextcloud Talk: invalid signature format");
+        tracing::warn!("Talk: invalid signature format");
         return false;
     };
 

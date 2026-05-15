@@ -1238,7 +1238,7 @@ impl Channel for WhatsAppWebChannel {
                                     })
                                     .await
                                 {
-                                    tracing::error!("Failed to send message to channel: {}", e);
+                                    tracing::error!(error = ?e, "failed to send message to channel");
                                 }
                             }
                             Event::Connected(_) => {

@@ -106,7 +106,7 @@ impl Channel for WebhookChannel {
 
     async fn send(&self, message: &SendMessage) -> Result<()> {
         let Some(ref send_url) = self.send_url else {
-            tracing::debug!("Webhook channel: no send_url configured, skipping outbound message");
+            tracing::debug!("channel: no send_url configured, skipping outbound message");
             return Ok(());
         };
 
@@ -200,7 +200,7 @@ impl Channel for WebhookChannel {
                 };
 
                 if !valid {
-                    tracing::warn!("Webhook: invalid signature, rejecting request");
+                    tracing::warn!("invalid signature, rejecting request");
                     return StatusCode::UNAUTHORIZED;
                 }
             }
@@ -208,7 +208,7 @@ impl Channel for WebhookChannel {
             let payload: IncomingWebhook = match serde_json::from_slice(&body) {
                 Ok(p) => p,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "Webhook: invalid JSON payload");
+                    tracing::warn!(error = ?e, "invalid JSON payload");
                     return StatusCode::BAD_REQUEST;
                 }
             };

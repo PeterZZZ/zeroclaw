@@ -68,6 +68,18 @@ macro_rules! scope {
     }};
 }
 
+/// `tokio::spawn` that propagates the caller's current span into the
+/// spawned task. Use everywhere a per-request / per-message child task
+/// needs the parent's alias-bound attribution for downstream tracing.
+#[macro_export]
+macro_rules! spawn {
+    ($body:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::tracing::Instrument as _;
+        ::tokio::spawn(($body).in_current_span())
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     // The macro emits a tracing event; verifying the full pipeline

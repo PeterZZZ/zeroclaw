@@ -275,7 +275,7 @@ impl Channel for ClawdTalkChannel {
         // ClawdTalk listens for incoming calls via webhooks
         // This would typically be handled by the gateway module
         // For now, we signal that this channel is ready and wait indefinitely
-        tracing::info!("ClawdTalk channel listening for incoming calls");
+        tracing::info!("channel listening for incoming calls");
 
         // Keep the listener alive
         loop {
@@ -302,7 +302,7 @@ impl Channel for ClawdTalkChannel {
         match response {
             Ok(resp) => resp.status().is_success(),
             Err(e) => {
-                tracing::warn!("ClawdTalk health check failed: {}", e);
+                tracing::warn!(error = ?e, "health check failed");
                 false
             }
         }

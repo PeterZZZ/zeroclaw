@@ -176,7 +176,7 @@ impl LinqChannel {
             .and_then(|e| e.as_str())
             .unwrap_or("");
         if event_type != "message.received" {
-            tracing::debug!("Linq: skipping non-message event: {event_type}");
+            tracing::debug!("skipping non-message event: {event_type}");
             return messages;
         }
 
@@ -186,7 +186,7 @@ impl LinqChannel {
 
         // Skip messages sent by the bot itself
         if Self::sender_is_from_me(data) {
-            tracing::debug!("Linq: skipping is_from_me message");
+            tracing::debug!("skipping is_from_me message");
             return messages;
         }
 
@@ -205,7 +205,7 @@ impl LinqChannel {
         // Check allowlist
         if !self.is_sender_allowed(&normalized_from) {
             tracing::warn!(
-                "Linq: ignoring message from unauthorized sender: {normalized_from}. \
+                "ignoring message from unauthorized sender: {normalized_from}. \
                 Add to channels.linq.allowed_senders in config.toml, \
                 or run `zeroclaw onboard --channels-only` to configure interactively."
             );
@@ -233,12 +233,12 @@ impl LinqChannel {
                         if let Some(marker) = Self::media_part_to_image_marker(part) {
                             Some(marker)
                         } else {
-                            tracing::debug!("Linq: skipping unsupported {part_type} part");
+                            tracing::debug!("skipping unsupported {part_type} part");
                             None
                         }
                     }
                     _ => {
-                        tracing::debug!("Linq: skipping {part_type} part");
+                        tracing::debug!("skipping {part_type} part");
                         None
                     }
                 }
@@ -356,8 +356,8 @@ impl Channel for LinqChannel {
             if !create_resp.status().is_success() {
                 let status = create_resp.status();
                 let error_body = create_resp.text().await.unwrap_or_default();
-                tracing::error!("Linq create chat failed: {status} — {error_body}");
-                anyhow::bail!("Linq API error: {status}");
+                tracing::error!("create chat failed: {status} — {error_body}");
+                anyhow::bail!("API error: {status}");
             }
 
             return Ok(());
@@ -365,15 +365,15 @@ impl Channel for LinqChannel {
 
         let status = resp.status();
         let error_body = resp.text().await.unwrap_or_default();
-        tracing::error!("Linq send failed: {status} — {error_body}");
-        anyhow::bail!("Linq API error: {status}");
+        tracing::error!("send failed: {status} — {error_body}");
+        anyhow::bail!("API error: {status}");
     }
 
     async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         // Linq uses webhooks (push-based), not polling.
         // Messages are received via the gateway's /linq endpoint.
         tracing::info!(
-            "Linq channel active (webhook mode). \
+            "channel active (webhook mode). \
             Configure Linq webhook to POST to your gateway's /linq endpoint."
         );
 
@@ -407,7 +407,7 @@ impl Channel for LinqChannel {
             .await?;
 
         if !resp.status().is_success() {
-            tracing::debug!("Linq start_typing failed: {}", resp.status());
+            tracing::debug!("start_typing failed: {}", resp.status());
         }
 
         Ok(())
@@ -424,7 +424,7 @@ impl Channel for LinqChannel {
             .await?;
 
         if !resp.status().is_success() {
-            tracing::debug!("Linq stop_typing failed: {}", resp.status());
+            tracing::debug!("stop_typing failed: {}", resp.status());
         }
 
         Ok(())
@@ -444,11 +444,11 @@ pub fn verify_linq_signature(secret: &str, body: &str, timestamp: &str, signatur
     if let Ok(ts) = timestamp.parse::<i64>() {
         let now = chrono::Utc::now().timestamp();
         if (now - ts).unsigned_abs() > 300 {
-            tracing::warn!("Linq: rejecting stale webhook timestamp ({ts}, now={now})");
+            tracing::warn!("rejecting stale webhook timestamp ({ts}, now={now})");
             return false;
         }
     } else {
-        tracing::warn!("Linq: invalid webhook timestamp: {timestamp}");
+        tracing::warn!("invalid webhook timestamp: {timestamp}");
         return false;
     }
 
@@ -463,7 +463,7 @@ pub fn verify_linq_signature(secret: &str, body: &str, timestamp: &str, signatur
         .strip_prefix("sha256=")
         .unwrap_or(signature);
     let Ok(provided) = hex::decode(signature_hex.trim()) else {
-        tracing::warn!("Linq: invalid webhook signature format");
+        tracing::warn!("invalid webhook signature format");
         return false;
     };
 
