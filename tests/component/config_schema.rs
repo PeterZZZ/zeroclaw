@@ -349,43 +349,35 @@ fn autonomy_config_default_is_supervised() {
 }
 
 #[test]
-fn autonomy_config_default_max_actions_per_hour() {
-    let autonomy = RiskProfileConfig::default();
-    assert!(
-        autonomy.max_actions_per_hour > 0,
-        "max_actions_per_hour should be positive"
-    );
-}
-
-#[test]
-fn autonomy_config_default_workspace_only() {
-    let autonomy = RiskProfileConfig::default();
-    assert!(
-        autonomy.workspace_only,
-        "workspace_only should default to true"
-    );
-}
-
-#[test]
-fn autonomy_config_toml_roundtrip() {
+fn risk_profile_workspace_only_round_trips_through_toml() {
     let mut config = Config::default();
-    config
-        .risk_profiles
-        .entry("default".into())
-        .or_default()
-        .max_actions_per_hour = 50;
-    config
-        .risk_profiles
-        .entry("default".into())
-        .or_default()
-        .workspace_only = false;
-
+    config.risk_profiles.insert(
+        "clamps".into(),
+        zeroclaw_config::schema::RiskProfileConfig {
+            workspace_only: false,
+            ..Default::default()
+        },
+    );
     let toml_str = toml::to_string(&config).expect("config should serialize");
     let parsed: Config = toml::from_str(&toml_str).expect("should deserialize back");
-
-    let profile = parsed.risk_profiles.get("default").unwrap();
-    assert_eq!(profile.max_actions_per_hour, 50);
+    let profile = parsed.risk_profiles.get("clamps").unwrap();
     assert!(!profile.workspace_only);
+}
+
+#[test]
+fn runtime_profile_max_actions_per_hour_round_trips_through_toml() {
+    let mut config = Config::default();
+    config.runtime_profiles.insert(
+        "clamps".into(),
+        zeroclaw_config::schema::RuntimeProfileConfig {
+            max_actions_per_hour: 50,
+            ..Default::default()
+        },
+    );
+    let toml_str = toml::to_string(&config).expect("config should serialize");
+    let parsed: Config = toml::from_str(&toml_str).expect("should deserialize back");
+    let profile = parsed.runtime_profiles.get("clamps").unwrap();
+    assert_eq!(profile.max_actions_per_hour, 50);
 }
 
 #[test]

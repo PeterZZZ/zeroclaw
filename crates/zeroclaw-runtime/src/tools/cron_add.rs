@@ -436,57 +436,44 @@ mod tests {
     use tempfile::TempDir;
     use zeroclaw_config::schema::Config;
 
+    const TEST_AGENT: &str = "test-agent";
+
     async fn test_config(tmp: &TempDir) -> Arc<Config> {
         let mut config = Config {
             data_dir: tmp.path().join("data"),
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
-        config.risk_profiles.insert(
-            "default".to_string(),
-            zeroclaw_config::schema::RiskProfileConfig::default(),
-        );
-        config.providers.models.openrouter.insert(
-            "default".to_string(),
-            zeroclaw_config::schema::OpenRouterModelProviderConfig::default(),
-        );
-        config.agents.insert(
-            "test-agent".to_string(),
-            zeroclaw_config::schema::AliasedAgentConfig {
-                model_provider: "openrouter.default".into(),
-                risk_profile: "default".to_string(),
-                ..Default::default()
-            },
-        );
+        seed_test_agent(&mut config);
         tokio::fs::create_dir_all(&config.data_dir).await.unwrap();
         Arc::new(config)
     }
 
     fn test_security(cfg: &Config) -> Arc<SecurityPolicy> {
         Arc::new(
-            SecurityPolicy::for_agent(cfg, "test-agent").unwrap_or_else(|_| {
-                SecurityPolicy::from_risk_profile(
-                    &zeroclaw_config::schema::RiskProfileConfig::default(),
-                    &cfg.data_dir,
-                )
-            }),
+            SecurityPolicy::for_agent(cfg, TEST_AGENT).expect("test-agent has resolvable profiles"),
         )
     }
 
     fn seed_test_agent(config: &mut Config) {
         config
             .risk_profiles
-            .entry("default".to_string())
+            .entry(TEST_AGENT.to_string())
+            .or_default();
+        config
+            .runtime_profiles
+            .entry(TEST_AGENT.to_string())
             .or_default();
         config
             .providers
             .models
-            .ensure("openrouter", "default")
+            .ensure("openrouter", TEST_AGENT)
             .expect("known family");
-        config.agents.entry("test-agent".to_string()).or_insert(
+        config.agents.entry(TEST_AGENT.to_string()).or_insert(
             zeroclaw_config::schema::AliasedAgentConfig {
-                model_provider: "openrouter.default".into(),
-                risk_profile: "default".to_string(),
+                model_provider: format!("openrouter.{TEST_AGENT}").into(),
+                risk_profile: TEST_AGENT.to_string(),
+                runtime_profile: TEST_AGENT.to_string(),
                 ..Default::default()
             },
         );
@@ -496,7 +483,7 @@ mod tests {
     async fn adds_shell_job() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
         let result = tool
             .execute(json!({
                 "schedule": { "kind": "cron", "expr": "*/5 * * * *" },
@@ -514,7 +501,7 @@ mod tests {
     async fn shell_job_persists_delivery() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
         let result = tool
             .execute(json!({
                 "schedule": { "kind": "cron", "expr": "*/5 * * * *" },
@@ -551,17 +538,17 @@ mod tests {
         seed_test_agent(&mut config);
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["echo".into()];
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .level = AutonomyLevel::Supervised;
         tokio::fs::create_dir_all(&config.data_dir).await.unwrap();
         let cfg = Arc::new(config);
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -587,12 +574,12 @@ mod tests {
         seed_test_agent(&mut config);
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .level = AutonomyLevel::ReadOnly;
         std::fs::create_dir_all(&config.data_dir).unwrap();
         let cfg = Arc::new(config);
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -619,17 +606,17 @@ mod tests {
         seed_test_agent(&mut config);
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .level = AutonomyLevel::Full;
         config
-            .risk_profiles
-            .entry("default".into())
+            .runtime_profiles
+            .entry(TEST_AGENT.into())
             .or_default()
             .max_actions_per_hour = 0;
         std::fs::create_dir_all(&config.data_dir).unwrap();
         let cfg = Arc::new(config);
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -661,17 +648,17 @@ mod tests {
         seed_test_agent(&mut config);
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["touch".into()];
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .level = AutonomyLevel::Supervised;
         std::fs::create_dir_all(&config.data_dir).unwrap();
         let cfg = Arc::new(config);
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let denied = tool
             .execute(json!({
@@ -705,7 +692,7 @@ mod tests {
     async fn accepts_schedule_passed_as_json_string() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         // Simulate the LLM double-serializing the schedule: the value arrives
         // as a JSON string containing a JSON object, rather than an object.
@@ -726,7 +713,7 @@ mod tests {
     async fn rejects_plain_string_schedule_with_actionable_error() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -752,7 +739,7 @@ mod tests {
     async fn accepts_stringified_interval_schedule() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -770,7 +757,7 @@ mod tests {
     async fn accepts_stringified_schedule_with_timezone() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -788,7 +775,7 @@ mod tests {
     async fn rejects_invalid_schedule() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -812,7 +799,7 @@ mod tests {
     async fn agent_job_requires_prompt() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -834,7 +821,7 @@ mod tests {
     async fn agent_job_persists_allowed_tools() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -860,7 +847,7 @@ mod tests {
     async fn empty_allowed_tools_stored_as_none() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let result = tool
             .execute(json!({
@@ -886,7 +873,7 @@ mod tests {
     async fn delivery_schema_includes_matrix_channel() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
 
         let values =
             tool.parameters_schema()["properties"]["delivery"]["properties"]["channel"]["enum"]
@@ -901,7 +888,7 @@ mod tests {
     async fn delivery_schema_includes_webhook_and_thread_id() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
         let schema = tool.parameters_schema();
 
         let channel_enum = schema["properties"]["delivery"]["properties"]["channel"]["enum"]
@@ -926,7 +913,7 @@ mod tests {
     async fn webhook_announce_job_persists_thread_id() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), "test-agent");
+        let tool = CronAddTool::new(cfg.clone(), test_security(&cfg), TEST_AGENT);
         let result = tool
             .execute(json!({
                 "schedule": { "kind": "cron", "expr": "*/5 * * * *" },
@@ -966,7 +953,7 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             &cfg.data_dir,
         ));
-        let tool = CronAddTool::new(cfg, security, "test-agent");
+        let tool = CronAddTool::new(cfg, security, TEST_AGENT);
         let schema = tool.parameters_schema();
 
         // Top-level: schedule is required

@@ -3037,6 +3037,21 @@ impl Config {
         self.risk_profiles.get(profile_alias)
     }
 
+    /// Resolve the `[runtime_profiles.<alias>]` entry owned by an agent
+    /// (via `agents.<alias>.runtime_profile`). Returns `None` when the
+    /// agent has no runtime profile set or names a missing entry. Unlike
+    /// `risk_profile_for_agent`, the missing case is not a hard error
+    /// because runtime budgets and tunables fall back to global defaults.
+    #[must_use]
+    pub fn runtime_profile_for_agent(&self, agent_alias: &str) -> Option<&RuntimeProfileConfig> {
+        let agent = self.agents.get(agent_alias)?;
+        let profile_alias = agent.runtime_profile.trim();
+        if profile_alias.is_empty() {
+            return None;
+        }
+        self.runtime_profiles.get(profile_alias)
+    }
+
     /// Resolve an agent's `model_provider` reference (`"<type>.<alias>"`) to
     /// its concrete `ModelProviderConfig` entry. Returns `None` when the
     /// agent doesn't exist, the reference is unparseable, or the
@@ -8620,10 +8635,6 @@ impl Default for WebhookAuditConfig {
 // contexts). Configs from older schema versions are folded into
 // `risk_profiles.default` by the migration in `schema/v2.rs`.
 
-fn default_shell_timeout_secs() -> u64 {
-    60
-}
-
 fn default_auto_approve() -> Vec<String> {
     vec![
         "file_read".into(),
@@ -8675,30 +8686,6 @@ impl RiskProfileConfig {
             firejail_args: self.firejail_args.clone(),
         }
     }
-
-    /// Synthesize a [`ResourceLimitsConfig`] from this profile's flattened
-    /// resource fields.
-    #[must_use]
-    pub fn resource_limits(&self) -> ResourceLimitsConfig {
-        ResourceLimitsConfig {
-            max_memory_mb: if self.max_memory_mb == 0 {
-                default_max_memory_mb()
-            } else {
-                self.max_memory_mb
-            },
-            max_cpu_time_seconds: if self.max_cpu_time_seconds == 0 {
-                default_max_cpu_time_seconds()
-            } else {
-                self.max_cpu_time_seconds
-            },
-            max_subprocesses: if self.max_subprocesses == 0 {
-                default_max_subprocesses()
-            } else {
-                self.max_subprocesses
-            },
-            memory_monitoring: self.memory_monitoring,
-        }
-    }
 }
 
 fn parse_sandbox_backend(name: &str) -> SandboxBackend {
@@ -8747,10 +8734,6 @@ pub struct RiskProfileConfig {
     pub allowed_commands: Vec<String>,
     /// Explicit path denylist.
     pub forbidden_paths: Vec<String>,
-    /// Maximum actions allowed per hour. `0` inherits the global limit.
-    pub max_actions_per_hour: u32,
-    /// Maximum cost per day in cents. `0` inherits the global limit.
-    pub max_cost_per_day_cents: u32,
     /// Require approval for medium-risk operations.
     pub require_approval_for_medium_risk: bool,
     /// Block high-risk commands even when allowlisted.
@@ -8764,10 +8747,13 @@ pub struct RiskProfileConfig {
     /// Extra directory roots the agent may access.
     #[serde(alias = "allowed_path", alias = "allowed_paths")]
     pub allowed_roots: Vec<String>,
+    /// Tools the agent may call in agentic mode. Empty = inherit / no
+    /// authorization constraint. Authorization decision: which tools is
+    /// the agent permitted to invoke at all. See `excluded_tools` for
+    /// the inverse denylist scoped to non-CLI channels.
+    pub allowed_tools: Vec<String>,
     /// Tools excluded from non-CLI channels under this profile.
     pub excluded_tools: Vec<String>,
-    /// Shell subprocess timeout in seconds. `0` inherits the global timeout.
-    pub shell_timeout_secs: u64,
     // ── Sandbox (from security.sandbox) ─────────────────────────────
     /// Whether the sandbox is enabled for this profile. `None` inherits global.
     pub sandbox_enabled: Option<bool>,
@@ -8775,22 +8761,6 @@ pub struct RiskProfileConfig {
     pub sandbox_backend: Option<String>,
     /// Extra arguments forwarded to firejail when sandbox_backend = "firejail".
     pub firejail_args: Vec<String>,
-    // ── Resource limits (from security.resources) ───────────────────
-    /// Maximum memory in MiB for sandboxed processes. `0` inherits.
-    pub max_memory_mb: u32,
-    /// Maximum CPU time in seconds. `0` inherits.
-    pub max_cpu_time_seconds: u64,
-    /// Maximum number of subprocesses. `0` inherits.
-    pub max_subprocesses: u32,
-    /// Enable memory usage monitoring for this profile.
-    pub memory_monitoring: bool,
-    // ── Delegation guardrails (per-agent carve-out) ─────────────────
-    /// Maximum delegation recursion depth for agents using this profile.
-    pub max_delegation_depth: u32,
-    /// Delegate call timeout in seconds. `None` inherits global delegate timeout.
-    pub delegation_timeout_secs: Option<u64>,
-    /// Agentic delegate run timeout in seconds. `None` inherits global.
-    pub agentic_timeout_secs: Option<u64>,
 }
 
 impl Default for RiskProfileConfig {
@@ -8800,40 +8770,32 @@ impl Default for RiskProfileConfig {
             workspace_only: true,
             allowed_commands: crate::policy::default_allowed_commands(),
             forbidden_paths: crate::policy::default_forbidden_paths(),
-            max_actions_per_hour: 20,
-            max_cost_per_day_cents: 500,
             require_approval_for_medium_risk: true,
             block_high_risk_commands: true,
             shell_env_passthrough: vec![],
             auto_approve: default_auto_approve(),
             always_ask: default_always_ask(),
             allowed_roots: Vec::new(),
+            allowed_tools: Vec::new(),
             excluded_tools: Vec::new(),
-            shell_timeout_secs: default_shell_timeout_secs(),
             sandbox_enabled: None,
             sandbox_backend: None,
             firejail_args: Vec::new(),
-            max_memory_mb: 0,
-            max_cpu_time_seconds: 0,
-            max_subprocesses: 0,
-            memory_monitoring: false,
-            max_delegation_depth: 0,
-            delegation_timeout_secs: None,
-            agentic_timeout_secs: None,
         }
     }
 }
 
 /// Named runtime/LLM execution profile (`[runtime_profiles.<alias>]`).
 ///
-/// Reusable agent-loop tunables: agentic mode, tool-call limits, history,
-/// context budget, prompt cap, parallel dispatch. Anything model-provider
-/// shaped (model, model_provider, temperature, max_tokens, timeout_secs)
-/// lives on `[model_providers.<type>.<alias>]`. Anything autonomy-shaped
-/// (`agentic_timeout_secs`, delegation limits) lives on
-/// `[risk_profiles.<alias>]`. Mixing those into runtime_profiles was a
-/// V1 artefact that confused operators and is now retired.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+/// Reusable operational tuning: agentic mode, iteration caps, context
+/// budget, parallel dispatch, resource ceilings, recursion depth, and
+/// the budget knobs that `SecurityPolicy` enforces with subagent
+/// parent-subset discipline. Anything authorization-shaped (allowed
+/// commands/tools/paths, approval gates, sandbox) lives on
+/// `[risk_profiles.<alias>]`. Anything model-provider shaped (model,
+/// temperature, max_tokens, timeout_secs) lives on
+/// `[providers.models.<type>.<alias>]`.
+#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "runtime-profile"]
 #[serde(default)]
@@ -8842,8 +8804,24 @@ pub struct RuntimeProfileConfig {
     pub agentic: bool,
     /// Maximum tool-call iterations in agentic mode. `0` inherits the global default.
     pub max_tool_iterations: usize,
-    /// Tools available in agentic mode (empty = inherit global allowed tools).
-    pub allowed_tools: Vec<String>,
+    // ── Budget caps (enforced with subagent parent-subset discipline) ──
+    /// Maximum actions allowed per hour. `0` inherits the global limit.
+    /// `SecurityPolicy::ensure_no_escalation_beyond` rejects subagents
+    /// that try to raise this above the parent's value.
+    pub max_actions_per_hour: u32,
+    /// Maximum cost per day in cents. `0` inherits the global limit.
+    /// Parent-subset enforced for subagents.
+    pub max_cost_per_day_cents: u32,
+    /// Shell subprocess timeout in seconds. `0` inherits the global timeout.
+    /// Parent-subset enforced for subagents.
+    pub shell_timeout_secs: u64,
+    // ── Delegation tuning ──
+    /// Maximum delegation recursion depth. `0` inherits the default.
+    pub max_delegation_depth: u32,
+    /// Delegate call timeout in seconds. `None` inherits global delegate timeout.
+    pub delegation_timeout_secs: Option<u64>,
+    /// Agentic delegate run timeout in seconds. `None` inherits global.
+    pub agentic_timeout_secs: Option<u64>,
     // ── Per-agent runtime tunables (also live on AliasedAgentConfig) ─
     /// Maximum conversation history messages retained per session. `None` inherits.
     pub max_history_messages: Option<usize>,
@@ -8865,6 +8843,31 @@ pub struct RuntimeProfileConfig {
     pub max_tool_result_chars: Option<usize>,
     /// Number of recent turns whose full tool context is preserved. `None` inherits.
     pub keep_tool_context_turns: Option<usize>,
+}
+
+impl Default for RuntimeProfileConfig {
+    fn default() -> Self {
+        Self {
+            agentic: false,
+            max_tool_iterations: 0,
+            max_actions_per_hour: 20,
+            max_cost_per_day_cents: 500,
+            shell_timeout_secs: 60,
+            max_delegation_depth: 0,
+            delegation_timeout_secs: None,
+            agentic_timeout_secs: None,
+            max_history_messages: None,
+            max_context_tokens: None,
+            compact_context: None,
+            parallel_tools: None,
+            tool_dispatcher: None,
+            tool_call_dedup_exempt: Vec::new(),
+            max_system_prompt_chars: None,
+            context_aware_tools: None,
+            max_tool_result_chars: None,
+            keep_tool_context_turns: None,
+        }
+    }
 }
 
 /// Named skill bundle (`[skill_bundles.<alias>]`).
@@ -11678,55 +11681,6 @@ pub enum SandboxBackend {
     None,
 }
 
-/// Resource limits for command execution
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "security.resources"]
-pub struct ResourceLimitsConfig {
-    /// Maximum memory in MB per command
-    #[serde(default = "default_max_memory_mb")]
-    pub max_memory_mb: u32,
-
-    /// Maximum CPU time in seconds per command
-    #[serde(default = "default_max_cpu_time_seconds")]
-    pub max_cpu_time_seconds: u64,
-
-    /// Maximum number of subprocesses
-    #[serde(default = "default_max_subprocesses")]
-    pub max_subprocesses: u32,
-
-    /// Enable memory monitoring
-    #[serde(default = "default_memory_monitoring_enabled")]
-    pub memory_monitoring: bool,
-}
-
-fn default_max_memory_mb() -> u32 {
-    512
-}
-
-fn default_max_cpu_time_seconds() -> u64 {
-    60
-}
-
-fn default_max_subprocesses() -> u32 {
-    10
-}
-
-fn default_memory_monitoring_enabled() -> bool {
-    true
-}
-
-impl Default for ResourceLimitsConfig {
-    fn default() -> Self {
-        Self {
-            max_memory_mb: default_max_memory_mb(),
-            max_cpu_time_seconds: default_max_cpu_time_seconds(),
-            max_subprocesses: default_max_subprocesses(),
-            memory_monitoring: default_memory_monitoring_enabled(),
-        }
-    }
-}
-
 /// Audit logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
@@ -13574,13 +13528,6 @@ impl Config {
         profile_aliases.sort();
         for profile_alias in profile_aliases {
             let profile = &self.risk_profiles[profile_alias];
-            if profile.max_actions_per_hour == 0 {
-                validation_bail!(
-                    InvalidNumericRange,
-                    format!("risk_profiles.{profile_alias}.max_actions_per_hour"),
-                    "risk_profiles.{profile_alias}.max_actions_per_hour must be greater than 0"
-                );
-            }
             for (i, env_name) in profile.shell_env_passthrough.iter().enumerate() {
                 if !is_valid_env_var_name(env_name) {
                     anyhow::bail!(
@@ -15364,11 +15311,10 @@ mod tests {
         assert!(a.allowed_commands.contains(&"git".to_string()));
         assert!(a.allowed_commands.contains(&"cargo".to_string()));
         assert!(a.forbidden_paths.contains(&"/etc".to_string()));
-        assert_eq!(a.max_actions_per_hour, 20);
-        assert_eq!(a.max_cost_per_day_cents, 500);
         assert!(a.require_approval_for_medium_risk);
         assert!(a.block_high_risk_commands);
         assert!(a.shell_env_passthrough.is_empty());
+        assert!(a.allowed_tools.is_empty());
     }
 
     #[test]
@@ -15661,16 +15607,14 @@ auto_save = true
                         workspace_only: false,
                         allowed_commands: vec!["docker".into()],
                         forbidden_paths: vec!["/secret".into()],
-                        max_actions_per_hour: 50,
-                        max_cost_per_day_cents: 1000,
                         require_approval_for_medium_risk: false,
                         block_high_risk_commands: true,
                         shell_env_passthrough: vec!["DATABASE_URL".into()],
                         auto_approve: vec!["file_read".into()],
                         always_ask: vec![],
                         allowed_roots: vec![],
+                        allowed_tools: vec![],
                         excluded_tools: vec![],
-                        shell_timeout_secs: 60,
                         ..RiskProfileConfig::default()
                     },
                 );
@@ -15916,8 +15860,12 @@ auto_approve = ["file_read", "memory_recall", "http_request"]
             .get("default")
             .expect("default profile");
         assert_eq!(profile.level, AutonomyLevel::Full);
-        assert_eq!(profile.max_actions_per_hour, 99);
         assert!(profile.auto_approve.contains(&"http_request".to_string()));
+        let runtime = parsed
+            .runtime_profiles
+            .get("default")
+            .expect("default runtime profile");
+        assert_eq!(runtime.max_actions_per_hour, 99);
     }
 
     /// Regression test for #4247: when a user provides a custom auto_approve

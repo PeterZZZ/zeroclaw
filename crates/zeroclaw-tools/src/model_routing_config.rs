@@ -267,9 +267,9 @@ impl ModelRoutingConfigTool {
                     "model_provider": agent.model_provider,
                     "risk_profile": agent.risk_profile,
                     "runtime_profile": agent.runtime_profile,
-                    "max_delegation_depth": risk.map(|r| r.max_delegation_depth),
+                    "max_delegation_depth": runtime.map(|r| r.max_delegation_depth),
                     "agentic": runtime.map(|r| r.agentic),
-                    "allowed_tools": runtime.map(|r| &r.allowed_tools),
+                    "allowed_tools": risk.map(|r| &r.allowed_tools),
                     "max_tool_iterations": runtime.map(|r| r.max_tool_iterations),
                 }),
             );
@@ -760,20 +760,15 @@ impl ModelRoutingConfigTool {
             }
         }
 
-        // synthesize risk_profiles[name] from max_depth.
+        // synthesize risk_profiles[name] from allowed_tools (authorization).
         {
             let risk = cfg.risk_profiles.entry(name.clone()).or_default();
-            if let MaybeSet::Set(depth) = max_depth_update {
-                if depth == 0 {
-                    anyhow::bail!("'max_depth' must be greater than 0");
-                }
-                risk.max_delegation_depth = depth;
-            } else if risk.max_delegation_depth == 0 {
-                risk.max_delegation_depth = DEFAULT_AGENT_MAX_DEPTH;
+            if let Some(tools) = allowed_tools_update {
+                risk.allowed_tools = tools;
             }
         }
 
-        // synthesize runtime_profiles[name] from agentic/max_iterations/allowed_tools.
+        // synthesize runtime_profiles[name] from agentic/max_iterations/max_depth.
         {
             let runtime = cfg.runtime_profiles.entry(name.clone()).or_default();
             if let Some(agentic) = agentic_update {
@@ -787,11 +782,22 @@ impl ModelRoutingConfigTool {
             } else if runtime.max_tool_iterations == 0 {
                 runtime.max_tool_iterations = DEFAULT_AGENT_MAX_ITERATIONS;
             }
-            if let Some(tools) = allowed_tools_update {
-                runtime.allowed_tools = tools;
+            if let MaybeSet::Set(depth) = max_depth_update {
+                if depth == 0 {
+                    anyhow::bail!("'max_depth' must be greater than 0");
+                }
+                runtime.max_delegation_depth = depth;
+            } else if runtime.max_delegation_depth == 0 {
+                runtime.max_delegation_depth = DEFAULT_AGENT_MAX_DEPTH;
             }
-            if runtime.agentic && runtime.allowed_tools.is_empty() {
-                anyhow::bail!("Agent '{name}' has agentic=true but allowed_tools is empty.");
+            if runtime.agentic {
+                let allowed_tools_empty = cfg
+                    .risk_profiles
+                    .get(&name)
+                    .is_none_or(|r| r.allowed_tools.is_empty());
+                if allowed_tools_empty {
+                    anyhow::bail!("Agent '{name}' has agentic=true but allowed_tools is empty.");
+                }
             }
         }
 

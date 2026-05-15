@@ -2057,13 +2057,28 @@ impl SecurityPolicy {
         Ok(())
     }
 
-    /// Build a `SecurityPolicy` from a resolved risk profile.
-    ///
-    /// Unified policy entry point: callsites resolve a
-    /// [`crate::schema::RiskProfileConfig`] via
-    /// [`crate::schema::Config::active_risk_profile`] and pass it here.
+    /// Legacy entry point: build a `SecurityPolicy` from a risk profile
+    /// without a runtime profile. Budget caps default to zero (interpreted
+    /// as "no enforcement"). Tests and pre-multi-agent callsites use this;
+    /// production code should call `from_profiles` or `for_agent` so the
+    /// runtime profile's budget caps actually take effect.
     pub fn from_risk_profile(
         risk_profile: &crate::schema::RiskProfileConfig,
+        workspace_dir: &Path,
+    ) -> Self {
+        Self::from_profiles(risk_profile, None, workspace_dir)
+    }
+
+    /// Build a `SecurityPolicy` from a resolved risk + runtime profile pair.
+    ///
+    /// Authorization fields (autonomy level, allowlists, sandbox) come from
+    /// the risk profile. Budget caps (`max_actions_per_hour`,
+    /// `max_cost_per_day_cents`, `shell_timeout_secs`) come from the
+    /// runtime profile but are enforced with parent-subset discipline on
+    /// SubAgent spawn (see `ensure_no_escalation_beyond`).
+    pub fn from_profiles(
+        risk_profile: &crate::schema::RiskProfileConfig,
+        runtime_profile: Option<&crate::schema::RuntimeProfileConfig>,
         workspace_dir: &Path,
     ) -> Self {
         // When autonomy is Full, disable workspace_only so the agent can
@@ -2076,11 +2091,8 @@ impl SecurityPolicy {
             risk_profile.workspace_only
         };
 
-        let shell_timeout_secs = if risk_profile.shell_timeout_secs == 0 {
-            60
-        } else {
-            risk_profile.shell_timeout_secs
-        };
+        let runtime_default = crate::schema::RuntimeProfileConfig::default();
+        let runtime = runtime_profile.unwrap_or(&runtime_default);
 
         Self {
             autonomy: risk_profile.level,
@@ -2108,31 +2120,35 @@ impl SecurityPolicy {
             // tiers.
             allowed_roots_read_only: Vec::new(),
             allowed_roots_write_only: Vec::new(),
-            max_actions_per_hour: risk_profile.max_actions_per_hour,
-            max_cost_per_day_cents: risk_profile.max_cost_per_day_cents,
+            max_actions_per_hour: runtime.max_actions_per_hour,
+            max_cost_per_day_cents: runtime.max_cost_per_day_cents,
             require_approval_for_medium_risk: risk_profile.require_approval_for_medium_risk,
             block_high_risk_commands: risk_profile.block_high_risk_commands,
             shell_env_passthrough: risk_profile.shell_env_passthrough.clone(),
-            shell_timeout_secs,
+            shell_timeout_secs: runtime.shell_timeout_secs,
             tracker: PerSenderTracker::new(),
         }
     }
 
-    /// Resolve the risk profile owned by `agent_alias` and build a
-    /// `SecurityPolicy` from it. Bails when the agent isn't configured or
-    /// when its `risk_profile` field doesn't name a configured profile —
-    /// there is no global fallback, every security context is per-agent.
+    /// Resolve the risk + runtime profiles owned by `agent_alias` and build
+    /// a `SecurityPolicy`. Bails when the agent isn't configured or when its
+    /// `risk_profile` field doesn't name a configured profile — there is no
+    /// global fallback, every security context is per-agent. Missing
+    /// `runtime_profile` falls back to zero budgets (treated as "inherit /
+    /// no enforcement"), matching the previous default when the budget
+    /// fields lived on the risk profile.
     pub fn for_agent(config: &crate::schema::Config, agent_alias: &str) -> anyhow::Result<Self> {
         let risk_profile = config.risk_profile_for_agent(agent_alias).ok_or_else(|| {
             anyhow::anyhow!(
                 "agents.{agent_alias} has no resolvable risk_profile (load-time validation should have caught this)"
             )
         })?;
+        let runtime_profile = config.runtime_profile_for_agent(agent_alias);
         // Per-agent workspace becomes the SecurityPolicy boundary so
         // file_read/write/edit and the shell tool jail to the agent's
         // own dir, not the install-wide legacy path.
         let agent_workspace = config.agent_workspace_dir(agent_alias);
-        let mut policy = Self::from_risk_profile(risk_profile, &agent_workspace);
+        let mut policy = Self::from_profiles(risk_profile, runtime_profile, &agent_workspace);
 
         // Shared skills directory: every agent reads from
         // `<install>/shared/skills/` so the `read_skills` tool resolves
@@ -2742,20 +2758,23 @@ mod tests {
 
     #[test]
     fn from_config_maps_all_fields() {
-        let autonomy_config = crate::schema::RiskProfileConfig {
+        let risk = crate::schema::RiskProfileConfig {
             level: AutonomyLevel::Full,
             workspace_only: false,
             allowed_commands: vec!["docker".into()],
             forbidden_paths: vec!["/secret".into()],
-            max_actions_per_hour: 100,
-            max_cost_per_day_cents: 1000,
             require_approval_for_medium_risk: false,
             block_high_risk_commands: false,
             shell_env_passthrough: vec!["DATABASE_URL".into()],
             ..crate::schema::RiskProfileConfig::default()
         };
+        let runtime = crate::schema::RuntimeProfileConfig {
+            max_actions_per_hour: 100,
+            max_cost_per_day_cents: 1000,
+            ..crate::schema::RuntimeProfileConfig::default()
+        };
         let workspace = PathBuf::from("/tmp/test-workspace");
-        let policy = SecurityPolicy::from_risk_profile(&autonomy_config, &workspace);
+        let policy = SecurityPolicy::from_profiles(&risk, Some(&runtime), &workspace);
 
         assert_eq!(policy.autonomy, AutonomyLevel::Full);
         assert!(!policy.workspace_only);
@@ -3765,19 +3784,22 @@ mod tests {
 
     #[test]
     fn from_config_creates_fresh_tracker() {
-        let autonomy_config = crate::schema::RiskProfileConfig {
+        let risk = crate::schema::RiskProfileConfig {
             level: AutonomyLevel::Full,
             workspace_only: false,
             allowed_commands: vec![],
             forbidden_paths: vec![],
-            max_actions_per_hour: 10,
-            max_cost_per_day_cents: 100,
             require_approval_for_medium_risk: true,
             block_high_risk_commands: true,
             ..crate::schema::RiskProfileConfig::default()
         };
+        let runtime = crate::schema::RuntimeProfileConfig {
+            max_actions_per_hour: 10,
+            max_cost_per_day_cents: 100,
+            ..crate::schema::RuntimeProfileConfig::default()
+        };
         let workspace = PathBuf::from("/tmp/test");
-        let policy = SecurityPolicy::from_risk_profile(&autonomy_config, &workspace);
+        let policy = SecurityPolicy::from_profiles(&risk, Some(&runtime), &workspace);
         assert!(!policy.is_rate_limited());
     }
 

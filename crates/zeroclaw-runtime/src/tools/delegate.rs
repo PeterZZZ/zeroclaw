@@ -386,35 +386,35 @@ impl DelegateTool {
         )
     }
 
-    /// Resolve max delegation depth from the named risk profile (default: 3).
-    fn resolve_max_depth(&self, risk_profile: &str) -> u32 {
-        if risk_profile.is_empty() {
+    /// Resolve max delegation depth from the named runtime profile (default: 3).
+    fn resolve_max_depth(&self, runtime_profile: &str) -> u32 {
+        if runtime_profile.is_empty() {
             return 3;
         }
-        self.risk_profiles
-            .get(risk_profile)
+        self.runtime_profiles
+            .get(runtime_profile)
             .map(|p| p.max_delegation_depth)
             .filter(|&d| d > 0)
             .unwrap_or(3)
     }
 
-    /// Resolve per-call delegation timeout from the named risk profile.
-    fn resolve_delegation_timeout(&self, risk_profile: &str) -> Option<u64> {
-        if risk_profile.is_empty() {
+    /// Resolve per-call delegation timeout from the named runtime profile.
+    fn resolve_delegation_timeout(&self, runtime_profile: &str) -> Option<u64> {
+        if runtime_profile.is_empty() {
             return None;
         }
-        self.risk_profiles
-            .get(risk_profile)
+        self.runtime_profiles
+            .get(runtime_profile)
             .and_then(|p| p.delegation_timeout_secs)
     }
 
-    /// Resolve agentic run timeout from the named risk profile.
-    fn resolve_agentic_timeout_secs(&self, risk_profile: &str) -> Option<u64> {
-        if risk_profile.is_empty() {
+    /// Resolve agentic run timeout from the named runtime profile.
+    fn resolve_agentic_timeout_secs(&self, runtime_profile: &str) -> Option<u64> {
+        if runtime_profile.is_empty() {
             return None;
         }
-        self.risk_profiles
-            .get(risk_profile)
+        self.runtime_profiles
+            .get(runtime_profile)
             .and_then(|p| p.agentic_timeout_secs)
     }
 
@@ -441,13 +441,13 @@ impl DelegateTool {
             .unwrap_or(10)
     }
 
-    /// Resolve allowed tools list from the named runtime profile.
-    fn resolve_allowed_tools(&self, runtime_profile: &str) -> Vec<String> {
-        if runtime_profile.is_empty() {
+    /// Resolve allowed tools list from the named risk profile (authorization).
+    fn resolve_allowed_tools(&self, risk_profile: &str) -> Vec<String> {
+        if risk_profile.is_empty() {
             return Vec::new();
         }
-        self.runtime_profiles
-            .get(runtime_profile)
+        self.risk_profiles
+            .get(risk_profile)
             .map(|p| p.allowed_tools.clone())
             .unwrap_or_default()
     }
@@ -657,7 +657,7 @@ impl DelegateTool {
         };
 
         // Resolve profile references
-        let max_depth = self.resolve_max_depth(&agent_config.risk_profile);
+        let max_depth = self.resolve_max_depth(&agent_config.runtime_profile);
         let (provider_type, credential, model, temperature) =
             self.resolve_brain(&agent_config.model_provider);
         let agentic = self.resolve_agentic(&agent_config.runtime_profile);
@@ -748,7 +748,7 @@ impl DelegateTool {
 
         // Wrap the model_provider call in a timeout to prevent indefinite blocking
         let timeout_secs = self
-            .resolve_delegation_timeout(&agent_config.risk_profile)
+            .resolve_delegation_timeout(&agent_config.runtime_profile)
             .unwrap_or(self.delegate_config.timeout_secs);
         let result = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
@@ -823,7 +823,7 @@ impl DelegateTool {
             }
         };
 
-        let max_depth = self.resolve_max_depth(&agent_config.risk_profile);
+        let max_depth = self.resolve_max_depth(&agent_config.runtime_profile);
         if self.depth >= max_depth {
             return Ok(ToolResult {
                 success: false,
@@ -1463,15 +1463,15 @@ impl DelegateTool {
         full_prompt: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<ToolResult> {
-        let allowed_tools = self.resolve_allowed_tools(&agent_config.runtime_profile);
+        let allowed_tools = self.resolve_allowed_tools(&agent_config.risk_profile);
 
         if allowed_tools.is_empty() {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "Agent '{agent_name}' is agentic but runtime_profile '{}' has no allowed_tools",
-                    agent_config.runtime_profile
+                    "Agent '{agent_name}' is agentic but risk_profile '{}' has no allowed_tools",
+                    agent_config.risk_profile
                 )),
             });
         }
@@ -1523,7 +1523,7 @@ impl DelegateTool {
         let noop_observer = NoopObserver;
 
         let agentic_timeout_secs = self
-            .resolve_agentic_timeout_secs(&agent_config.risk_profile)
+            .resolve_agentic_timeout_secs(&agent_config.runtime_profile)
             .unwrap_or(self.delegate_config.agentic_timeout_secs);
         // Forward the per-turn receipt scope from the parent loop so subagent
         // tool calls land in the same collector as the top-level turn. When
@@ -1822,6 +1822,7 @@ mod tests {
     fn agentic_agent_config() -> AliasedAgentConfig {
         AliasedAgentConfig {
             model_provider: "openrouter.agentic".into(),
+            risk_profile: "agentic_test".to_string(),
             runtime_profile: "agentic_test".to_string(),
             ..Default::default()
         }
@@ -1841,17 +1842,25 @@ mod tests {
         models
     }
 
-    fn agentic_runtime_profiles(
-        allowed_tools: Vec<String>,
-        max_iterations: usize,
-    ) -> HashMap<String, RuntimeProfileConfig> {
+    fn agentic_runtime_profiles(max_iterations: usize) -> HashMap<String, RuntimeProfileConfig> {
         let mut profiles = HashMap::new();
         profiles.insert(
             "agentic_test".to_string(),
             RuntimeProfileConfig {
                 agentic: true,
-                allowed_tools,
                 max_tool_iterations: max_iterations,
+                ..Default::default()
+            },
+        );
+        profiles
+    }
+
+    fn agentic_risk_profiles(allowed_tools: Vec<String>) -> HashMap<String, RiskProfileConfig> {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "agentic_test".to_string(),
+            RiskProfileConfig {
+                allowed_tools,
                 ..Default::default()
             },
         );
@@ -2144,7 +2153,8 @@ mod tests {
 
         let tool = DelegateTool::new(agents, None, test_security())
             .with_providers_models(agentic_providers_models())
-            .with_runtime_profiles(agentic_runtime_profiles(Vec::new(), 10));
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(Vec::new()));
         let result = tool
             .execute(json!({"agent": "agentic", "prompt": "test"}))
             .await
@@ -2167,12 +2177,11 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert("agentic".to_string(), agentic_agent_config());
 
+        let allowed = vec!["missing_tool".to_string()];
         let tool = DelegateTool::new(agents, None, test_security())
             .with_providers_models(agentic_providers_models())
-            .with_runtime_profiles(agentic_runtime_profiles(
-                vec!["missing_tool".to_string()],
-                10,
-            ))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(allowed))
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
         let result = tool
             .execute(json!({"agent": "agentic", "prompt": "test"}))
@@ -2193,7 +2202,8 @@ mod tests {
     async fn execute_agentic_runs_tool_call_loop_with_filtered_tools() {
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["echo_tool".to_string()], 10))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(vec!["echo_tool".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(vec![
                 Arc::new(EchoTool),
                 Arc::new(DelegateTool::new(HashMap::new(), None, test_security())),
@@ -2222,7 +2232,8 @@ mod tests {
     async fn execute_agentic_excludes_delegate_even_if_allowlisted() {
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["delegate".to_string()], 10))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(vec!["delegate".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(DelegateTool::new(
                 HashMap::new(),
                 None,
@@ -2257,7 +2268,8 @@ mod tests {
     async fn execute_agentic_respects_max_iterations() {
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["echo_tool".to_string()], 2))
+            .with_runtime_profiles(agentic_runtime_profiles(2))
+            .with_risk_profiles(agentic_risk_profiles(vec!["echo_tool".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let model_provider = InfiniteToolCallModelProvider;
@@ -2299,7 +2311,8 @@ mod tests {
 
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["echo_tool".to_string()], 10))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(vec!["echo_tool".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let collector: Arc<std::sync::Mutex<Vec<String>>> =
@@ -2371,7 +2384,8 @@ mod tests {
         // `[receipt: ` trailer.
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["echo_tool".to_string()], 10))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(vec!["echo_tool".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let model_provider = OneToolThenFinalModelProvider;
@@ -2400,7 +2414,8 @@ mod tests {
     async fn execute_agentic_propagates_provider_errors() {
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["echo_tool".to_string()], 10))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(vec!["echo_tool".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let model_provider = FailingModelProvider;
@@ -2504,7 +2519,8 @@ mod tests {
         // Build DelegateTool with NO parent tools initially
         let config = agentic_agent_config();
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_runtime_profiles(agentic_runtime_profiles(vec!["mcp_fake".to_string()], 10))
+            .with_runtime_profiles(agentic_runtime_profiles(10))
+            .with_risk_profiles(agentic_risk_profiles(vec!["mcp_fake".to_string()]))
             .with_parent_tools(Arc::new(RwLock::new(Vec::new())));
 
         // Simulate late MCP tool injection via the shared handle
@@ -3219,26 +3235,36 @@ mod tests {
         target_alias: &str,
         target_max_actions: u32,
     ) -> Arc<zeroclaw_config::schema::Config> {
-        use zeroclaw_config::schema::{AliasedAgentConfig, Config, RiskProfileConfig};
+        use zeroclaw_config::schema::{
+            AliasedAgentConfig, Config, RiskProfileConfig, RuntimeProfileConfig,
+        };
         let mut config = Config::default();
-        config.risk_profiles.insert(
+        config
+            .risk_profiles
+            .insert("narrow".to_string(), RiskProfileConfig::default());
+        config
+            .risk_profiles
+            .insert("wide".to_string(), RiskProfileConfig::default());
+        config.runtime_profiles.insert(
             "narrow".to_string(),
-            RiskProfileConfig {
+            RuntimeProfileConfig {
                 max_actions_per_hour: caller_max_actions,
-                ..RiskProfileConfig::default()
+                ..RuntimeProfileConfig::default()
             },
         );
-        config.risk_profiles.insert(
+        config.runtime_profiles.insert(
             "wide".to_string(),
-            RiskProfileConfig {
+            RuntimeProfileConfig {
                 max_actions_per_hour: target_max_actions,
-                ..RiskProfileConfig::default()
+                ..RuntimeProfileConfig::default()
             },
         );
+        let pick = |above: bool| if above { "wide" } else { "narrow" }.to_string();
         config.agents.insert(
             caller_alias.to_string(),
             AliasedAgentConfig {
                 risk_profile: "narrow".to_string(),
+                runtime_profile: "narrow".to_string(),
                 model_provider: "ollama.caller".into(),
                 ..AliasedAgentConfig::default()
             },
@@ -3246,12 +3272,8 @@ mod tests {
         config.agents.insert(
             target_alias.to_string(),
             AliasedAgentConfig {
-                risk_profile: if target_max_actions > caller_max_actions {
-                    "wide"
-                } else {
-                    "narrow"
-                }
-                .to_string(),
+                risk_profile: pick(target_max_actions > caller_max_actions),
+                runtime_profile: pick(target_max_actions > caller_max_actions),
                 model_provider: "ollama.target".into(),
                 ..AliasedAgentConfig::default()
             },

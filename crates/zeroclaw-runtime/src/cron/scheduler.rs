@@ -838,32 +838,41 @@ mod tests {
     use tempfile::TempDir;
     use zeroclaw_config::schema::Config;
 
+    const TEST_AGENT: &str = "test-agent";
+
     async fn test_config(tmp: &TempDir) -> Config {
         let mut config = Config {
             data_dir: tmp.path().join("data"),
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
-        // Seed a configured test-agent so cron utilities that resolve
-        // SecurityPolicy via `for_agent("test-agent")` succeed.
         config.risk_profiles.insert(
-            "default".to_string(),
+            TEST_AGENT.to_string(),
             zeroclaw_config::schema::RiskProfileConfig::default(),
         );
+        config.runtime_profiles.insert(
+            TEST_AGENT.to_string(),
+            zeroclaw_config::schema::RuntimeProfileConfig::default(),
+        );
         config.providers.models.openrouter.insert(
-            "default".to_string(),
+            TEST_AGENT.to_string(),
             zeroclaw_config::schema::OpenRouterModelProviderConfig::default(),
         );
         config.agents.insert(
-            "test-agent".to_string(),
+            TEST_AGENT.to_string(),
             zeroclaw_config::schema::AliasedAgentConfig {
-                model_provider: "openrouter.default".into(),
-                risk_profile: "default".to_string(),
+                model_provider: format!("openrouter.{TEST_AGENT}").into(),
+                risk_profile: TEST_AGENT.to_string(),
+                runtime_profile: TEST_AGENT.to_string(),
                 ..Default::default()
             },
         );
         tokio::fs::create_dir_all(&config.data_dir).await.unwrap();
         config
+    }
+
+    fn test_security(config: &Config) -> SecurityPolicy {
+        SecurityPolicy::for_agent(config, TEST_AGENT).expect("test-agent has resolvable profiles")
     }
 
     fn test_job(command: &str) -> CronJob {
@@ -880,7 +889,7 @@ mod tests {
             job_type: JobType::Shell,
             session_target: SessionTarget::Isolated,
             model: None,
-            agent_alias: crate::cron::types::DEFAULT_AGENT_ALIAS.into(),
+            agent_alias: TEST_AGENT.into(),
             enabled: true,
             delivery: DeliveryConfig::default(),
             delete_after_run: false,
@@ -970,13 +979,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp).await;
         let job = test_job("echo scheduler-ok");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(success);
@@ -989,13 +992,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp).await;
         let job = test_job("ls definitely_missing_file_for_scheduler_test");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1009,17 +1006,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["sleep".into()];
         let job = test_job("sleep 1");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) =
             run_job_command_with_timeout(&config, &security, &job, Duration::from_millis(50)).await;
@@ -1033,17 +1024,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["echo".into()];
         let job = test_job("curl https://evil.example");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1057,17 +1042,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["cat".into()];
         let job = test_job("cat /etc/passwd");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1082,17 +1061,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["grep".into()];
         let job = test_job("grep --file=/etc/passwd root ./src");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1107,17 +1080,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["grep".into()];
         let job = test_job("grep -f/etc/passwd root ./src");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1132,17 +1099,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["cat".into()];
         let job = test_job("cat ~root/.ssh/id_rsa");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1157,17 +1118,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["cat".into()];
         let job = test_job("cat </etc/passwd");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1181,17 +1136,11 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .level = crate::security::AutonomyLevel::ReadOnly;
         let job = test_job("echo should-not-run");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1204,18 +1153,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
         config
-            .risk_profiles
-            .entry("default".into())
+            .runtime_profiles
+            .entry(TEST_AGENT.into())
             .or_default()
             .max_actions_per_hour = 0;
         let job = test_job("echo should-not-run");
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
@@ -1231,16 +1174,10 @@ mod tests {
         config.reliability.provider_backoff_ms = 1;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .allowed_commands = vec!["sh".into()];
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         tokio::fs::write(
             config.data_dir.join("retry-once.sh"),
@@ -1267,13 +1204,7 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config.reliability.scheduler_retries = 1;
         config.reliability.provider_backoff_ms = 1;
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let job = test_job("ls always_missing_for_retry_test");
 
@@ -1295,13 +1226,7 @@ mod tests {
         let mut job = test_job("");
         job.job_type = JobType::Agent;
         job.prompt = Some("Say hello".into());
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) =
             Box::pin(run_agent_job(&config, &security, "test-agent", &job)).await;
@@ -1315,19 +1240,13 @@ mod tests {
         let mut config = test_config(&tmp).await;
         config
             .risk_profiles
-            .entry("default".into())
+            .entry(TEST_AGENT.into())
             .or_default()
             .level = crate::security::AutonomyLevel::ReadOnly;
         let mut job = test_job("");
         job.job_type = JobType::Agent;
         job.prompt = Some("Say hello".into());
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) =
             Box::pin(run_agent_job(&config, &security, "test-agent", &job)).await;
@@ -1341,20 +1260,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
         config
-            .risk_profiles
-            .entry("default".into())
+            .runtime_profiles
+            .entry(TEST_AGENT.into())
             .or_default()
             .max_actions_per_hour = 0;
         let mut job = test_job("");
         job.job_type = JobType::Agent;
         job.prompt = Some("Say hello".into());
-        let security = SecurityPolicy::from_risk_profile(
-            config
-                .risk_profiles
-                .get("default")
-                .unwrap_or(&zeroclaw_config::schema::RiskProfileConfig::default()),
-            &config.data_dir,
-        );
+        let security = test_security(&config);
 
         let (success, output) =
             Box::pin(run_agent_job(&config, &security, "test-agent", &job)).await;
@@ -1497,7 +1410,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = cron::add_agent_job(
             &config,
-            "default",
+            TEST_AGENT,
             Some("one-shot".into()),
             crate::cron::Schedule::At { at },
             "Hello",
@@ -1524,7 +1437,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = cron::add_agent_job(
             &config,
-            "default",
+            TEST_AGENT,
             Some("one-shot".into()),
             crate::cron::Schedule::At { at },
             "Hello",
@@ -1700,7 +1613,7 @@ mod tests {
         let config = test_config(&tmp).await;
         let job = cron::add_agent_job(
             &config,
-            "default",
+            TEST_AGENT,
             Some("announce-job".into()),
             crate::cron::Schedule::Cron {
                 expr: "*/5 * * * *".into(),
@@ -1786,7 +1699,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = cron::add_agent_job(
             &config,
-            "default",
+            TEST_AGENT,
             Some("at-no-autodelete".into()),
             crate::cron::Schedule::At { at },
             "Hello",

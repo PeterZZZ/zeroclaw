@@ -131,45 +131,102 @@ impl V2Config {
             mut passthrough,
         } = self;
 
-        // autonomy → risk_profiles.default, with V2 non_cli_excluded_tools
-        // renamed to V3 excluded_tools (broader scope, same shape).
+        // autonomy → risk_profiles.default + runtime_profiles.default.
+        //
+        // Authorization fields (allowlists, sandbox, approval gates,
+        // env passthrough) land on the risk profile. Budget caps
+        // (`max_actions_per_hour`, `max_cost_per_day_cents`,
+        // `shell_timeout_secs`) and recursion/timeout fields
+        // (`max_delegation_depth`, `delegation_timeout_secs`,
+        // `agentic_timeout_secs`) land on the runtime profile because
+        // they are operational tuning enforced with subagent
+        // parent-subset discipline, not authorization decisions.
+        //
+        // V2 `non_cli_excluded_tools` renames to V3 `excluded_tools`
+        // (broader scope, same shape).
         if let Some(autonomy_value) = autonomy {
             let renamed = rename_table_keys(
                 autonomy_value,
                 &[("non_cli_excluded_tools", "excluded_tools")],
             );
-            let mut risk_profiles = passthrough
-                .remove("risk_profiles")
-                .and_then(|v| v.try_into::<toml::Table>().ok())
-                .unwrap_or_default();
-            risk_profiles
-                .entry("default".to_string())
-                .or_insert(renamed);
-            passthrough.insert(
-                "risk_profiles".to_string(),
-                toml::Value::Table(risk_profiles),
-            );
-            tracing::info!(target: "migration", "[autonomy] → [risk_profiles.default]");
+            let (risk_fields, runtime_fields) = split_autonomy_into_profile_buckets(renamed);
+            if let Some(risk_table) = risk_fields {
+                let mut risk_profiles = passthrough
+                    .remove("risk_profiles")
+                    .and_then(|v| v.try_into::<toml::Table>().ok())
+                    .unwrap_or_default();
+                merge_into_profile_default(&mut risk_profiles, risk_table);
+                passthrough.insert(
+                    "risk_profiles".to_string(),
+                    toml::Value::Table(risk_profiles),
+                );
+                tracing::info!(
+                    target: "migration",
+                    "[autonomy] authorization fields → [risk_profiles.default]"
+                );
+            }
+            if let Some(runtime_table) = runtime_fields {
+                let mut runtime_profiles = passthrough
+                    .remove("runtime_profiles")
+                    .and_then(|v| v.try_into::<toml::Table>().ok())
+                    .unwrap_or_default();
+                merge_into_profile_default(&mut runtime_profiles, runtime_table);
+                passthrough.insert(
+                    "runtime_profiles".to_string(),
+                    toml::Value::Table(runtime_profiles),
+                );
+                tracing::info!(
+                    target: "migration",
+                    "[autonomy] budget/timeout fields → [runtime_profiles.default]"
+                );
+            }
         }
 
-        // V3 RiskProfileConfig absorbed [security.sandbox] and
-        // [security.resources]; enrich the autonomy-derived profile.
+        // V3 RiskProfileConfig absorbed [security.sandbox]; the
+        // [security.resources] block is dropped (max_memory_mb,
+        // max_cpu_time_seconds, max_subprocesses, memory_monitoring
+        // were never wired to any enforcement codepath; sandbox
+        // backends carry their own resource budgets).
         fold_security_into_risk_profile(&mut passthrough);
 
-        // agent → runtime_profiles.default
-        if let Some(agent_value) = agent {
-            let mut runtime_profiles = passthrough
-                .remove("runtime_profiles")
-                .and_then(|v| v.try_into::<toml::Table>().ok())
-                .unwrap_or_default();
-            runtime_profiles
-                .entry("default".to_string())
-                .or_insert(agent_value);
-            passthrough.insert(
-                "runtime_profiles".to_string(),
-                toml::Value::Table(runtime_profiles),
-            );
-            tracing::info!(target: "migration", "[agent] → [runtime_profiles.default]");
+        // agent → runtime_profiles.default + risk_profiles.default.
+        //
+        // Most agent-section fields are operational tuning and land on
+        // the runtime profile. `allowed_tools` is the one authorization
+        // field on V2's `[agent]` block (which tools may the agent
+        // call), so it moves to `[risk_profiles.default.allowed_tools]`
+        // alongside `allowed_commands`.
+        if let Some(toml::Value::Table(mut agent_table)) = agent {
+            let allowed_tools = agent_table.remove("allowed_tools");
+            if let Some(at_value) = allowed_tools {
+                let mut risk_profiles = passthrough
+                    .remove("risk_profiles")
+                    .and_then(|v| v.try_into::<toml::Table>().ok())
+                    .unwrap_or_default();
+                let mut risk_default = toml::Table::new();
+                risk_default.insert("allowed_tools".to_string(), at_value);
+                merge_into_profile_default(&mut risk_profiles, risk_default);
+                passthrough.insert(
+                    "risk_profiles".to_string(),
+                    toml::Value::Table(risk_profiles),
+                );
+                tracing::info!(
+                    target: "migration",
+                    "[agent.allowed_tools] → [risk_profiles.default.allowed_tools]"
+                );
+            }
+            if !agent_table.is_empty() {
+                let mut runtime_profiles = passthrough
+                    .remove("runtime_profiles")
+                    .and_then(|v| v.try_into::<toml::Table>().ok())
+                    .unwrap_or_default();
+                merge_into_profile_default(&mut runtime_profiles, agent_table);
+                passthrough.insert(
+                    "runtime_profiles".to_string(),
+                    toml::Value::Table(runtime_profiles),
+                );
+                tracing::info!(target: "migration", "[agent] → [runtime_profiles.default]");
+            }
         }
 
         // V3 dropped swarms.
@@ -1457,40 +1514,49 @@ fn synthesize_agent_brains(
             );
         }
 
-        // V2 agent runtime overrides → per-agent runtime_profile.
-        let runtime_overrides = extract_runtime_overrides(&mut agent_table);
-        if let Some(overrides) = runtime_overrides {
-            let profile_alias = format!("agent_{}", alias);
-            install_profile_entry(passthrough, "runtime_profiles", &profile_alias, overrides);
-            agent_table.insert(
-                "runtime_profile".to_string(),
-                toml::Value::String(profile_alias.clone()),
-            );
-            tracing::info!(
-                target: "migration",
-                "agents.{alias} runtime overrides → runtime_profiles.{profile_alias}"
-            );
-        }
-
-        // max_depth + agentic_timeout_secs → per-agent risk_profile.
+        // V2 per-agent overrides split into authorization (risk) and
+        // operational (runtime) buckets, matching the V3 profile shape:
+        //   risk: allowed_tools
+        //   runtime: agentic, max_delegation_depth (from V2 max_depth),
+        //            agentic_timeout_secs
+        let allowed_tools = agent_table.remove("allowed_tools");
+        let agentic_flag = agent_table.remove("agentic");
         let max_depth = agent_table.remove("max_depth");
         let agentic_timeout_secs = extract_agentic_timeout_secs(&mut agent_table);
-        if max_depth.is_some() || agentic_timeout_secs.is_some() {
+
+        let profile_alias = format!("agent_{}", alias);
+
+        if let Some(at_value) = allowed_tools {
             let mut overrides = toml::Table::new();
-            if let Some(d) = max_depth {
-                overrides.insert("max_delegation_depth".to_string(), d);
-            }
-            if let Some(t) = agentic_timeout_secs {
-                overrides.insert("agentic_timeout_secs".to_string(), t);
-            }
-            let profile_alias = format!("agent_{}", alias);
+            overrides.insert("allowed_tools".to_string(), at_value);
             install_profile_entry(passthrough, "risk_profiles", &profile_alias, overrides);
             agent_table
                 .entry("risk_profile".to_string())
                 .or_insert_with(|| toml::Value::String(profile_alias.clone()));
             tracing::info!(
                 target: "migration",
-                "agents.{alias}: max_depth/agentic_timeout_secs → risk_profiles.{profile_alias}"
+                "agents.{alias}.allowed_tools → risk_profiles.{profile_alias}.allowed_tools"
+            );
+        }
+
+        if agentic_flag.is_some() || max_depth.is_some() || agentic_timeout_secs.is_some() {
+            let mut overrides = toml::Table::new();
+            if let Some(v) = agentic_flag {
+                overrides.insert("agentic".to_string(), v);
+            }
+            if let Some(d) = max_depth {
+                overrides.insert("max_delegation_depth".to_string(), d);
+            }
+            if let Some(t) = agentic_timeout_secs {
+                overrides.insert("agentic_timeout_secs".to_string(), t);
+            }
+            install_profile_entry(passthrough, "runtime_profiles", &profile_alias, overrides);
+            agent_table
+                .entry("runtime_profile".to_string())
+                .or_insert_with(|| toml::Value::String(profile_alias.clone()));
+            tracing::info!(
+                target: "migration",
+                "agents.{alias}: agentic/max_depth/agentic_timeout_secs → runtime_profiles.{profile_alias}"
             );
         }
 
@@ -1584,25 +1650,9 @@ fn synthesize_agent_brains(
     new_agents
 }
 
-/// Pull V2 agent-loop fields onto V3 `RuntimeProfileConfig`. V2's
-/// `timeout_secs` (model-provider HTTP timeout) and `agentic_timeout_secs`
-/// (autonomy concern) moved off runtime_profiles in V3 — they belong on
-/// `[model_providers.<type>.<alias>]` and `[risk_profiles.<alias>]`
-/// respectively. The migration ports `agentic` and `allowed_tools` only;
-/// the other two are handled in dedicated callers.
-fn extract_runtime_overrides(agent: &mut toml::Table) -> Option<toml::Table> {
-    let mut out = toml::Table::new();
-    for (v2_key, v3_key) in [("agentic", "agentic"), ("allowed_tools", "allowed_tools")] {
-        if let Some(v) = agent.remove(v2_key) {
-            out.insert(v3_key.to_string(), v);
-        }
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-/// Pull V2 `[agents.<alias>].agentic_timeout_secs` off the agent table and
-/// hand it to the caller for routing onto the synthesized
-/// `risk_profiles.agent_<alias>.agentic_timeout_secs`.
+/// Pull V2 `[agents.<alias>].agentic_timeout_secs` off the agent table
+/// and hand it to the caller for routing onto the synthesized
+/// `runtime_profiles.agent_<alias>.agentic_timeout_secs`.
 fn extract_agentic_timeout_secs(agent: &mut toml::Table) -> Option<toml::Value> {
     agent.remove("agentic_timeout_secs")
 }
@@ -2354,21 +2404,23 @@ fn merge_storage_default(storage_table: &mut toml::Table, backend_type: &str, fi
     }
 }
 
-/// Fold V2 `[security.sandbox]` and `[security.resources]` into
-/// `risk_profiles.default`. V3 `RiskProfileConfig` absorbed both,
-/// placing them per-profile so each agent can override.
+/// Fold V2 `[security.sandbox]` into `risk_profiles.default` and drop
+/// `[security.resources]`.
 ///
-/// Field renames during the fold:
+/// Field renames during the sandbox fold:
 /// - `security.sandbox.enabled` → `risk_profiles.default.sandbox_enabled`
 /// - `security.sandbox.backend` → `risk_profiles.default.sandbox_backend`
 /// - `security.sandbox.firejail_args` → `risk_profiles.default.firejail_args`
-/// - `security.resources.max_memory_mb` → `risk_profiles.default.max_memory_mb`
-/// - `security.resources.max_cpu_time_seconds` → `risk_profiles.default.max_cpu_time_seconds`
-/// - `security.resources.max_subprocesses` → `risk_profiles.default.max_subprocesses`
-/// - `security.resources.memory_monitoring` → `risk_profiles.default.memory_monitoring`
 ///
-/// Both V2 source blocks are removed. Existing values on the V3 profile take
-/// precedence — globals only fill in missing slots.
+/// `[security.resources]` (max_memory_mb, max_cpu_time_seconds,
+/// max_subprocesses, memory_monitoring) is dropped: V2 carried the fields
+/// but no enforcement codepath ever consumed them. Sandbox backends
+/// (firejail/landlock) own the actual resource budgets they enforce.
+/// A WARN-level log names the dropped values so an operator who set
+/// them can reconfigure the equivalent in their sandbox backend.
+///
+/// Existing values on the V3 profile take precedence — sandbox globals
+/// only fill in missing slots.
 fn fold_security_into_risk_profile(passthrough: &mut toml::Table) {
     let (sandbox, resources) = {
         let security_table = match passthrough
@@ -2387,6 +2439,28 @@ fn fold_security_into_risk_profile(passthrough: &mut toml::Table) {
         return;
     }
 
+    if let Some(toml::Value::Table(resources_table)) = resources
+        && !resources_table.is_empty()
+    {
+        let dropped: Vec<String> = resources_table
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        tracing::warn!(
+            target: "migration",
+            "[security.resources] dropped during V2→V3 migration (no V3 enforcement \
+             codepath existed; sandbox backends own resource budgets): {}",
+            dropped.join(", ")
+        );
+    }
+
+    let Some(toml::Value::Table(sandbox_table)) = sandbox else {
+        return;
+    };
+    if sandbox_table.is_empty() {
+        return;
+    }
+
     let risk_profiles = passthrough
         .entry("risk_profiles".to_string())
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -2400,36 +2474,68 @@ fn fold_security_into_risk_profile(passthrough: &mut toml::Table) {
         return;
     };
 
-    if let Some(toml::Value::Table(sandbox_table)) = sandbox {
-        for (k, v) in sandbox_table {
-            let target_key = match k.as_str() {
-                "enabled" => "sandbox_enabled",
-                "backend" => "sandbox_backend",
-                "firejail_args" => "firejail_args",
-                _ => continue,
-            };
-            default_profile.entry(target_key.to_string()).or_insert(v);
-        }
-        tracing::info!(
-            target: "migration",
-            "[security.sandbox] folded into [risk_profiles.default]"
-        );
+    for (k, v) in sandbox_table {
+        let target_key = match k.as_str() {
+            "enabled" => "sandbox_enabled",
+            "backend" => "sandbox_backend",
+            "firejail_args" => "firejail_args",
+            _ => continue,
+        };
+        default_profile.entry(target_key.to_string()).or_insert(v);
     }
-    if let Some(toml::Value::Table(resources_table)) = resources {
-        for (k, v) in resources_table {
-            let target_key = match k.as_str() {
-                "max_memory_mb" => "max_memory_mb",
-                "max_cpu_time_seconds" => "max_cpu_time_seconds",
-                "max_subprocesses" => "max_subprocesses",
-                "memory_monitoring" => "memory_monitoring",
-                _ => continue,
-            };
-            default_profile.entry(target_key.to_string()).or_insert(v);
+    tracing::info!(
+        target: "migration",
+        "[security.sandbox] folded into [risk_profiles.default]"
+    );
+}
+
+/// Split a V2 `[autonomy]` block (already key-renamed where applicable)
+/// into the V3 risk-profile and runtime-profile field sets. The risk
+/// bucket holds authorization fields; the runtime bucket holds budget
+/// caps and other operational tuning that the V3 `RuntimeProfileConfig`
+/// now owns.
+///
+/// Returns `(risk_fields, runtime_fields)` as optional tables — `None`
+/// when the bucket is empty so callers can skip the destination block.
+fn split_autonomy_into_profile_buckets(
+    value: toml::Value,
+) -> (Option<toml::Table>, Option<toml::Table>) {
+    let Ok(table) = value.try_into::<toml::Table>() else {
+        return (None, None);
+    };
+    const RUNTIME_FIELDS: &[&str] = &[
+        "max_actions_per_hour",
+        "max_cost_per_day_cents",
+        "shell_timeout_secs",
+        "max_delegation_depth",
+        "delegation_timeout_secs",
+        "agentic_timeout_secs",
+    ];
+    let mut risk = toml::Table::new();
+    let mut runtime = toml::Table::new();
+    for (k, v) in table {
+        if RUNTIME_FIELDS.contains(&k.as_str()) {
+            runtime.insert(k, v);
+        } else {
+            risk.insert(k, v);
         }
-        tracing::info!(
-            target: "migration",
-            "[security.resources] folded into [risk_profiles.default]"
-        );
+    }
+    let risk = (!risk.is_empty()).then_some(risk);
+    let runtime = (!runtime.is_empty()).then_some(runtime);
+    (risk, runtime)
+}
+
+/// Merge a field set into `<profile_kind>.default`, preserving values
+/// that already exist on the destination (`entry().or_insert`).
+fn merge_into_profile_default(profiles: &mut toml::Table, fields: toml::Table) {
+    let default_entry = profiles
+        .entry("default".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(default_table) = default_entry.as_table_mut() else {
+        return;
+    };
+    for (k, v) in fields {
+        default_table.entry(k).or_insert(v);
     }
 }
 

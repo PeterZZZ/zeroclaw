@@ -121,6 +121,8 @@ mod tests {
     use tempfile::TempDir;
     use zeroclaw_config::schema::Config;
 
+    const TEST_AGENT: &str = "test-agent";
+
     async fn test_config(tmp: &TempDir) -> Arc<Config> {
         let mut config = Config {
             data_dir: tmp.path().join("data"),
@@ -128,18 +130,23 @@ mod tests {
             ..Config::default()
         };
         config.risk_profiles.insert(
-            "default".to_string(),
+            TEST_AGENT.to_string(),
             zeroclaw_config::schema::RiskProfileConfig::default(),
         );
+        config.runtime_profiles.insert(
+            TEST_AGENT.to_string(),
+            zeroclaw_config::schema::RuntimeProfileConfig::default(),
+        );
         config.providers.models.openrouter.insert(
-            "default".to_string(),
+            TEST_AGENT.to_string(),
             zeroclaw_config::schema::OpenRouterModelProviderConfig::default(),
         );
         config.agents.insert(
-            "test-agent".to_string(),
+            TEST_AGENT.to_string(),
             zeroclaw_config::schema::AliasedAgentConfig {
-                model_provider: "openrouter.default".into(),
-                risk_profile: "default".to_string(),
+                model_provider: format!("openrouter.{TEST_AGENT}").into(),
+                risk_profile: TEST_AGENT.to_string(),
+                runtime_profile: TEST_AGENT.to_string(),
                 ..Default::default()
             },
         );
@@ -151,7 +158,7 @@ mod tests {
     async fn lists_runs_with_truncation() {
         let tmp = TempDir::new().unwrap();
         let cfg = test_config(&tmp).await;
-        let job = cron::add_job(&cfg, "test-agent", "*/5 * * * *", "echo ok").unwrap();
+        let job = cron::add_job(&cfg, TEST_AGENT, "*/5 * * * *", "echo ok").unwrap();
 
         let long_output = "x".repeat(1000);
         let now = Utc::now();

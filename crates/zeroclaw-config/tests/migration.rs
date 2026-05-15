@@ -9,6 +9,7 @@
 //! test asserts the destination value present in V3 output; if the migration
 //! step that performs the transform is broken, the test fails.
 
+use zeroclaw_config::autonomy::AutonomyLevel;
 use zeroclaw_config::migration::{
     CURRENT_SCHEMA_VERSION, GenerateOptions, MigrateReport, detect_version,
     ensure_disk_at_current_version, generate, migrate_file, migrate_file_in_place,
@@ -767,7 +768,7 @@ firejail_args = ["--noroot"]
 }
 
 #[test]
-fn t13_security_resources_folded_into_risk_profile() {
+fn t13_security_resources_dropped_during_migration() {
     let raw = r#"
 default_provider = "openai"
 default_model = "gpt-4o-mini"
@@ -781,15 +782,15 @@ max_cpu_time_seconds = 600
 max_subprocesses = 10
 memory_monitoring = true
 "#;
+    // The block is dropped during V2→V3 migration: no V3 enforcement
+    // codepath consumed these fields, sandbox backends own resource
+    // budgets. Migration must still succeed and load a valid Config.
     let cfg = migrate_to_current(raw).expect("V1 security.resources migrates");
     let profile = cfg
         .risk_profiles
         .get("default")
         .expect("risk_profiles.default present");
-    assert_eq!(profile.max_memory_mb, 512);
-    assert_eq!(profile.max_cpu_time_seconds, 600);
-    assert_eq!(profile.max_subprocesses, 10);
-    assert!(profile.memory_monitoring);
+    assert_eq!(profile.level, AutonomyLevel::Supervised);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -820,12 +821,16 @@ fn t14b_runtime_overrides_synthesize_per_agent_runtime_profile() {
         agent.runtime_profile, "agent_complex_agent",
         "V2 runtime overrides must point agent at synthesized per-agent runtime profile"
     );
-    let profile = cfg
+    let runtime = cfg
         .runtime_profiles
         .get("agent_complex_agent")
         .expect("synthesized runtime_profiles.agent_complex_agent");
-    assert!(profile.agentic);
-    assert_eq!(profile.allowed_tools, vec!["shell", "memory"]);
+    assert!(runtime.agentic);
+    let risk = cfg
+        .risk_profiles
+        .get("agent_complex_agent")
+        .expect("synthesized risk_profiles.agent_complex_agent (allowed_tools home)");
+    assert_eq!(risk.allowed_tools, vec!["shell", "memory"]);
 }
 
 #[test]
@@ -852,25 +857,25 @@ fn t14b2_per_agent_timeout_secs_folds_onto_model_provider_entry() {
 }
 
 #[test]
-fn t14c_max_depth_synthesizes_per_agent_risk_profile() {
+fn t14c_max_depth_synthesizes_per_agent_runtime_profile() {
     let cfg = v3_config();
     let agent = cfg
         .agents
         .get("complex_agent")
         .expect("agents.complex_agent present");
     assert_eq!(
-        agent.risk_profile, "agent_complex_agent",
-        "V2 max_depth must point agent at synthesized per-agent risk profile"
+        agent.runtime_profile, "agent_complex_agent",
+        "V2 max_depth must point agent at synthesized per-agent runtime profile"
     );
     let profile = cfg
-        .risk_profiles
+        .runtime_profiles
         .get("agent_complex_agent")
-        .expect("synthesized risk_profiles.agent_complex_agent");
+        .expect("synthesized runtime_profiles.agent_complex_agent");
     assert_eq!(profile.max_delegation_depth, 4);
     assert_eq!(
         profile.agentic_timeout_secs,
         Some(600),
-        "V2 agent agentic_timeout_secs must land on the agent's risk_profile, not runtime_profile"
+        "V2 agent agentic_timeout_secs must land on the agent's runtime_profile"
     );
 }
 
@@ -938,7 +943,11 @@ fn autonomy_synthesized_into_risk_profiles_default() {
         vec!["browser"],
         "V2 non_cli_excluded_tools renamed to V3 excluded_tools during fold"
     );
-    assert_eq!(profile.shell_timeout_secs, 60);
+    let runtime = cfg
+        .runtime_profiles
+        .get("default")
+        .expect("runtime_profiles.default synthesized from [autonomy] budget fields");
+    assert_eq!(runtime.shell_timeout_secs, 60);
 }
 
 #[test]

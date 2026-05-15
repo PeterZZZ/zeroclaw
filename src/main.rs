@@ -2069,7 +2069,10 @@ async fn main() -> Result<()> {
                     "  Allowed commands:  {}",
                     profile.allowed_commands.join(", ")
                 );
-                println!("  Max actions/hour:  {}", profile.max_actions_per_hour);
+                let actions_cap = config
+                    .runtime_profile_for_agent(alias)
+                    .map_or(0, |r| r.max_actions_per_hour);
+                println!("  Max actions/hour:  {actions_cap}");
             }
             println!(
                 "  Cost tracking:     {}",

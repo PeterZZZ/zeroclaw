@@ -32,20 +32,6 @@ fn security_default_workspace_only() {
     );
 }
 
-/// Max actions per hour has a reasonable default.
-#[test]
-fn security_default_max_actions_per_hour() {
-    let config = RiskProfileConfig::default();
-    assert!(
-        config.max_actions_per_hour > 0,
-        "max_actions_per_hour should be positive"
-    );
-    assert!(
-        config.max_actions_per_hour <= 1000,
-        "max_actions_per_hour should have a reasonable upper bound"
-    );
-}
-
 /// Require approval for medium risk is enabled by default.
 #[test]
 fn security_default_require_approval_for_medium_risk() {
