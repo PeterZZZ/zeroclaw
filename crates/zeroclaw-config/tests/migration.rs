@@ -2490,10 +2490,10 @@ fn encryption_covers_every_schema_secret_field() {
             .join(".");
         let leaf = lookup_dotted(&encrypted, &snake_path);
         match leaf {
-            Some(toml::Value::String(s)) => {
-                if !s.is_empty() && !s.starts_with("enc2:") && !s.starts_with("enc:") {
-                    missed.push(format!("{snake_path} = {s:?}"));
-                }
+            Some(toml::Value::String(s))
+                if !s.is_empty() && !s.starts_with("enc2:") && !s.starts_with("enc:") =>
+            {
+                missed.push(format!("{snake_path} = {s:?}"));
             }
             Some(toml::Value::Array(items)) => {
                 for (i, item) in items.iter().enumerate() {
@@ -2665,9 +2665,7 @@ model = "claude-opus-4-7"
             .filter(|f| f.name.contains("anthropic.glados"))
             .map(|f| f.name.clone())
             .collect();
-        panic!(
-            "prop_fields() missing `{want}` — candidates: {candidates:?}",
-        );
+        panic!("prop_fields() missing `{want}` — candidates: {candidates:?}",);
     }
 }
 

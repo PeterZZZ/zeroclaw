@@ -212,9 +212,7 @@ impl NextcloudTalkChannel {
         let actor = payload.get("actor").cloned().unwrap_or_default();
         let actor_type = actor.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if actor_type.eq_ignore_ascii_case("application") {
-            tracing::debug!(
-                "Talk: skipping bot-originated AS2 message (type=Application)"
-            );
+            tracing::debug!("Talk: skipping bot-originated AS2 message (type=Application)");
             return messages;
         }
 
@@ -238,9 +236,7 @@ impl NextcloudTalkChannel {
         // set actor.type="Application" reliably for bot-sent messages.
         let raw_actor_id = actor.get("id").and_then(|v| v.as_str()).unwrap_or("");
         if raw_actor_id.starts_with("bots/") {
-            tracing::debug!(
-                "Talk: skipping bot-originated AS2 message (id prefix=bots/)"
-            );
+            tracing::debug!("Talk: skipping bot-originated AS2 message (id prefix=bots/)");
             return messages;
         }
         let actor_name = actor
@@ -249,9 +245,7 @@ impl NextcloudTalkChannel {
             .unwrap_or("")
             .to_ascii_lowercase();
         if self.is_bot_name(&actor_name) {
-            tracing::debug!(
-                "Talk: skipping bot-originated AS2 message (name={actor_name})"
-            );
+            tracing::debug!("Talk: skipping bot-originated AS2 message (name={actor_name})");
             return messages;
         }
 
@@ -333,9 +327,7 @@ impl NextcloudTalkChannel {
         // Nextcloud Talk uses "bots" or "application" depending on version/context.
         if actor_type.eq_ignore_ascii_case("bots") || actor_type.eq_ignore_ascii_case("application")
         {
-            tracing::debug!(
-                "Talk: skipping bot-originated message (actorType={actor_type})"
-            );
+            tracing::debug!("Talk: skipping bot-originated message (actorType={actor_type})");
             return messages;
         }
 
@@ -478,9 +470,7 @@ impl NextcloudTalkChannel {
             .pointer("/ocs/data/id")
             .and_then(|v| v.as_u64())
             .map(|id| id.to_string())
-            .ok_or_else(|| {
-                anyhow::anyhow!("Talk: missing message ID in send response")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Talk: missing message ID in send response"))?;
 
         Ok(message_id)
     }
@@ -604,9 +594,7 @@ impl Channel for NextcloudTalkChannel {
                 Ok(Some(id))
             }
             Err(e) => {
-                tracing::warn!(
-                    "Talk: send_draft failed, falling back to final send: {e}"
-                );
+                tracing::warn!("Talk: send_draft failed, falling back to final send: {e}");
                 Err(e)
             }
         }
@@ -666,9 +654,7 @@ impl Channel for NextcloudTalkChannel {
             }
             Err(e) => {
                 // Edit failed (e.g. message too old, permissions) — delete and re-send.
-                tracing::warn!(
-                    "Talk finalize_draft edit failed ({e}); attempting delete+resend"
-                );
+                tracing::warn!("Talk finalize_draft edit failed ({e}); attempting delete+resend");
                 let _ = self.delete_message(recipient, message_id).await;
                 self.send_to_room(recipient, display_text).await
             }

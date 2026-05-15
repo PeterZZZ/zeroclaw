@@ -348,6 +348,10 @@ Examples:
     Install {
         /// Source URL or local path
         source: String,
+        /// Suppress only the install-time tier banner; other install
+        /// progress output (resolving, installed, audited) is unaffected.
+        #[arg(long)]
+        no_tier_banner: bool,
     },
     /// Remove an installed skill
     Remove {

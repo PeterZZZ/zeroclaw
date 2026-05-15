@@ -8762,6 +8762,7 @@ pub struct RiskProfileConfig {
     /// Tools that always require approval in this profile.
     pub always_ask: Vec<String>,
     /// Extra directory roots the agent may access.
+    #[serde(alias = "allowed_path", alias = "allowed_paths")]
     pub allowed_roots: Vec<String>,
     /// Tools excluded from non-CLI channels under this profile.
     pub excluded_tools: Vec<String>,
@@ -9479,6 +9480,11 @@ pub struct DeliveryConfigDecl {
     /// Target/recipient identifier.
     #[serde(default)]
     pub to: Option<String>,
+    /// Optional thread/conversation identifier carried into the outbound send.
+    /// Required by channels that route on a separate `thread_id` field (e.g.
+    /// webhook callbacks bridging into agent-chat platforms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     /// Best-effort delivery. Default: `true`.
     #[serde(default = "default_true")]
     pub best_effort: bool,
@@ -9490,6 +9496,7 @@ impl Default for DeliveryConfigDecl {
             mode: default_delivery_mode(),
             channel: None,
             to: None,
+            thread_id: None,
             best_effort: true,
         }
     }

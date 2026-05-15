@@ -229,10 +229,8 @@ impl CostTracker {
         let request_count = scoped.len();
 
         // Daily-scoped per-model rollup. Filter by agent when scoped.
-        let model_records: Vec<&CostRecord> = daily_records
-            .iter()
-            .filter(|r| matches_agent(r))
-            .collect();
+        let model_records: Vec<&CostRecord> =
+            daily_records.iter().filter(|r| matches_agent(r)).collect();
         let by_model = build_model_stats(model_records.iter().copied());
 
         let (daily_total, monthly_total, by_agent) = if let Some(alias) = agent_filter {
@@ -707,7 +705,15 @@ mod tests {
 
         let tracker = CostTracker::new(enabled_config(), tmp.path()).unwrap();
         tracker
-            .record_usage(TokenUsage::new("session/model", 1000, 1000, 0, 1.0, 1.0, 0.0))
+            .record_usage(TokenUsage::new(
+                "session/model",
+                1000,
+                1000,
+                0,
+                1.0,
+                1.0,
+                0.0,
+            ))
             .unwrap();
 
         let summary = tracker.get_summary().unwrap();

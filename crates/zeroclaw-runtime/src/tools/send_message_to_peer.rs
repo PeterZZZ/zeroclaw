@@ -218,7 +218,7 @@ impl Tool for SendMessageToPeerTool {
             });
         }
 
-        match deliver_announcement(&self.config, &channel, &target, &message).await {
+        match deliver_announcement(&self.config, &channel, &target, None, &message).await {
             Ok(()) => Ok(ToolResult {
                 success: true,
                 output: format!("delivered to external peer {target:?} on {channel}"),

@@ -171,9 +171,8 @@ pub async fn handle_api_status(
                     .as_ref()
                     .and_then(|(_, _, cfg)| cfg.model.clone())
                     .unwrap_or_default();
-                let temperature: Option<f64> = resolved
-                    .as_ref()
-                    .and_then(|(_, _, cfg)| cfg.temperature);
+                let temperature: Option<f64> =
+                    resolved.as_ref().and_then(|(_, _, cfg)| cfg.temperature);
                 let backend_kind = agent.memory.backend;
                 let backend = serde_json::to_value(backend_kind)
                     .ok()
@@ -452,7 +451,11 @@ pub async fn handle_api_cron_run(
         && let (Some(channel), Some(target)) =
             (job.delivery.channel.as_deref(), job.delivery.to.as_deref())
         && let Err(e) = zeroclaw_runtime::cron::scheduler::deliver_announcement(
-            &config, channel, target, &output,
+            &config,
+            channel,
+            target,
+            job.delivery.thread_id.as_deref(),
+            &output,
         )
         .await
     {
@@ -1748,55 +1751,6 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("delivery.to is required")
-        );
-
-        let config = state.config.read().clone();
-        assert!(
-            zeroclaw_runtime::cron::list_jobs(&config)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn cron_api_rejects_announce_delivery_with_unsupported_channel() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let config = zeroclaw_config::schema::Config {
-            data_dir: tmp.path().join("data"),
-            config_path: tmp.path().join("config.toml"),
-            ..zeroclaw_config::schema::Config::default()
-        };
-        std::fs::create_dir_all(&config.data_dir).unwrap();
-        let state = test_state(with_test_agent(config));
-
-        let response = handle_api_cron_add(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(
-                serde_json::from_value::<CronAddBody>(serde_json::json!({
-                    "name": "invalid-delivery-job",
-                    "agent": "test-agent",
-                    "schedule": "*/5 * * * *",
-                    "command": "echo hello",
-                    "delivery": {
-                        "mode": "announce",
-                        "channel": "email",
-                        "to": "alerts@example.com"
-                    }
-                }))
-                .expect("body should deserialize"),
-            ),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let json = response_json(response).await;
-        assert!(
-            json["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("unsupported delivery channel")
         );
 
         let config = state.config.read().clone();

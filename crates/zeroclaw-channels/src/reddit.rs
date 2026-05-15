@@ -319,11 +319,7 @@ impl Channel for RedditChannel {
                     .join(", ")
             )
         };
-        tracing::info!(
-            "channel listening as u/{} {}...",
-            self.username,
-            scope
-        );
+        tracing::info!("channel listening as u/{} {}...", self.username, scope);
 
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;

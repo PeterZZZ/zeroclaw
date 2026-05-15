@@ -1397,7 +1397,9 @@ impl Channel for DiscordChannel {
         if let Some(ref wd) = watchdog {
             let stall_signal = stall_tx.clone();
             wd.start(move || {
-                tracing::warn!("stall watchdog fired — no events for configured timeout, triggering reconnect");
+                tracing::warn!(
+                    "stall watchdog fired — no events for configured timeout, triggering reconnect"
+                );
                 let _ = stall_signal.try_send(());
             })
             .await;

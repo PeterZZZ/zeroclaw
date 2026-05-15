@@ -1715,10 +1715,7 @@ impl SlackChannel {
             return None;
         };
         if !Self::is_supported_image_mime(&mime) {
-            tracing::warn!(
-                "image MIME not supported for {}: {mime}",
-                redacted_url
-            );
+            tracing::warn!("image MIME not supported for {}: {mime}", redacted_url);
             return None;
         }
 
@@ -2229,10 +2226,7 @@ impl SlackChannel {
         let resp = self.fetch_slack_private_file(url).await?;
         let status = resp.status();
         if !status.is_success() {
-            tracing::warn!(
-                "voice file download failed for {} ({status})",
-                redacted_url
-            );
+            tracing::warn!("voice file download failed for {} ({status})", redacted_url);
             return None;
         }
 
@@ -3920,9 +3914,7 @@ impl Channel for SlackChannel {
 
                         // Sender validation
                         if !self.is_user_allowed(user) {
-                            tracing::warn!(
-                                "ignoring message from unauthorized user: {user}"
-                            );
+                            tracing::warn!("ignoring message from unauthorized user: {user}");
                             continue;
                         }
 

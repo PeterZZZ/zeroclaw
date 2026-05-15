@@ -236,11 +236,11 @@ fn encrypt_walk(
 /// non-secret field with a secret-shaped name and we don't second-guess.
 fn encrypt_in_place(value: &mut toml::Value, store: &crate::secrets::SecretStore) -> Result<()> {
     match value {
-        toml::Value::String(s) => {
-            if !crate::secrets::SecretStore::is_encrypted(s) && !s.is_empty() {
-                let encrypted = store.encrypt(s).context("encrypt string")?;
-                *s = encrypted;
-            }
+        toml::Value::String(s)
+            if !crate::secrets::SecretStore::is_encrypted(s) && !s.is_empty() =>
+        {
+            let encrypted = store.encrypt(s).context("encrypt string")?;
+            *s = encrypted;
         }
         toml::Value::Array(items) => {
             for item in items.iter_mut() {

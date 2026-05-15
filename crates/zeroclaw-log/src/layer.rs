@@ -327,11 +327,7 @@ where
 
     // Category: stash the closest enclosing-span category so descendants
     // inherit. Routed through the same span-walk machinery as attribution.
-    if let Some(category) = visitor
-        .category
-        .as_deref()
-        .and_then(EventCategory::parse)
-    {
+    if let Some(category) = visitor.category.as_deref().and_then(EventCategory::parse) {
         span.extensions_mut().insert(SpanCategory(category));
     }
 }

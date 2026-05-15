@@ -323,8 +323,7 @@ pub(crate) fn refresh_qwen_oauth_access_token(
         anyhow::bail!("OAuth refresh failed (HTTP {status}): {detail}");
     }
 
-    let payload =
-        parsed.ok_or_else(|| anyhow::anyhow!("OAuth refresh response is not JSON"))?;
+    let payload = parsed.ok_or_else(|| anyhow::anyhow!("OAuth refresh response is not JSON"))?;
 
     if let Some(error_code) = payload
         .error
@@ -2031,7 +2030,6 @@ mod tests {
         assert!(create_model_provider("lmstudio", Some("key")).is_ok());
         assert!(create_model_provider("lmstudio", None).is_ok());
     }
-
     #[test]
     fn factory_llamacpp() {
         assert!(create_model_provider("llamacpp", Some("key")).is_ok());

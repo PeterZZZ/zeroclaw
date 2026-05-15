@@ -8,6 +8,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { t } from '@/lib/i18n';
 
 import ToolCallCard from '@/components/ToolCallCard';
+import ApprovalBanner from '@/components/ApprovalBanner';
 
 const DRAFT_KEY_PREFIX = 'agent-chat';
 
@@ -45,6 +46,8 @@ function AgentChatInner({ agentAlias }: { agentAlias: string }) {
     deleteMessage,
     clearAllMessages,
     abortSession,
+    pendingApproval,
+    respondToApproval,
   } = useAgent();
 
   const { draft, saveDraft, clearDraft } = useDraft(`${DRAFT_KEY_PREFIX}.${agentAlias}`);
@@ -378,6 +381,11 @@ function AgentChatInner({ agentAlias }: { agentAlias: string }) {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Tool approval banner — supervised-mode consent prompt (#6522). */}
+      {pendingApproval && (
+        <ApprovalBanner pending={pendingApproval} onRespond={respondToApproval} />
+      )}
 
       {/* Input area */}
       <div className="border-t p-4" style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-surface)' }}>

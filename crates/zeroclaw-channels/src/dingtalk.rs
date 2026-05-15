@@ -263,9 +263,7 @@ impl Channel for DingTalkChannel {
                         .unwrap_or("unknown");
 
                     if !self.is_user_allowed(sender_id) {
-                        tracing::warn!(
-                            "ignoring message from unauthorized user: {sender_id}"
-                        );
+                        tracing::warn!("ignoring message from unauthorized user: {sender_id}");
                         continue;
                     }
 

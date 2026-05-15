@@ -128,9 +128,7 @@ impl MattermostChannel {
             .headers()
             .get("Token")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                anyhow::anyhow!("login succeeded but the response had no Token header")
-            })?
+            .ok_or_else(|| anyhow::anyhow!("login succeeded but the response had no Token header"))?
             .to_string();
         tracing::info!("login succeeded; session token cached");
         Ok(token)
@@ -280,10 +278,7 @@ impl MattermostChannel {
         };
 
         if !response.status().is_success() {
-            tracing::warn!(
-                "audio download returned {}: {file_id}",
-                response.status()
-            );
+            tracing::warn!("audio download returned {}: {file_id}", response.status());
             return None;
         }
 

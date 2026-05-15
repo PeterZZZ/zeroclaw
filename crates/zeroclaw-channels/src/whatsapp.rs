@@ -145,9 +145,7 @@ impl WhatsAppChannel {
                 {
                     Ok(re) => Some(re),
                     Err(e) => {
-                        tracing::warn!(
-                            "ignoring invalid mention_pattern {trimmed:?}: {e}"
-                        );
+                        tracing::warn!("ignoring invalid mention_pattern {trimmed:?}: {e}");
                         None
                     }
                 }

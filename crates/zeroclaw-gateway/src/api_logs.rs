@@ -59,7 +59,10 @@ pub struct LogsResponse {
 }
 
 fn attribution_keys_for_response() -> Vec<String> {
-    let mut keys: Vec<String> = ATTRIBUTION_FIELDS.iter().map(|name| (*name).to_string()).collect();
+    let mut keys: Vec<String> = ATTRIBUTION_FIELDS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
     for prefix in COMPOSITE_PREFIXES {
         keys.push((*prefix).to_string());
         keys.push(format!("{prefix}_type"));

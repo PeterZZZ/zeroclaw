@@ -383,9 +383,7 @@ async fn handle_webhook(
                                         }
                                     }
                                     Ok(None) => {
-                                        tracing::warn!(
-                                            "invalid bind code from userId={user_id}"
-                                        );
+                                        tracing::warn!("invalid bind code from userId={user_id}");
                                     }
                                     Err(wait_ms) => {
                                         tracing::warn!(

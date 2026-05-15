@@ -508,10 +508,7 @@ impl WhatsAppWebChannel {
                 None
             }
             Ok(text) => {
-                tracing::info!(
-                    "voice note transcribed ({} chars)",
-                    text.len()
-                );
+                tracing::info!("voice note transcribed ({} chars)", text.len());
                 Some(text)
             }
             Err(e) => {
@@ -736,10 +733,7 @@ impl Channel for WhatsAppWebChannel {
         if !Self::is_jid(&message.recipient) {
             let normalized = self.normalize_phone(&message.recipient);
             if !self.is_number_allowed(&normalized) {
-                tracing::warn!(
-                    "recipient {} not in allowed list",
-                    message.recipient
-                );
+                tracing::warn!("recipient {} not in allowed list", message.recipient);
                 return Ok(());
             }
         }
@@ -811,10 +805,7 @@ impl Channel for WhatsAppWebChannel {
                         .await
                         {
                             Ok(()) => {
-                                tracing::info!(
-                                    "voice reply sent ({} chars)",
-                                    text.len()
-                                );
+                                tracing::info!("voice reply sent ({} chars)", text.len());
                             }
                             Err(e) => {
                                 tracing::warn!(error = ?e, "TTS voice reply failed");
@@ -833,11 +824,7 @@ impl Channel for WhatsAppWebChannel {
         };
 
         let message_id = client.send_message(to, outgoing).await?;
-        tracing::debug!(
-            "sent text to {} (id: {})",
-            message.recipient,
-            message_id
-        );
+        tracing::debug!("sent text to {} (id: {})", message.recipient, message_id);
         Ok(())
     }
 
@@ -864,10 +851,7 @@ impl Channel for WhatsAppWebChannel {
         loop {
             let expanded_session_path = shellexpand::tilde(&self.session_path).to_string();
 
-            tracing::info!(
-                "channel starting (session: {})",
-                expanded_session_path
-            );
+            tracing::info!("channel starting (session: {})", expanded_session_path);
 
             // Initialize storage backend
             let storage = RusqliteStore::new(&expanded_session_path)?;
@@ -883,9 +867,7 @@ impl Channel for WhatsAppWebChannel {
                     anyhow::bail!("Device exists but failed to load");
                 }
             } else {
-                tracing::info!(
-                    "no existing session, new device will be created during pairing"
-                );
+                tracing::info!("no existing session, new device will be created during pairing");
             };
 
             // Create transport factory. WebSocket URL override comes from
@@ -1386,15 +1368,10 @@ impl Channel for WhatsAppWebChannel {
                         match tokio::fs::remove_file(&path).await {
                             Ok(()) => {}
                             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                            Err(e) => tracing::warn!(
-                                "failed to remove session file {}: {e}",
-                                path
-                            ),
+                            Err(e) => tracing::warn!("failed to remove session file {}: {e}", path),
                         }
                     }
-                    tracing::info!(
-                        "session files removed, restarting for QR pairing"
-                    );
+                    tracing::info!("session files removed, restarting for QR pairing");
                 } else {
                     tracing::warn!(
                         "bot stopped without LoggedOut; reconnecting with existing session"
@@ -1432,10 +1409,7 @@ impl Channel for WhatsAppWebChannel {
         if !Self::is_jid(recipient) {
             let normalized = self.normalize_phone(recipient);
             if !self.is_number_allowed(&normalized) {
-                tracing::warn!(
-                    "typing target {} not in allowed list",
-                    recipient
-                );
+                tracing::warn!("typing target {} not in allowed list", recipient);
                 return Ok(());
             }
         }
@@ -1460,10 +1434,7 @@ impl Channel for WhatsAppWebChannel {
         if !Self::is_jid(recipient) {
             let normalized = self.normalize_phone(recipient);
             if !self.is_number_allowed(&normalized) {
-                tracing::warn!(
-                    "typing target {} not in allowed list",
-                    recipient
-                );
+                tracing::warn!("typing target {} not in allowed list", recipient);
                 return Ok(());
             }
         }

@@ -1237,29 +1237,23 @@ fn fold_discord_history(channels: &mut toml::Table) {
 fn apply_v2_to_v3_channel_folds(channel_type: &str, instance: &mut toml::Table) {
     use crate::migration::fold_string_into_array;
     match channel_type {
-        "discord" => {
-            if fold_string_into_array(instance, "guild_id", "guild_ids") {
-                tracing::info!(
-                    target: "migration",
-                    "channels.discord.guild_id folded into channels.discord.guild_ids[]"
-                );
-            }
+        "discord" if fold_string_into_array(instance, "guild_id", "guild_ids") => {
+            tracing::info!(
+                target: "migration",
+                "channels.discord.guild_id folded into channels.discord.guild_ids[]"
+            );
         }
-        "mattermost" => {
-            if fold_string_into_array(instance, "channel_id", "channel_ids") {
-                tracing::info!(
-                    target: "migration",
-                    "channels.mattermost.channel_id folded into channels.mattermost.channel_ids[]"
-                );
-            }
+        "mattermost" if fold_string_into_array(instance, "channel_id", "channel_ids") => {
+            tracing::info!(
+                target: "migration",
+                "channels.mattermost.channel_id folded into channels.mattermost.channel_ids[]"
+            );
         }
-        "reddit" => {
-            if fold_string_into_array(instance, "subreddit", "subreddits") {
-                tracing::info!(
-                    target: "migration",
-                    "channels.reddit.subreddit folded into channels.reddit.subreddits[]"
-                );
-            }
+        "reddit" if fold_string_into_array(instance, "subreddit", "subreddits") => {
+            tracing::info!(
+                target: "migration",
+                "channels.reddit.subreddit folded into channels.reddit.subreddits[]"
+            );
         }
         "signal" => {
             // Special: V2 group_id="dm" was a sentinel meaning "DMs only".

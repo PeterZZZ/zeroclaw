@@ -88,7 +88,9 @@ pub fn record_event_with_agent(
         event.zeroclaw.set_composite("channel", channel);
     }
     if let Some(provider_composite) = model_provider {
-        event.zeroclaw.set_composite("model_provider", provider_composite);
+        event
+            .zeroclaw
+            .set_composite("model_provider", provider_composite);
     }
     if let Some(model) = model {
         event.zeroclaw.set("model", model);

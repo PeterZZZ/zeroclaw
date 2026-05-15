@@ -54,8 +54,7 @@ impl TokenUsage {
         let model = model.into();
         let input_price_per_million = Self::sanitize_price(input_price_per_million);
         let output_price_per_million = Self::sanitize_price(output_price_per_million);
-        let cached_input_price_per_million =
-            Self::sanitize_price(cached_input_price_per_million);
+        let cached_input_price_per_million = Self::sanitize_price(cached_input_price_per_million);
         let cached_input_tokens = cached_input_tokens.min(input_tokens);
         let billable_uncached_input = input_tokens.saturating_sub(cached_input_tokens);
         let total_tokens = input_tokens.saturating_add(output_tokens);
@@ -69,8 +68,7 @@ impl TokenUsage {
         } else {
             input_price_per_million
         };
-        let input_cost =
-            (billable_uncached_input as f64 / 1_000_000.0) * input_price_per_million;
+        let input_cost = (billable_uncached_input as f64 / 1_000_000.0) * input_price_per_million;
         let cached_cost = (cached_input_tokens as f64 / 1_000_000.0) * cached_rate;
         let output_cost = (output_tokens as f64 / 1_000_000.0) * output_price_per_million;
         let cost_usd = input_cost + cached_cost + output_cost;

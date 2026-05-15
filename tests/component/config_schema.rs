@@ -388,6 +388,32 @@ fn autonomy_config_toml_roundtrip() {
     assert!(!profile.workspace_only);
 }
 
+#[test]
+fn risk_profile_allowed_path_alias_maps_to_allowed_roots() {
+    let toml_str = r#"
+[risk_profiles.default]
+allowed_path = ["~/work", "~/"]
+"#;
+    let parsed: Config = toml::from_str(toml_str).expect("allowed_path alias should parse");
+    assert_eq!(
+        parsed.risk_profiles["default"].allowed_roots,
+        vec!["~/work", "~/"]
+    );
+}
+
+#[test]
+fn risk_profile_allowed_paths_alias_maps_to_allowed_roots() {
+    let toml_str = r#"
+[risk_profiles.default]
+allowed_paths = ["/tmp/data"]
+"#;
+    let parsed: Config = toml::from_str(toml_str).expect("allowed_paths alias should parse");
+    assert_eq!(
+        parsed.risk_profiles["default"].allowed_roots,
+        vec!["/tmp/data"]
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Backward compatibility
 // ─────────────────────────────────────────────────────────────────────────────

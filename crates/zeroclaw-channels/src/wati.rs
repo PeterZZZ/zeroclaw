@@ -331,10 +331,7 @@ impl WatiChannel {
         while let Some(chunk) = resp.chunk().await.ok().flatten() {
             audio_bytes.extend_from_slice(&chunk);
             if audio_bytes.len() as u64 > MAX_WATI_AUDIO_BYTES {
-                tracing::warn!(
-                    "audio download exceeds {} byte limit",
-                    MAX_WATI_AUDIO_BYTES
-                );
+                tracing::warn!("audio download exceeds {} byte limit", MAX_WATI_AUDIO_BYTES);
                 return None;
             }
         }

@@ -2147,7 +2147,10 @@ async fn handle_whatsapp_verify(
         return (StatusCode::BAD_REQUEST, "Missing hub.challenge".to_string());
     }
 
-    tracing::warn!(channel = "whatsapp", "webhook verification failed — token mismatch");
+    tracing::warn!(
+        channel = "whatsapp",
+        "webhook verification failed — token mismatch"
+    );
     (StatusCode::FORBIDDEN, "Forbidden".to_string())
 }
 
@@ -2200,7 +2203,8 @@ async fn handle_whatsapp_message(
 
         if !verify_whatsapp_signature(app_secret, &body, signature) {
             tracing::warn!(
-                channel = "whatsapp", "webhook signature verification failed (signature: {})",
+                channel = "whatsapp",
+                "webhook signature verification failed (signature: {})",
                 if signature.is_empty() {
                     "missing"
                 } else {

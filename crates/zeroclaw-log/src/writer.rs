@@ -283,8 +283,10 @@ mod tests {
     fn disabled_storage_does_not_write_file() {
         let _guard = WRITER_TEST_LOCK.lock();
         let tmp = tempfile::tempdir().unwrap();
-        let mut cfg = ObservabilityConfig::default();
-        cfg.log_persistence = "none".into();
+        let cfg = ObservabilityConfig {
+            log_persistence: "none".into(),
+            ..ObservabilityConfig::default()
+        };
         init_from_config(&cfg, tmp.path());
 
         let event = LogEvent::new(Severity::Info, "test", EventCategory::Agent);

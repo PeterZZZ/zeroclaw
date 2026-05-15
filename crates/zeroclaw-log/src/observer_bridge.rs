@@ -180,7 +180,9 @@ mod tests {
         set_observer_bridge(observer.clone());
 
         let mut event = LogEvent::new(Severity::Info, "llm_request", EventCategory::Agent);
-        event.zeroclaw.set_composite("model_provider", "anthropic.clamps");
+        event
+            .zeroclaw
+            .set_composite("model_provider", "anthropic.clamps");
         event.zeroclaw.set("model", "claude-sonnet-4-6");
         event.attributes = serde_json::json!({ "messages_count": 4 });
 

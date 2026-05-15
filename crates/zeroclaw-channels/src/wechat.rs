@@ -317,8 +317,8 @@ fn decrypt_aes_ecb(ciphertext: &[u8], key: &[u8; 16]) -> anyhow::Result<Vec<u8>>
 fn parse_aes_key(raw: &str) -> anyhow::Result<[u8; 16]> {
     let raw = raw.trim();
     if raw.len() == 32 && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
-        let bytes = hex::decode(raw)
-            .map_err(|e| anyhow::anyhow!("media hex aes_key invalid: {e}"))?;
+        let bytes =
+            hex::decode(raw).map_err(|e| anyhow::anyhow!("media hex aes_key invalid: {e}"))?;
         return <[u8; 16]>::try_from(bytes.as_slice())
             .map_err(|_| anyhow::anyhow!("media hex aes_key must be 16 bytes"));
     }
@@ -1528,9 +1528,7 @@ impl WeChatChannel {
         item_list: Vec<serde_json::Value>,
         context_token: Option<&str>,
     ) -> anyhow::Result<()> {
-        let token = self
-            .get_token()
-            .context("not logged in, cannot send")?;
+        let token = self.get_token().context("not logged in, cannot send")?;
 
         let client_id = format!("zeroclaw-{}", uuid::Uuid::new_v4());
         let body = serde_json::json!({
@@ -1684,9 +1682,7 @@ impl WeChatChannel {
                 match pairing.try_pair(code, from_user_id).await {
                     Ok(Some(_token)) => {
                         if let Err(e) = self.persist_allowed_identity(from_user_id).await {
-                            tracing::warn!(
-                                "failed to persist bound identity {from_user_id}: {e}"
-                            );
+                            tracing::warn!("failed to persist bound identity {from_user_id}: {e}");
                         }
                         let ctx = self.get_context_token(from_user_id);
                         let reply = wechat_cli_string("cli-wechat-bound-success");
@@ -1721,9 +1717,7 @@ impl Channel for WeChatChannel {
         let context_token = self.get_context_token(recipient);
 
         if context_token.is_none() {
-            tracing::warn!(
-                "no context_token for {recipient}, message may fail to associate"
-            );
+            tracing::warn!("no context_token for {recipient}, message may fail to associate");
         }
 
         let (text_without_markers, attachments) = parse_attachment_markers(&content);

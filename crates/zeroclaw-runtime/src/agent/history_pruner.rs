@@ -91,7 +91,9 @@ pub fn remove_orphaned_tool_messages(messages: &mut Vec<ChatMessage>) -> PrunedO
         {
             let doomed_ids =
                 extract_assistant_tool_call_ids(&messages[i].content).unwrap_or_default();
-            outcome.orphan_tool_call_ids.extend(doomed_ids.iter().cloned());
+            outcome
+                .orphan_tool_call_ids
+                .extend(doomed_ids.iter().cloned());
             messages.remove(i);
             outcome.removed += 1;
             while i < messages.len() && messages[i].role == "tool" {

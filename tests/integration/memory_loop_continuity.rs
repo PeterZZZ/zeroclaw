@@ -256,7 +256,7 @@ async fn compressor_with_memory_saves_summary() {
     )]);
 
     let result = compressor
-        .compress_if_needed(&mut history, &mock_model_provider, "test-model")
+        .compress_if_needed(&mut history, &mock_model_provider, "test-model", None)
         .await;
 
     // Check if compression happened (it should with threshold_ratio=0.01)
@@ -469,6 +469,7 @@ async fn consolidation_extracts_facts_to_memory() {
     let result = zeroclaw::memory::consolidation::consolidate_turn(
         &model_provider,
         "test-model",
+        None,
         mem.as_ref(),
         "The project deadline is April 15th 2026",
         "Got it, I'll remember the deadline is April 15th.",
@@ -500,6 +501,7 @@ async fn memory_survives_rapid_consolidation() {
         let _ = zeroclaw::memory::consolidation::consolidate_turn(
             &model_provider,
             "test-model",
+            None,
             mem.as_ref(),
             &format!("User message {i}"),
             &format!("Assistant response {i}"),

@@ -1367,10 +1367,7 @@ impl LarkChannel {
         while let Some(chunk) = resp.chunk().await? {
             body.extend_from_slice(&chunk);
             if body.len() as u64 > MAX_LARK_AUDIO_BYTES {
-                anyhow::bail!(
-                    "audio download exceeds {} byte limit",
-                    MAX_LARK_AUDIO_BYTES
-                );
+                anyhow::bail!("audio download exceeds {} byte limit", MAX_LARK_AUDIO_BYTES);
             }
         }
         Ok(body)
