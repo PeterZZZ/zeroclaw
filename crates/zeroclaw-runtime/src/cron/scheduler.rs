@@ -102,17 +102,12 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
 ///
 /// 1. The row's persisted `agent_alias` field, when it names a
 ///    configured agent.
-/// 2. Reverse-resolve via `[agents.<x>].cron_jobs` (declarative path —
+/// 2. Reverse-resolve via `[agents.<x>].cron_jobs` (declarative path:
 ///    every alias that lists the cron alias claims ownership).
-/// 3. `DEFAULT_AGENT_ALIAS` when it names a configured agent (the
-///    `[agents.default]` row is guaranteed to exist by config
-///    migration in v0.8.0).
 ///
-/// Returns `None` only when none of the above resolve, which means the
-/// install has neither the row's recorded owner nor `[agents.default]`
-/// nor any declarative claim — a misconfigured state worth surfacing
-/// loudly. Callers (process_due_jobs, execute_job_now) log when this
-/// happens and skip the job rather than crashing the scheduler loop.
+/// Returns `None` when neither resolves. Callers (process_due_jobs,
+/// execute_job_now) log and skip the job rather than crashing the
+/// scheduler loop.
 fn resolve_owning_agent<'a>(config: &'a Config, job: &CronJob) -> Option<&'a str> {
     if !job.agent_alias.is_empty()
         && let Some((alias, _)) = config
@@ -122,14 +117,7 @@ fn resolve_owning_agent<'a>(config: &'a Config, job: &CronJob) -> Option<&'a str
     {
         return Some(alias.as_str());
     }
-    if let Some(alias) = config.agent_for_cron_job(&job.id) {
-        return Some(alias);
-    }
-    config
-        .agents
-        .iter()
-        .find(|(alias, _)| alias.as_str() == crate::cron::types::DEFAULT_AGENT_ALIAS)
-        .map(|(alias, _)| alias.as_str())
+    config.agent_for_cron_job(&job.id)
 }
 
 /// Fetch **all** overdue jobs (ignoring `max_tasks`) and execute them.

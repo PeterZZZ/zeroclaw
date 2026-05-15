@@ -48,19 +48,17 @@ impl rusqlite::types::FromSql for JobType {
 }
 
 #[cfg(test)]
-pub fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJob> {
+pub fn add_job(
+    config: &Config,
+    agent_alias: &str,
+    expression: &str,
+    command: &str,
+) -> Result<CronJob> {
     let schedule = Schedule::Cron {
         expr: expression.to_string(),
         tz: None,
     };
-    add_shell_job(
-        config,
-        crate::cron::types::DEFAULT_AGENT_ALIAS,
-        None,
-        schedule,
-        command,
-        None,
-    )
+    add_shell_job(config, agent_alias, None, schedule, command, None)
 }
 
 pub fn add_shell_job(
@@ -82,11 +80,9 @@ pub fn add_shell_job(
 
     let delete_after_run = matches!(schedule, Schedule::At { .. });
     let agent_alias = agent_alias.trim();
-    let agent_alias = if agent_alias.is_empty() {
-        crate::cron::types::DEFAULT_AGENT_ALIAS
-    } else {
-        agent_alias
-    };
+    if agent_alias.is_empty() {
+        anyhow::bail!("agent_alias is required; cron jobs must name an owning agent");
+    }
 
     with_initialized_connection(config, |conn| {
         conn.execute(
@@ -136,11 +132,9 @@ pub fn add_agent_job(
     let schedule_json = serde_json::to_string(&schedule)?;
     let delivery = delivery.unwrap_or_default();
     let agent_alias = agent_alias.trim();
-    let agent_alias = if agent_alias.is_empty() {
-        crate::cron::types::DEFAULT_AGENT_ALIAS
-    } else {
-        agent_alias
-    };
+    if agent_alias.is_empty() {
+        anyhow::bail!("agent_alias is required; cron jobs must name an owning agent");
+    }
 
     with_initialized_connection(config, |conn| {
         conn.execute(
@@ -696,8 +690,8 @@ fn map_cron_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronJob> {
         session_target: SessionTarget::parse(&row.get::<_, String>(7)?),
         model: row.get(8)?,
         agent_alias: agent_alias
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| crate::cron::types::DEFAULT_AGENT_ALIAS.to_string()),
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default(),
         enabled: row.get::<_, i64>(9)? != 0,
         delivery,
         delete_after_run: row.get::<_, i64>(11)? != 0,
@@ -925,14 +919,18 @@ pub fn sync_declarative_jobs(
 
                 tracing::debug!(job_id = %id, "Updated declarative cron job");
             } else {
-                // Insert new declarative job. Reverse-resolve the owning
-                // agent from `[agents.<x>].cron_jobs` membership; if no
-                // agent claims this id, bind to DEFAULT_AGENT_ALIAS so
-                // the row is always resolvable at fire time.
+                // Reverse-resolve the owning agent from
+                // `[agents.<x>].cron_jobs` membership. Orphan declarative
+                // entries that no agent claims are skipped with a warning
+                // rather than silently bound to a magic alias.
+                let Some(agent_alias) = config.agent_for_cron_job(id) else {
+                    tracing::warn!(
+                        job_id = %id,
+                        "Skipping declarative cron job: no [agents.<x>].cron_jobs entry claims this id"
+                    );
+                    continue;
+                };
                 let next_run = next_run_for_schedule(&schedule, now)?;
-                let agent_alias = config
-                    .agent_for_cron_job(id)
-                    .unwrap_or(crate::cron::types::DEFAULT_AGENT_ALIAS);
                 conn.execute(
                     "INSERT INTO cron_jobs (
                         id, expression, command, schedule, job_type, prompt, name,
@@ -1247,14 +1245,10 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "allowed_tools", "TEXT")?;
     add_column_if_missing(conn, "source", "TEXT DEFAULT 'imperative'")?;
     add_column_if_missing(conn, "uses_memory", "INTEGER NOT NULL DEFAULT 1")?;
-    add_column_if_missing(
-        conn,
-        "agent_alias",
-        &format!(
-            "TEXT NOT NULL DEFAULT '{}'",
-            crate::cron::types::DEFAULT_AGENT_ALIAS
-        ),
-    )?;
+    // Rows written before the column existed get an empty alias; the
+    // scheduler treats those as orphans (skip with warning) rather than
+    // coercing them to a magic alias.
+    add_column_if_missing(conn, "agent_alias", "TEXT NOT NULL DEFAULT ''")?;
 
     Ok(())
 }
@@ -1312,7 +1306,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
 
-        let job = add_job(&config, "*/5 * * * *", "echo ok").unwrap();
+        let job = add_job(&config, "test-agent", "*/5 * * * *", "echo ok").unwrap();
 
         assert!(cron_db(&config).exists());
         assert_eq!(get_job(&config, &job.id).unwrap().id, job.id);
@@ -1408,7 +1402,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
 
-        let job = add_job(&config, "*/5 * * * *", "echo ok").unwrap();
+        let job = add_job(&config, "test-agent", "*/5 * * * *", "echo ok").unwrap();
         assert_eq!(job.expression, "*/5 * * * *");
         assert_eq!(job.command, "echo ok");
         assert!(matches!(job.schedule, Schedule::Cron { .. }));
@@ -1541,7 +1535,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
 
-        let job = add_job(&config, "*/10 * * * *", "echo roundtrip").unwrap();
+        let job = add_job(&config, "test-agent", "*/10 * * * *", "echo roundtrip").unwrap();
         let listed = list_jobs(&config).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, job.id);
@@ -1555,7 +1549,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
 
-        let job = add_job(&config, "* * * * *", "echo due").unwrap();
+        let job = add_job(&config, "test-agent", "* * * * *", "echo due").unwrap();
 
         let due_now = due_jobs(&config, Utc::now()).unwrap();
         assert!(due_now.is_empty(), "new job should not be due immediately");
@@ -1583,9 +1577,9 @@ mod tests {
         let mut config = test_config(&tmp);
         config.scheduler.max_tasks = 2;
 
-        let _ = add_job(&config, "* * * * *", "echo due-1").unwrap();
-        let _ = add_job(&config, "* * * * *", "echo due-2").unwrap();
-        let _ = add_job(&config, "* * * * *", "echo due-3").unwrap();
+        let _ = add_job(&config, "test-agent", "* * * * *", "echo due-1").unwrap();
+        let _ = add_job(&config, "test-agent", "* * * * *", "echo due-2").unwrap();
+        let _ = add_job(&config, "test-agent", "* * * * *", "echo due-3").unwrap();
 
         let far_future = Utc::now() + ChronoDuration::days(365);
         let due = due_jobs(&config, far_future).unwrap();
@@ -1598,9 +1592,9 @@ mod tests {
         let mut config = test_config(&tmp);
         config.scheduler.max_tasks = 2;
 
-        let _ = add_job(&config, "* * * * *", "echo ov-1").unwrap();
-        let _ = add_job(&config, "* * * * *", "echo ov-2").unwrap();
-        let _ = add_job(&config, "* * * * *", "echo ov-3").unwrap();
+        let _ = add_job(&config, "test-agent", "* * * * *", "echo ov-1").unwrap();
+        let _ = add_job(&config, "test-agent", "* * * * *", "echo ov-2").unwrap();
+        let _ = add_job(&config, "test-agent", "* * * * *", "echo ov-3").unwrap();
 
         let far_future = Utc::now() + ChronoDuration::days(365);
         // due_jobs respects the limit
@@ -1616,7 +1610,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
 
-        let job = add_job(&config, "* * * * *", "echo disabled").unwrap();
+        let job = add_job(&config, "test-agent", "* * * * *", "echo disabled").unwrap();
         let _ = update_job(
             &config,
             &job.id,
@@ -1701,7 +1695,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
 
-        let job = add_job(&config, "*/15 * * * *", "echo run").unwrap();
+        let job = add_job(&config, "test-agent", "*/15 * * * *", "echo run").unwrap();
         reschedule_after_run(&config, &job, false, "failed output").unwrap();
 
         let listed = list_jobs(&config).unwrap();
@@ -1800,7 +1794,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp);
         config.scheduler.max_run_history = 2;
-        let job = add_job(&config, "*/5 * * * *", "echo ok").unwrap();
+        let job = add_job(&config, "test-agent", "*/5 * * * *", "echo ok").unwrap();
         let base = Utc::now();
 
         for idx in 0..3 {
@@ -1817,7 +1811,7 @@ mod tests {
     fn remove_job_cascades_run_history() {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
-        let job = add_job(&config, "*/5 * * * *", "echo ok").unwrap();
+        let job = add_job(&config, "test-agent", "*/5 * * * *", "echo ok").unwrap();
         let start = Utc::now();
         record_run(
             &config,
@@ -1839,7 +1833,7 @@ mod tests {
     fn record_run_truncates_large_output() {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
-        let job = add_job(&config, "*/5 * * * *", "echo trunc").unwrap();
+        let job = add_job(&config, "test-agent", "*/5 * * * *", "echo trunc").unwrap();
         let output = "x".repeat(MAX_CRON_OUTPUT_BYTES + 512);
 
         record_run(
@@ -1866,7 +1860,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = add_shell_job(
             &config,
-            crate::cron::types::DEFAULT_AGENT_ALIAS,
+            "test-agent",
             None,
             Schedule::At { at },
             "echo once",
@@ -1891,7 +1885,7 @@ mod tests {
         let at = Utc::now() + ChronoDuration::minutes(10);
         let job = add_shell_job(
             &config,
-            crate::cron::types::DEFAULT_AGENT_ALIAS,
+            "test-agent",
             None,
             Schedule::At { at },
             "echo once",
@@ -1914,7 +1908,7 @@ mod tests {
     fn reschedule_after_run_truncates_last_output() {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp);
-        let job = add_job(&config, "*/5 * * * *", "echo trunc").unwrap();
+        let job = add_job(&config, "test-agent", "*/5 * * * *", "echo trunc").unwrap();
         let output = "y".repeat(MAX_CRON_OUTPUT_BYTES + 1024);
 
         reschedule_after_run(&config, &job, false, &output).unwrap();
@@ -1985,10 +1979,24 @@ mod tests {
         items.into_iter().collect()
     }
 
+    /// Seed an enabled agent that claims `ids` via its `cron_jobs` list so
+    /// `sync_declarative_jobs` can resolve an owning agent for each entry.
+    fn seed_claiming_agent(config: &mut Config, ids: &[&str]) {
+        config.agents.insert(
+            "test-agent".to_string(),
+            zeroclaw_config::schema::AliasedAgentConfig {
+                enabled: true,
+                cron_jobs: ids.iter().map(|s| (*s).to_string()).collect(),
+                ..Default::default()
+            },
+        );
+    }
+
     #[test]
     fn sync_inserts_new_declarative_job() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["daily-backup"]);
 
         let decls = decls_map(vec![make_shell_decl(
             "daily-backup",
@@ -2006,7 +2014,8 @@ mod tests {
     #[test]
     fn sync_updates_existing_declarative_job() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["updatable"]);
 
         let decls = decls_map(vec![make_shell_decl("updatable", "0 2 * * *", "echo v1")]);
         sync_declarative_jobs(&config, &decls).unwrap();
@@ -2026,10 +2035,11 @@ mod tests {
     #[test]
     fn sync_does_not_delete_imperative_jobs() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["my-decl"]);
 
         // Create an imperative job via the normal API.
-        let imperative = add_job(&config, "*/10 * * * *", "echo imperative").unwrap();
+        let imperative = add_job(&config, "test-agent", "*/10 * * * *", "echo imperative").unwrap();
 
         // Sync declarative jobs (none of which match the imperative job).
         let decls = decls_map(vec![make_shell_decl("my-decl", "0 2 * * *", "echo decl")]);
@@ -2048,7 +2058,8 @@ mod tests {
     #[test]
     fn sync_removes_stale_declarative_jobs() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["keeper", "stale"]);
 
         // Insert two declarative jobs.
         let decls = decls_map(vec![
@@ -2057,7 +2068,7 @@ mod tests {
         ]);
         sync_declarative_jobs(&config, &decls).unwrap();
 
-        // Now sync with only "keeper" — "stale" should be removed.
+        // Now sync with only "keeper"; "stale" should be removed.
         let decls_v2 = decls_map(vec![make_shell_decl("keeper", "0 2 * * *", "echo keep")]);
         sync_declarative_jobs(&config, &decls_v2).unwrap();
 
@@ -2068,7 +2079,8 @@ mod tests {
     #[test]
     fn sync_empty_removes_all_declarative_jobs() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["to-remove"]);
 
         let decls = decls_map(vec![make_shell_decl("to-remove", "0 2 * * *", "echo bye")]);
         sync_declarative_jobs(&config, &decls).unwrap();
@@ -2110,7 +2122,8 @@ mod tests {
     #[test]
     fn sync_agent_job_inserts_correctly() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["agent-check"]);
 
         let decls = decls_map(vec![make_agent_decl(
             "agent-check",
@@ -2128,7 +2141,8 @@ mod tests {
     #[test]
     fn sync_every_schedule_works() {
         let tmp = TempDir::new().unwrap();
-        let config = test_config(&tmp);
+        let mut config = test_config(&tmp);
+        seed_claiming_agent(&mut config, &["interval-job"]);
 
         let decl = zeroclaw_config::schema::CronJobDecl {
             name: None,
