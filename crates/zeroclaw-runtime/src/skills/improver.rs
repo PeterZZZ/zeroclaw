@@ -13,7 +13,7 @@ use zeroclaw_config::schema::SkillImprovementConfig;
 pub struct SkillImprover {
     workspace_dir: PathBuf,
     config: SkillImprovementConfig,
-    cooldowns: HashMap<String, Instant>,
+    pub(crate) cooldowns: HashMap<String, Instant>,
 }
 
 impl SkillImprover {
