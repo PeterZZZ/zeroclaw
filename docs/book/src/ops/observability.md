@@ -140,6 +140,74 @@ The `/api/status` response includes `daemon_started_at: string` (RFC
 3339), so a dashboard can default to "since daemon start" without an
 extra round-trip.
 
+## External log viewers
+
+The JSONL schema is an OTel-logs + ECS hybrid: `@timestamp`,
+`severity_number` + `severity_text`, `event.{category,action,outcome}`,
+`service.{name,version}`, `attributes`, plus the `zeroclaw.*` vendor
+namespace. Most log viewers ingest it with little or no transform.
+Replace `<install>` with the absolute path to your install dir in the
+examples below (typically `~/.zeroclaw` expanded).
+
+### Grafana Loki
+
+Promtail labels lift `agent_alias`, `channel`, and `severity_text` so
+they're filterable in Grafana:
+
+```yaml
+scrape_configs:
+  - job_name: zeroclaw
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: zeroclaw
+          __path__: <install>/data/state/runtime-trace.jsonl
+    pipeline_stages:
+      - json:
+          expressions:
+            agent: zeroclaw.agent_alias
+            channel: zeroclaw.channel
+            level: severity_text
+      - labels:
+          agent:
+          channel:
+          level:
+      - timestamp:
+          source: '@timestamp'
+          format: RFC3339
+```
+
+### OpenTelemetry Collector
+
+The `filelog` receiver maps the schema directly. Export to any OTel
+sink afterward (Tempo, Honeycomb, Datadog, etc.):
+
+```yaml
+receivers:
+  filelog/zeroclaw:
+    include: [<install>/data/state/runtime-trace.jsonl]
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes["@timestamp"]
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        severity:
+          parse_from: attributes.severity_number
+```
+
+### Kibana / Elastic
+
+Ingest works as-is. Strict ECS pipelines expect `log.level` in place
+of `severity_text`. A Filebeat ingest pipeline that renames
+`severity_text` to `log.level` (and `severity_number` to
+`log.syslog.severity.code`) covers the gap. `@timestamp` and
+`event.{category,action,outcome}` are already in canonical positions.
+
+### Vector / Fluent Bit
+
+Both tail JSONL with a JSON parser stage; no schema transforms needed
+before shipping to any backend.
+
 ## Terminal format
 
 The daemon's stderr formatter prefixes every line with the closest
