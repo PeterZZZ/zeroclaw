@@ -62,6 +62,8 @@ pub async fn handle_catalog(State(state): State<AppState>, headers: HeaderMap) -
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub struct ModelsQuery {
     /// ModelProvider name (canonical, from CatalogModelProvider.name).
+    /// `provider` alias matches the query-string name the web dashboard uses.
+    #[serde(alias = "provider")]
     pub model_provider: String,
 }
 
@@ -95,25 +97,31 @@ pub async fn handle_catalog_models(
     }
     let _ = state;
 
-    let handle = match zeroclaw_providers::create_model_provider(&q.model_provider, None) {
-        Ok(h) => h,
-        Err(e) => {
-            return error_response(
-                ConfigApiError::new(
-                    ConfigApiCode::PathNotFound,
-                    format!("unknown model_provider `{}`: {e}", q.model_provider),
-                )
-                .with_path(&q.model_provider),
-            );
-        }
+    // Try provider construction + list_models first (covers credentialed
+    // /models endpoints). Fall back to the family catalog table when
+    // construction or list_models fails — this is the path that covers
+    // onboard mode where the operator hasn't supplied a credential
+    // and the provider has typed required fields (Azure resource,
+    // Bedrock region, …) that haven't been populated yet.
+    let provider_path = match zeroclaw_providers::create_model_provider(&q.model_provider, None)
+    {
+        Ok(h) => match h.list_models().await {
+            Ok(ms) if !ms.is_empty() => Some(ms),
+            _ => None,
+        },
+        Err(_) => None,
     };
 
-    let (models, live) = match handle.list_models().await {
-        Ok(m) => (m, true),
-        Err(e) => {
-            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": q.model_provider, "error": e.to_string()})), "model catalog fetch failed");
-            (Vec::new(), false)
-        }
+    let (models, live) = match provider_path {
+        Some(ms) => (ms, true),
+        None => match zeroclaw_providers::catalog::list_models_for_family(&q.model_provider).await
+        {
+            Ok(ms) => (ms, true),
+            Err(e) => {
+                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": q.model_provider, "error": e.to_string()})), "model catalog fetch failed");
+                (Vec::new(), false)
+            }
+        },
     };
 
     axum::Json(ModelsResponse {

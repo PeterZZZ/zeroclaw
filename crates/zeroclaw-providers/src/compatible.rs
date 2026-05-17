@@ -53,6 +53,12 @@ pub struct OpenAiCompatibleModelProvider {
     /// models.dev catalog key for this model_provider (e.g. "xai").
     /// When set, `list_models` fetches from the models.dev catalog.
     models_dev_key: Option<String>,
+    /// OpenRouter vendor prefix for this model_provider (e.g. "x-ai", "tencent").
+    /// When set and the models.dev fallback returns no list, `list_models`
+    /// filters OpenRouter's `/api/v1/models` for entries under this prefix
+    /// and returns the slug list. Last-resort catalog source for providers
+    /// that aren't in models.dev.
+    openrouter_vendor_prefix: Option<String>,
     /// Apply the conservative tool-schema sanitizer when the served model
     /// is one whose runtime rejects standard OpenAI-style tool schemas
     /// (today: gemma-4 family on llama.cpp, where the empty-properties /
@@ -271,6 +277,7 @@ impl OpenAiCompatibleModelProvider {
             api_path: None,
             max_tokens: None,
             models_dev_key: None,
+            openrouter_vendor_prefix: None,
             local_model_tool_sanitize: false,
         }
     }
@@ -336,6 +343,14 @@ impl OpenAiCompatibleModelProvider {
     /// When set, `list_models` returns the catalog's model list for that key.
     pub fn with_models_dev_key(mut self, key: &str) -> Self {
         self.models_dev_key = Some(key.to_string());
+        self
+    }
+
+    /// Set the OpenRouter vendor prefix for this model_provider (e.g. `"x-ai"`,
+    /// `"tencent"`, `"rekaai"`). `list_models` falls back to this catalog when
+    /// neither a credential nor a working `models.dev` entry is available.
+    pub fn with_openrouter_vendor_prefix(mut self, prefix: &str) -> Self {
+        self.openrouter_vendor_prefix = Some(prefix.to_string());
         self
     }
 
@@ -1972,9 +1987,21 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             })?;
             return Ok(normalize_model_ids(body));
         }
-        // No credential — fall back to the models.dev catalog when available.
-        match &self.models_dev_key {
-            Some(key) => crate::models_dev::list_models_for(key).await,
+        // No credential — try models.dev first, then OpenRouter as a
+        // last-resort fallback for vendors that aren't in models.dev.
+        if let Some(key) = &self.models_dev_key {
+            match crate::models_dev::list_models_for(key).await {
+                Ok(models) if !models.is_empty() => return Ok(models),
+                Ok(_) => {} // empty → fall through to openrouter
+                Err(e) => {
+                    if self.openrouter_vendor_prefix.is_none() {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        match &self.openrouter_vendor_prefix {
+            Some(prefix) => crate::openrouter_catalog::list_models_for_vendor(prefix).await,
             None => anyhow::bail!("live model listing is not supported for this model_provider"),
         }
     }

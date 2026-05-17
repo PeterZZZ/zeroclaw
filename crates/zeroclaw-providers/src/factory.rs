@@ -65,10 +65,16 @@ pub trait CompatFamilySpec {
     /// to a free-text input for.
     const MODELS_DEV_KEY: Option<&'static str> = None;
 
-    /// Build the underlying compat provider. Default uses `new()`; override
-    /// for families that chain modifiers or need a different constructor
-    /// variant.
-    fn build_compat(
+    /// OpenRouter vendor prefix used by `list_models` as a last-resort
+    /// fallback when this family has no `models.dev` entry and no live
+    /// credential. `None` when no OpenRouter prefix exists for this family
+    /// (e.g. Sambanova, Hyperbolic — no public catalog at all without a key).
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = None;
+
+    /// Build the base compat provider with both catalog consts applied. Use
+    /// this from inside `build_compat` overrides so the catalog hooks ride
+    /// along with any family-specific modifiers.
+    fn build_compat_base(
         &self,
         alias: &str,
         key: Option<&str>,
@@ -84,7 +90,22 @@ pub trait CompatFamilySpec {
         if let Some(catalog_key) = Self::MODELS_DEV_KEY {
             p = p.with_models_dev_key(catalog_key);
         }
+        if let Some(prefix) = Self::OPENROUTER_VENDOR_PREFIX {
+            p = p.with_openrouter_vendor_prefix(prefix);
+        }
         p
+    }
+
+    /// Build the underlying compat provider. Default just returns the base
+    /// from `build_compat_base`; override to chain family-specific
+    /// modifiers (e.g. `.without_native_tools()`, `.with_merge_system_into_user()`).
+    fn build_compat(
+        &self,
+        alias: &str,
+        key: Option<&str>,
+        api_url: Option<&str>,
+    ) -> OpenAiCompatibleModelProvider {
+        self.build_compat_base(alias, key, api_url)
     }
 }
 
@@ -219,26 +240,31 @@ impl CompatFamilySpec for VercelModelProviderConfig {
     const DISPLAY: &'static str = "Vercel AI Gateway";
     const DEFAULT_URL: &'static str = crate::VERCEL_AI_GATEWAY_BASE_URL;
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("vercel");
 }
 impl CompatFamilySpec for CloudflareModelProviderConfig {
     const DISPLAY: &'static str = "Cloudflare AI Gateway";
     const DEFAULT_URL: &'static str = "https://gateway.ai.cloudflare.com/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("cloudflare-ai-gateway");
 }
 impl CompatFamilySpec for SyntheticModelProviderConfig {
     const DISPLAY: &'static str = "Synthetic";
     const DEFAULT_URL: &'static str = "https://api.synthetic.new/openai/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("synthetic");
 }
 impl CompatFamilySpec for OpencodeModelProviderConfig {
     const DISPLAY: &'static str = "OpenCode Zen";
     const DEFAULT_URL: &'static str = "https://opencode.ai/zen/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("opencode");
 }
 impl CompatFamilySpec for DoubaoModelProviderConfig {
     const DISPLAY: &'static str = "Doubao";
     const DEFAULT_URL: &'static str = "https://ark.cn-beijing.volces.com/api/v3";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("bytedance");
 }
 impl CompatFamilySpec for MistralModelProviderConfig {
     const DISPLAY: &'static str = "Mistral";
@@ -268,7 +294,7 @@ impl CompatFamilySpec for NovitaModelProviderConfig {
     const DISPLAY: &'static str = "Novita AI";
     const DEFAULT_URL: &'static str = "https://api.novita.ai/openai";
     const AUTH: AuthStyle = AuthStyle::Bearer;
-    const MODELS_DEV_KEY: Option<&'static str> = Some("novita");
+    const MODELS_DEV_KEY: Option<&'static str> = Some("novita-ai");
 }
 impl CompatFamilySpec for PerplexityModelProviderConfig {
     const DISPLAY: &'static str = "Perplexity";
@@ -301,11 +327,13 @@ impl CompatFamilySpec for SiliconflowModelProviderConfig {
     const DISPLAY: &'static str = "SiliconFlow";
     const DEFAULT_URL: &'static str = "https://api.siliconflow.cn/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("siliconflow");
 }
 impl CompatFamilySpec for AihubmixModelProviderConfig {
     const DISPLAY: &'static str = "AiHubMix";
     const DEFAULT_URL: &'static str = "https://aihubmix.com/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("aihubmix");
 }
 impl CompatFamilySpec for LitellmModelProviderConfig {
     const DISPLAY: &'static str = "LiteLLM";
@@ -322,13 +350,15 @@ impl CompatFamilySpec for SambanovaModelProviderConfig {
     const DISPLAY: &'static str = "SambaNova";
     const DEFAULT_URL: &'static str = "https://api.sambanova.ai/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
-    const MODELS_DEV_KEY: Option<&'static str> = Some("sambanova");
+    // No models.dev entry and no OpenRouter prefix — operator must paste a
+    // credential before `list_models` returns anything.
 }
 impl CompatFamilySpec for HyperbolicModelProviderConfig {
     const DISPLAY: &'static str = "Hyperbolic";
     const DEFAULT_URL: &'static str = "https://api.hyperbolic.xyz/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
-    const MODELS_DEV_KEY: Option<&'static str> = Some("hyperbolic");
+    // No models.dev entry and no OpenRouter prefix — operator must paste a
+    // credential before `list_models` returns anything.
 }
 impl CompatFamilySpec for DeepinfraModelProviderConfig {
     const DISPLAY: &'static str = "DeepInfra";
@@ -346,16 +376,19 @@ impl CompatFamilySpec for Ai21ModelProviderConfig {
     const DISPLAY: &'static str = "AI21 Labs";
     const DEFAULT_URL: &'static str = "https://api.ai21.com/studio/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("ai21");
 }
 impl CompatFamilySpec for RekaModelProviderConfig {
     const DISPLAY: &'static str = "Reka";
     const DEFAULT_URL: &'static str = "https://api.reka.ai/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("rekaai");
 }
 impl CompatFamilySpec for BasetenModelProviderConfig {
     const DISPLAY: &'static str = "Baseten";
     const DEFAULT_URL: &'static str = "https://inference.baseten.co/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("baseten");
 }
 impl CompatFamilySpec for NscaleModelProviderConfig {
     const DISPLAY: &'static str = "Nscale";
@@ -371,11 +404,13 @@ impl CompatFamilySpec for NebiusModelProviderConfig {
     const DISPLAY: &'static str = "Nebius AI Studio";
     const DEFAULT_URL: &'static str = "https://api.studio.nebius.ai/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("nebius");
 }
 impl CompatFamilySpec for FriendliModelProviderConfig {
     const DISPLAY: &'static str = "Friendli AI";
     const DEFAULT_URL: &'static str = "https://api.friendli.ai/serverless/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("friendli");
 }
 impl CompatFamilySpec for LeptonModelProviderConfig {
     const DISPLAY: &'static str = "Lepton AI";
@@ -386,6 +421,8 @@ impl CompatFamilySpec for StepfunModelProviderConfig {
     const DISPLAY: &'static str = "Stepfun";
     const DEFAULT_URL: &'static str = "https://api.stepfun.com/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("stepfun");
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("stepfun");
 }
 impl CompatFamilySpec for BaichuanModelProviderConfig {
     const DISPLAY: &'static str = "Baichuan";
@@ -401,6 +438,7 @@ impl CompatFamilySpec for HunyuanModelProviderConfig {
     const DISPLAY: &'static str = "Tencent Hunyuan";
     const DEFAULT_URL: &'static str = "https://api.hunyuan.cloud.tencent.com/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("tencent");
 }
 impl CompatFamilySpec for AvianModelProviderConfig {
     const DISPLAY: &'static str = "Avian";
@@ -427,20 +465,14 @@ impl CompatFamilySpec for VeniceModelProviderConfig {
     const DISPLAY: &'static str = "Venice";
     const DEFAULT_URL: &'static str = "https://api.venice.ai";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("venice");
     fn build_compat(
         &self,
         alias: &str,
         key: Option<&str>,
         api_url: Option<&str>,
     ) -> OpenAiCompatibleModelProvider {
-        OpenAiCompatibleModelProvider::new(
-            alias,
-            Self::DISPLAY,
-            api_url.unwrap_or(Self::DEFAULT_URL),
-            key,
-            Self::AUTH,
-        )
-        .without_native_tools()
+        self.build_compat_base(alias, key, api_url).without_native_tools()
     }
 }
 impl CompatFamilySpec for AtomicChatModelProviderConfig {
@@ -450,20 +482,14 @@ impl CompatFamilySpec for AtomicChatModelProviderConfig {
     /// entry when they run it on a non-default port.
     const DEFAULT_URL: &'static str = "http://127.0.0.1:1337/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("atomic-chat");
     fn build_compat(
         &self,
         alias: &str,
         key: Option<&str>,
         api_url: Option<&str>,
     ) -> OpenAiCompatibleModelProvider {
-        OpenAiCompatibleModelProvider::new(
-            alias,
-            Self::DISPLAY,
-            api_url.unwrap_or(Self::DEFAULT_URL),
-            key,
-            Self::AUTH,
-        )
-        .without_native_tools()
+        self.build_compat_base(alias, key, api_url).without_native_tools()
     }
 }
 
@@ -520,27 +546,40 @@ impl CompatFamilySpec for ZaiModelProviderConfig {
     const DISPLAY: &'static str = "Z.AI";
     const DEFAULT_URL: &'static str = crate::ZAI_GLOBAL_BASE_URL;
     const AUTH: AuthStyle = AuthStyle::ZhipuJwt;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("zai");
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("z-ai");
 }
 
 impl CompatFamilySpec for GlmModelProviderConfig {
     const DISPLAY: &'static str = "GLM";
     const DEFAULT_URL: &'static str = crate::GLM_GLOBAL_BASE_URL;
     const AUTH: AuthStyle = AuthStyle::ZhipuJwt;
+    const MODELS_DEV_KEY: Option<&'static str> = Some("zhipuai");
     fn build_compat(
         &self,
         alias: &str,
         key: Option<&str>,
         api_url: Option<&str>,
     ) -> OpenAiCompatibleModelProvider {
-        // GLM exposes vision-capable models (e.g. `glm-4.5v`).
-        OpenAiCompatibleModelProvider::new_with_vision(
+        // GLM exposes vision-capable models (e.g. `glm-4.5v`). Compose the
+        // catalog-conf'd base with vision flag override via the constructor
+        // variant; we replay both consts manually since this constructor
+        // path doesn't fold through `build_compat_base`.
+        let mut p = OpenAiCompatibleModelProvider::new_with_vision(
             alias,
             Self::DISPLAY,
             api_url.unwrap_or(Self::DEFAULT_URL),
             key,
             Self::AUTH,
             true,
-        )
+        );
+        if let Some(catalog_key) = Self::MODELS_DEV_KEY {
+            p = p.with_models_dev_key(catalog_key);
+        }
+        if let Some(prefix) = Self::OPENROUTER_VENDOR_PREFIX {
+            p = p.with_openrouter_vendor_prefix(prefix);
+        }
+        p
     }
 }
 
@@ -548,20 +587,8 @@ impl CompatFamilySpec for NvidiaModelProviderConfig {
     const DISPLAY: &'static str = "NVIDIA NIM";
     const DEFAULT_URL: &'static str = "https://integrate.api.nvidia.com/v1";
     const AUTH: AuthStyle = AuthStyle::Bearer;
-    fn build_compat(
-        &self,
-        alias: &str,
-        key: Option<&str>,
-        api_url: Option<&str>,
-    ) -> OpenAiCompatibleModelProvider {
-        OpenAiCompatibleModelProvider::new(
-            alias,
-            Self::DISPLAY,
-            api_url.unwrap_or(Self::DEFAULT_URL),
-            key,
-            Self::AUTH,
-        )
-    }
+    const MODELS_DEV_KEY: Option<&'static str> = Some("nvidia");
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("nvidia");
 }
 
 impl CompatFamilySpec for QianfanModelProviderConfig {
@@ -571,6 +598,7 @@ impl CompatFamilySpec for QianfanModelProviderConfig {
     // a placeholder.
     const DEFAULT_URL: &'static str = "https://qianfan.baidubce.com/v2";
     const AUTH: AuthStyle = AuthStyle::Bearer;
+    const OPENROUTER_VENDOR_PREFIX: Option<&'static str> = Some("baidu");
     fn build_compat(
         &self,
         alias: &str,
@@ -578,7 +606,8 @@ impl CompatFamilySpec for QianfanModelProviderConfig {
         api_url: Option<&str>,
     ) -> OpenAiCompatibleModelProvider {
         let base_url = crate::qianfan_base_url(api_url);
-        OpenAiCompatibleModelProvider::new(alias, Self::DISPLAY, &base_url, key, Self::AUTH)
+        let computed_url = Some(base_url.as_str());
+        self.build_compat_base(alias, key, computed_url)
     }
 }
 
@@ -845,7 +874,9 @@ impl FamilyProviderFactory for QwenModelProviderConfig {
                 AuthStyle::Bearer,
                 true,
             )
-        };
+        }
+        .with_models_dev_key("alibaba")
+        .with_openrouter_vendor_prefix("qwen");
         Ok(apply_compat_options(p, opts))
     }
 }
@@ -864,7 +895,8 @@ impl FamilyProviderFactory for GroqModelProviderConfig {
             "https://api.groq.com/openai/v1",
             key,
             AuthStyle::Bearer,
-        );
+        )
+        .with_models_dev_key("groq");
         // Groq's llama-family models reject native tool calls with HTTP
         // 400; default to text-fallback. Operators can override per-alias
         // via `[model_providers.groq.<alias>] native_tools = true`.

@@ -1223,6 +1223,20 @@ async fn prompt_model(cfg: &mut Config, ui: &mut dyn OnboardUi, prefix: &str) ->
         }
         None => None,
     };
+    // Final fallback: query the per-family catalog source table directly.
+    // Covers providers with typed required fields (Azure resource,
+    // Bedrock region, …) the operator hasn't populated yet — provider
+    // construction bails before list_models can run, so we go around it.
+    let live_models = match live_models {
+        Some(ms) => Some(ms),
+        None => match zeroclaw_providers::catalog::list_models_for_family(&model_provider).await {
+            Ok(ms) if !ms.is_empty() => {
+                ui.status("");
+                Some(ms)
+            }
+            Ok(_) | Err(_) => None,
+        },
+    };
     // Both fetch paths above are best-effort; clear the "Fetching..."
     // status so it doesn't linger as a stale banner in the TUI log
     // pane once the user has moved past the model picker.
