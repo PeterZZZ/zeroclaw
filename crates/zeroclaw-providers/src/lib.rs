@@ -1743,6 +1743,12 @@ fn create_provider_with_url_and_options(
             key,
             AuthStyle::Bearer,
         ))),
+        "morph" => Ok(compat(OpenAiCompatibleProvider::new(
+            "Morph",
+            "https://api.morphllm.com/v1",
+            key,
+            AuthStyle::Bearer,
+        ))),
 
         // ── Model hosting platforms ──────────────────────────
         "deepinfra" | "deep-infra" => Ok(compat(OpenAiCompatibleProvider::new(
@@ -1852,12 +1858,6 @@ fn create_provider_with_url_and_options(
         "deepmyst" | "deep-myst" => Ok(compat(OpenAiCompatibleProvider::new(
             "DeepMyst",
             "https://api.deepmyst.com/v1",
-            key,
-            AuthStyle::Bearer,
-        ))),
-        "morph" => Ok(compat(OpenAiCompatibleProvider::new(
-            "Morph",
-            "https://api.morphllm.com/v1",
             key,
             AuthStyle::Bearer,
         ))),
@@ -2591,6 +2591,14 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             activation: ProviderActivation::FallbackKey,
             local: false,
         },
+        ProviderInfo {
+            name: "morph",
+            display_name: "Morph (Fast Apply)",
+            description: "Fast apply-edits LLM",
+            aliases: &[],
+            activation: ProviderActivation::FallbackKey,
+            local: false,
+        },
         // ── Model hosting platforms ──────────────────────────
         ProviderInfo {
             name: "deepinfra",
@@ -2726,14 +2734,6 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             name: "avian",
             display_name: "Avian",
             description: "Avian inference",
-            aliases: &[],
-            activation: ProviderActivation::FallbackKey,
-            local: false,
-        },
-        ProviderInfo {
-            name: "morph",
-            display_name: "Morph (Fast Apply)",
-            description: "Fast apply-edits LLM",
             aliases: &[],
             activation: ProviderActivation::FallbackKey,
             local: false,
