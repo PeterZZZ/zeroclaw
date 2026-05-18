@@ -81,17 +81,38 @@ impl DreamReport {
     }
 
     /// Format the report as a user-facing "While you were away..." message.
+    ///
+    /// User-facing strings are routed through Fluent (`cli-dream-report-*`)
+    /// when the i18n bundle is initialized; falls back to inline English when
+    /// called outside the CLI (e.g. in unit tests).
     pub fn format_message(&self) -> String {
-        let mut msg = format!(
-            "While you were away... ({})\n\n",
-            self.timestamp.format("%Y-%m-%d %H:%M UTC")
-        );
-        msg.push_str(&self.summary);
+        let timestamp = self.timestamp.format("%Y-%m-%d %H:%M UTC").to_string();
+        let header = crate::i18n::get_cli_string_with_args(
+            "cli-dream-report-header",
+            &[("timestamp", timestamp.as_str())],
+        )
+        .unwrap_or_else(|| format!("While you were away... ({timestamp})"));
+
+        let mut msg = format!("{header}\n\n{}", self.summary);
+
         if self.insights_count > 0 || self.pruned_count > 0 {
-            msg.push_str(&format!(
-                "\n\n({} insights consolidated, {} stale memories pruned)",
-                self.insights_count, self.pruned_count
-            ));
+            let insights_str = self.insights_count.to_string();
+            let pruned_str = self.pruned_count.to_string();
+            let counts = crate::i18n::get_cli_string_with_args(
+                "cli-dream-report-counts",
+                &[
+                    ("insights", insights_str.as_str()),
+                    ("pruned", pruned_str.as_str()),
+                ],
+            )
+            .unwrap_or_else(|| {
+                format!(
+                    "({} insights consolidated, {} stale memories pruned)",
+                    self.insights_count, self.pruned_count
+                )
+            });
+            msg.push_str("\n\n");
+            msg.push_str(&counts);
         }
         msg
     }
@@ -166,10 +187,13 @@ mod tests {
             delivered: false,
         };
 
+        // Tests run without the Fluent bundle initialized, so the formatter
+        // falls back to the inline English defaults.
         let msg = report.format_message();
         assert!(msg.contains("While you were away..."));
         assert!(msg.contains("User prefers dark themes."));
         assert!(msg.contains("2 insights consolidated"));
+        assert!(msg.contains("1 stale memories pruned"));
     }
 
     #[test]

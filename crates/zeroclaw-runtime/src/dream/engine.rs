@@ -1,15 +1,40 @@
 //! Dream mode engine — periodic memory consolidation and reflective learning.
 //!
-//! During idle periods, the dream engine:
-//! 1. **Gathers** recent daily memories and conversation summaries.
-//! 2. **Reflects** via a single LLM pass to identify patterns and insights.
-//! 3. **Consolidates** distilled insights into long-term Core memories.
-//! 4. **Prunes** stale daily memories and low-importance entries.
-//! 5. **Reports** an optional summary for the next user interaction.
+//! The dream engine runs in two modes:
 //!
-//! The engine runs as a daemon component (like heartbeat) with its own
-//! supervisor. Only the Reflect phase calls the LLM; all other phases
-//! operate directly on the Memory trait to minimize token cost.
+//! **Local mode (no network calls):** Gathers recent memories, applies time-decay
+//! scoring, prunes stale/low-importance entries by age and threshold. Fully offline.
+//!
+//! **LLM-assisted mode (opt-in):** Additionally calls an LLM to identify patterns,
+//! extract insights, and flag semantically stale entries. Requires `dream_mode.model`
+//! to be configured.
+//!
+//! Phases:
+//! 1. **Gather** recent daily memories and conversation summaries.
+//! 2. **Reflect** via LLM *(optional — skipped when no provider is configured)*.
+//! 3. **Consolidate** distilled insights into long-term Core memories *(LLM only)*.
+//! 4. **Prune** stale daily memories and low-importance entries *(always runs)*.
+//! 5. **Report** an optional summary for the next user interaction.
+//!
+//! # Design: separate prompt contract, shared provider contract
+//!
+//! The reflect phase calls `provider.chat_with_system(...)` directly rather than
+//! constructing a full `Agent`. This is intentional:
+//!
+//! - **Different prompt contract:** Dream reflect is a one-shot JSON-extraction
+//!   call with no tools, no agent persona, no conversation history, and no
+//!   workspace system prompt. Wrapping it in `Agent::from_config` would add
+//!   tool dispatch, message-history threading, and persona resolution that
+//!   actively conflict with the deterministic JSON-out contract.
+//! - **Same provider contract:** The provider is still built through
+//!   `zeroclaw_providers::create_routed_provider_with_options` in both the
+//!   daemon worker and CLI handler. That means `dream_mode.model` overrides,
+//!   `providers.fallback.api_key` / `base_url`, `model_routes`, `reliability`,
+//!   and `provider_runtime_options` all flow through the standard resolution
+//!   path — only the *prompt* surface differs from a normal agent turn.
+//!
+//! See the `llm_assisted_path_passes_configured_model_to_provider` test below
+//! for the contract assertion that the configured model reaches the provider.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -30,7 +55,7 @@ use super::report::DreamReport;
 pub struct DreamCycleResult {
     /// Number of memories gathered for reflection.
     pub gathered_count: usize,
-    /// Insights distilled by the LLM reflect phase.
+    /// Insights distilled by the LLM reflect phase (empty in local-only mode).
     pub insights: Vec<String>,
     /// Number of stale memories pruned.
     pub pruned_count: usize,
@@ -40,6 +65,8 @@ pub struct DreamCycleResult {
     pub report_summary: Option<String>,
     /// Timestamp of the dream cycle.
     pub timestamp: DateTime<Utc>,
+    /// Whether the LLM reflect phase was used.
+    pub llm_assisted: bool,
 }
 
 // ── LLM prompt ─────────────────────────────────────────────────
@@ -67,7 +94,7 @@ struct ReflectResult {
     summary: Option<String>,
 }
 
-// ── Engine ──────────────────────────────────────────────────────
+// ── Engine ───────���───────────────────────────────��──────────────
 
 /// Dream mode engine — consolidates memories during idle periods.
 pub struct DreamEngine {
@@ -83,14 +110,31 @@ impl DreamEngine {
         }
     }
 
-    /// Run a single dream cycle: gather → reflect → consolidate → prune → report.
+    /// Run a single dream cycle.
     ///
-    /// This is the main entry point for both scheduled and manual triggers.
+    /// - When `provider` is `Some`, runs the full LLM-assisted pipeline.
+    /// - When `provider` is `None`, runs local-only (prune by age/importance, no insights).
     pub async fn run_cycle(
         &self,
         memory: &dyn Memory,
-        provider: &dyn Provider,
-        model: &str,
+        provider: Option<&dyn Provider>,
+        model: Option<&str>,
+    ) -> Result<DreamCycleResult> {
+        self.run_cycle_with_options(memory, provider, model, false)
+            .await
+    }
+
+    /// Run a single dream cycle with explicit option control.
+    ///
+    /// When `dry_run` is true, the cycle is side-effect free: no memory mutations,
+    /// no `dream_pending.json`, no `dream_report.json` written. The returned
+    /// `DreamCycleResult` describes what *would* have happened.
+    pub async fn run_cycle_with_options(
+        &self,
+        memory: &dyn Memory,
+        provider: Option<&dyn Provider>,
+        model: Option<&str>,
+        dry_run: bool,
     ) -> Result<DreamCycleResult> {
         info!("Dream cycle started");
 
@@ -108,21 +152,61 @@ impl DreamEngine {
                 consolidated_count: 0,
                 report_summary: None,
                 timestamp: Utc::now(),
+                llm_assisted: false,
             });
         }
 
-        // Phase 2: Reflect (LLM call)
-        let reflect_result = self.reflect(provider, model, &gathered).await?;
-        info!(
-            "Dream reflect: {} insights, {} stale keys",
-            reflect_result.insights.len(),
-            reflect_result.stale_keys.len()
-        );
+        // Phase 2: Reflect (LLM call — only if provider is configured)
+        let reflect_result = match (provider, model) {
+            (Some(p), Some(m)) => {
+                let result = self.reflect(p, m, &gathered).await?;
+                info!(
+                    "Dream reflect: {} insights, {} stale keys",
+                    result.insights.len(),
+                    result.stale_keys.len()
+                );
+                Some(result)
+            }
+            _ => {
+                info!("Dream reflect: skipped (no LLM configured, local-only mode)");
+                None
+            }
+        };
+
+        let llm_assisted = reflect_result.is_some();
+        let insights = reflect_result
+            .as_ref()
+            .map(|r| r.insights.clone())
+            .unwrap_or_default();
+        let stale_keys = reflect_result
+            .as_ref()
+            .map(|r| r.stale_keys.clone())
+            .unwrap_or_default();
+        let summary = reflect_result.as_ref().and_then(|r| r.summary.clone());
+
+        // Dry-run: side-effect free. Return what would have happened without persisting anything.
+        if dry_run {
+            let pruned_preview =
+                self.collect_local_prune_candidates(memory).await?.len() + stale_keys.len();
+            info!(
+                "Dream cycle complete (dry-run): {} insights, {} would-be-pruned, no writes",
+                insights.len(),
+                pruned_preview
+            );
+            return Ok(DreamCycleResult {
+                gathered_count,
+                insights,
+                pruned_count: pruned_preview,
+                consolidated_count: 0,
+                report_summary: summary,
+                timestamp: Utc::now(),
+                llm_assisted,
+            });
+        }
 
         // In audit mode, stage proposed mutations for review instead of applying.
         if self.config.audit_mode {
-            let staged_insights: Vec<StagedInsight> = reflect_result
-                .insights
+            let staged_insights: Vec<StagedInsight> = insights
                 .iter()
                 .filter(|s| !s.trim().is_empty())
                 .map(|s| StagedInsight {
@@ -134,11 +218,15 @@ impl DreamEngine {
                 })
                 .collect();
 
+            // Even in local-only mode, stage the prune candidates for review.
+            let mut proposed_prunes = stale_keys.clone();
+            proposed_prunes.extend(self.collect_local_prune_candidates(memory).await?);
+
             let pending = DreamPending {
                 insights: staged_insights,
-                proposed_prunes: reflect_result.stale_keys.clone(),
+                proposed_prunes,
                 timestamp: Utc::now(),
-                summary: reflect_result.summary.clone(),
+                summary: summary.clone(),
             };
             if let Err(e) = pending.save(&self.workspace_dir) {
                 warn!("Failed to persist dream_pending.json: {e}");
@@ -149,41 +237,54 @@ impl DreamEngine {
             );
             return Ok(DreamCycleResult {
                 gathered_count,
-                insights: reflect_result.insights,
+                insights,
                 pruned_count: 0,
                 consolidated_count: 0,
-                report_summary: reflect_result.summary,
+                report_summary: summary,
                 timestamp: Utc::now(),
+                llm_assisted,
             });
         }
 
-        // Phase 3: Consolidate insights into Core memories
-        let consolidated_count = self.consolidate(memory, &reflect_result.insights).await?;
-        info!(
-            "Dream consolidate: {} new Core memories",
-            consolidated_count
-        );
+        // Phase 3: Consolidate insights into Core memories (LLM-only)
+        let consolidated_count = if llm_assisted {
+            let count = self.consolidate(memory, &insights).await?;
+            info!("Dream consolidate: {} new Core memories", count);
+            count
+        } else {
+            0
+        };
 
-        // Phase 4: Prune stale memories
-        let pruned_count = self.prune(memory, &reflect_result.stale_keys).await?;
+        // Phase 4: Prune stale memories (always runs — local + LLM-identified)
+        let pruned_count = self.prune(memory, &stale_keys).await?;
         info!("Dream prune: {} memories removed", pruned_count);
 
         // Phase 5: Build report
+        let report_summary = if llm_assisted {
+            summary
+        } else {
+            // Local-only: generate a simple mechanical summary.
+            Some(format!(
+                "Pruned {pruned_count} stale memories (age/importance threshold)."
+            ))
+        };
+
         let result = DreamCycleResult {
             gathered_count,
-            insights: reflect_result.insights,
+            insights,
             pruned_count,
             consolidated_count,
-            report_summary: reflect_result.summary,
+            report_summary: report_summary.clone(),
             timestamp: Utc::now(),
+            llm_assisted,
         };
 
         // Persist report for "While you were away..." display
         if self.config.show_report
-            && let Some(ref summary) = result.report_summary
+            && let Some(ref summary_text) = result.report_summary
         {
             let report = DreamReport {
-                summary: summary.clone(),
+                summary: summary_text.clone(),
                 insights_count: result.consolidated_count,
                 pruned_count: result.pruned_count,
                 timestamp: result.timestamp,
@@ -195,19 +296,23 @@ impl DreamEngine {
         }
 
         info!(
-            "Dream cycle complete: {} insights, {} pruned",
-            result.consolidated_count, result.pruned_count
+            "Dream cycle complete ({}): {} insights, {} pruned",
+            if llm_assisted {
+                "LLM-assisted"
+            } else {
+                "local"
+            },
+            result.consolidated_count,
+            result.pruned_count
         );
 
         Ok(result)
     }
 
-    // ── Phase 1: Gather ────────────────────────────────────────
+    // ── Phase 1: Gather ���───────────────────────────────────────
 
     /// Collect recent daily memories and conversation summaries.
     async fn gather(&self, memory: &dyn Memory) -> Result<Vec<MemoryEntry>> {
-        // Compute the time window: gather memories from the last 24 hours
-        // (or since the last dream cycle, whichever is more recent).
         let since = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
 
         let mut entries = memory
@@ -233,7 +338,6 @@ impl DreamEngine {
         model: &str,
         gathered: &[MemoryEntry],
     ) -> Result<ReflectResult> {
-        // Build the input text from gathered memories.
         let mut input = String::with_capacity(gathered.len() * 200);
         for entry in gathered {
             input.push_str(&format!(
@@ -242,7 +346,6 @@ impl DreamEngine {
             ));
         }
 
-        // Truncate to avoid excessive token cost.
         let truncated = truncate_utf8(&input, 8000);
 
         let raw = provider
@@ -307,13 +410,13 @@ impl DreamEngine {
         Ok(stored)
     }
 
-    // ── Phase 4: Prune ─────────────────────────────────────────
+    // ─��� Phase 4: Prune ─���───────────────────────────────────────
 
     /// Remove stale daily memories, low-importance entries, and LLM-identified outdated entries.
     async fn prune(&self, memory: &dyn Memory, stale_keys: &[String]) -> Result<usize> {
         let mut pruned = 0;
 
-        // Remove LLM-identified stale entries.
+        // Remove LLM-identified stale entries (empty if local-only).
         for key in stale_keys {
             match memory.forget(key).await {
                 Ok(true) => pruned += 1,
@@ -326,7 +429,7 @@ impl DreamEngine {
             }
         }
 
-        // Prune old Daily memories beyond max_daily_age_days.
+        // Prune old Daily memories beyond max_daily_age_days or below importance threshold.
         let cutoff = (Utc::now()
             - chrono::Duration::days(i64::from(self.config.max_daily_age_days)))
         .to_rfc3339();
@@ -354,9 +457,34 @@ impl DreamEngine {
 
         Ok(pruned)
     }
+
+    // ── Helpers ────────────────────────────────────────────────
+
+    /// Collect keys that would be pruned locally (for audit mode staging).
+    async fn collect_local_prune_candidates(&self, memory: &dyn Memory) -> Result<Vec<String>> {
+        let cutoff = (Utc::now()
+            - chrono::Duration::days(i64::from(self.config.max_daily_age_days)))
+        .to_rfc3339();
+
+        let mut candidates = Vec::new();
+        if let Ok(entries) = memory.list(Some(&MemoryCategory::Daily), None).await {
+            for entry in entries {
+                let expired = entry.timestamp.as_str() < cutoff.as_str();
+                let below_threshold = entry
+                    .importance
+                    .map(|s| s < self.config.prune_threshold)
+                    .unwrap_or(false);
+
+                if expired || below_threshold {
+                    candidates.push(entry.key.clone());
+                }
+            }
+        }
+        Ok(candidates)
+    }
 }
 
-// ── Helpers ────────────────────────────────────────────────────
+// ── Helpers ─────��──────────────────────────────────────────────
 
 /// Truncate a string to at most `max_bytes` at a valid UTF-8 char boundary.
 fn truncate_utf8(s: &str, max_bytes: usize) -> String {
@@ -436,8 +564,276 @@ mod tests {
             consolidated_count: 1,
             report_summary: Some("Summary".into()),
             timestamp: Utc::now(),
+            llm_assisted: true,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("pattern A"));
+    }
+
+    // ── Mock backends for engine integration tests ─────────────
+
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+    use zeroclaw_api::memory_traits::{Memory, MemoryCategory, MemoryEntry};
+    use zeroclaw_api::provider::Provider;
+
+    /// In-memory Memory backend that records every mutating call. Used to
+    /// assert no writes happen during dry-run.
+    #[derive(Default)]
+    struct RecordingMemory {
+        entries: Mutex<Vec<MemoryEntry>>,
+        stores: Mutex<usize>,
+        forgets: Mutex<usize>,
+    }
+
+    impl RecordingMemory {
+        fn with_daily_entries(entries: Vec<MemoryEntry>) -> Self {
+            Self {
+                entries: Mutex::new(entries),
+                stores: Mutex::new(0),
+                forgets: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Memory for RecordingMemory {
+        fn name(&self) -> &str {
+            "recording-mock"
+        }
+        async fn store(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            *self.stores.lock().unwrap() += 1;
+            Ok(())
+        }
+        async fn store_with_metadata(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: MemoryCategory,
+            _session_id: Option<&str>,
+            _namespace: Option<&str>,
+            _importance: Option<f64>,
+        ) -> anyhow::Result<()> {
+            *self.stores.lock().unwrap() += 1;
+            Ok(())
+        }
+        async fn recall(
+            &self,
+            _query: &str,
+            _limit: usize,
+            _session_id: Option<&str>,
+            _since: Option<&str>,
+            _until: Option<&str>,
+        ) -> anyhow::Result<Vec<MemoryEntry>> {
+            // Return the seeded daily entries so the gather phase has data.
+            Ok(self.entries.lock().unwrap().clone())
+        }
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+            category: Option<&MemoryCategory>,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<Vec<MemoryEntry>> {
+            let all = self.entries.lock().unwrap().clone();
+            match category {
+                Some(c) => Ok(all.into_iter().filter(|e| &e.category == c).collect()),
+                None => Ok(all),
+            }
+        }
+        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+            *self.forgets.lock().unwrap() += 1;
+            Ok(true)
+        }
+        async fn count(&self) -> anyhow::Result<usize> {
+            Ok(self.entries.lock().unwrap().len())
+        }
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Provider that returns a fixed JSON reflect response and records the
+    /// model name it was called with.
+    struct MockProvider {
+        response: String,
+        called_with_model: Mutex<Option<String>>,
+    }
+
+    impl MockProvider {
+        fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+                called_with_model: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            *self.called_with_model.lock().unwrap() = Some(model.to_string());
+            Ok(self.response.clone())
+        }
+    }
+
+    fn make_daily_entry(key: &str, importance: Option<f64>) -> MemoryEntry {
+        MemoryEntry {
+            id: key.into(),
+            key: key.into(),
+            content: format!("content for {key}"),
+            category: MemoryCategory::Daily,
+            timestamp: Utc::now().to_rfc3339(),
+            session_id: None,
+            score: None,
+            namespace: "default".into(),
+            importance,
+            superseded_by: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn dry_run_writes_nothing_even_with_reflected_insights() {
+        // Set up a workspace dir we can inspect for side-effect files.
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().to_path_buf();
+
+        // Memory backend with a Daily entry that would normally be pruned.
+        let memory = RecordingMemory::with_daily_entries(vec![make_daily_entry(
+            "old_key",
+            Some(0.05), // below default prune_threshold=0.1
+        )]);
+
+        // Provider returns a non-empty reflect result that would trigger writes
+        // in non-dry-run modes.
+        let provider = MockProvider::new(
+            r#"{"insights": ["Insight one"], "stale_keys": ["old_key"], "summary": "Eventful day"}"#,
+        );
+
+        let config = DreamModeConfig {
+            enabled: true,
+            audit_mode: true, // even with audit_mode set, dry-run must dominate
+            show_report: true,
+            ..DreamModeConfig::default()
+        };
+        let engine = DreamEngine::new(config, workspace.clone());
+
+        let result = engine
+            .run_cycle_with_options(&memory, Some(&provider), Some("test-model"), true)
+            .await
+            .unwrap();
+
+        // Result describes what would have happened.
+        assert!(result.llm_assisted);
+        assert_eq!(result.insights, vec!["Insight one".to_string()]);
+        assert_eq!(result.consolidated_count, 0);
+        assert!(result.pruned_count >= 1); // would-be-pruned preview
+
+        // Critical: no files written, no memory mutations.
+        assert!(
+            !workspace.join("dream_pending.json").exists(),
+            "dry-run wrote dream_pending.json"
+        );
+        assert!(
+            !workspace.join("dream_report.json").exists(),
+            "dry-run wrote dream_report.json"
+        );
+        assert_eq!(*memory.stores.lock().unwrap(), 0, "dry-run called store");
+        assert_eq!(*memory.forgets.lock().unwrap(), 0, "dry-run called forget");
+    }
+
+    #[tokio::test]
+    async fn audit_mode_writes_pending_but_not_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().to_path_buf();
+
+        let memory = RecordingMemory::with_daily_entries(vec![make_daily_entry("old_key", None)]);
+        let provider =
+            MockProvider::new(r#"{"insights": ["A"], "stale_keys": ["old_key"], "summary": "ok"}"#);
+
+        let config = DreamModeConfig {
+            enabled: true,
+            audit_mode: true,
+            show_report: false,
+            ..DreamModeConfig::default()
+        };
+        let engine = DreamEngine::new(config, workspace.clone());
+
+        engine
+            .run_cycle_with_options(&memory, Some(&provider), Some("test-model"), false)
+            .await
+            .unwrap();
+
+        // Audit mode stages but doesn't mutate memory.
+        assert!(workspace.join("dream_pending.json").exists());
+        assert_eq!(*memory.stores.lock().unwrap(), 0);
+        assert_eq!(*memory.forgets.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn llm_assisted_path_passes_configured_model_to_provider() {
+        // Verifies the dream LLM call honors the model passed in (which the
+        // daemon/CLI resolve from dream_mode.model). This is the contract test
+        // for the intentional "dream is a separate prompt, but uses normal
+        // provider config" design.
+        let temp = tempfile::tempdir().unwrap();
+        let memory = RecordingMemory::with_daily_entries(vec![make_daily_entry("k", None)]);
+        let provider = MockProvider::new(r#"{"insights":[],"stale_keys":[],"summary":null}"#);
+
+        let engine = DreamEngine::new(
+            DreamModeConfig {
+                enabled: true,
+                audit_mode: false,
+                show_report: false,
+                ..DreamModeConfig::default()
+            },
+            temp.path().to_path_buf(),
+        );
+
+        engine
+            .run_cycle(&memory, Some(&provider), Some("custom-dream-model-xyz"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider.called_with_model.lock().unwrap().as_deref(),
+            Some("custom-dream-model-xyz")
+        );
+    }
+
+    #[tokio::test]
+    async fn local_only_path_does_not_call_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let memory = RecordingMemory::with_daily_entries(vec![make_daily_entry("k", None)]);
+        let provider = MockProvider::new("should-never-be-returned");
+
+        let engine = DreamEngine::new(
+            DreamModeConfig {
+                enabled: true,
+                audit_mode: false,
+                show_report: false,
+                ..DreamModeConfig::default()
+            },
+            temp.path().to_path_buf(),
+        );
+
+        let result = engine.run_cycle(&memory, None, None).await.unwrap();
+
+        assert!(!result.llm_assisted);
+        assert!(result.insights.is_empty());
+        assert!(provider.called_with_model.lock().unwrap().is_none());
     }
 }

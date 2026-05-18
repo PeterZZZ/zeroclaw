@@ -621,16 +621,26 @@ Examples:
 
     /// Run a dream cycle (periodic memory consolidation)
     #[command(long_about = "\
-Trigger a dream cycle — periodic memory consolidation and reflective learning.
+Trigger a dream cycle — periodic memory consolidation.
 
-Dream mode gathers recent memories, uses an LLM to identify patterns and \
-insights, consolidates them into long-term Core memories, and prunes stale \
-entries. Use --dry-run to preview changes without persisting.
+Dream mode runs in two modes:
+  - Local mode (default, no network): gathers recent memories and prunes \
+stale or low-importance entries by age and decayed-importance threshold.
+  - LLM-assisted mode (opt-in): set `dream_mode.model` in config to also \
+extract insights and identify semantically stale keys via a single LLM call.
+
+By default, proposed mutations are staged to `dream_pending.json` for review \
+(audit_mode = true). Run `zeroclaw dream promote` to apply them. Set \
+`dream_mode.audit_mode = false` in config to auto-apply.
+
+`--dry-run` is side-effect free: no memory mutations, no dream_pending.json, \
+no dream_report.json. It shows what the cycle *would* do.
 
 Examples:
-  zeroclaw dream                    # run a dream cycle
-  zeroclaw dream --dry-run          # preview without persisting
+  zeroclaw dream                    # run a dream cycle (staged by default)
+  zeroclaw dream --dry-run          # preview — writes nothing
   zeroclaw dream --verbose          # show detailed output
+  zeroclaw dream promote            # apply staged mutations from dream_pending.json
   zeroclaw dream report             # show pending dream report")]
     Dream {
         #[command(subcommand)]

@@ -806,7 +806,8 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
 /// Dream mode worker — runs periodic memory consolidation cycles.
 ///
 /// Parses the cron schedule from `dream_mode.schedule`, sleeps until the next
-/// trigger time, and runs a dream cycle.
+/// trigger time, and runs a dream cycle. Runs local-only (no network) unless
+/// `dream_mode.model` is configured, in which case LLM reflection is enabled.
 async fn run_dream_worker(config: Config) -> Result<()> {
     use crate::dream::engine::DreamEngine;
     use anyhow::Context;
@@ -819,30 +820,41 @@ async fn run_dream_worker(config: Config) -> Result<()> {
 
     let engine = DreamEngine::new(config.dream_mode.clone(), config.workspace_dir.clone());
 
-    // Resolve the provider and model through the standard provider stack.
-    let fallback = config
-        .providers
-        .fallback_provider()
-        .context("dream worker: no fallback provider configured")?;
-    let provider_name = config.providers.fallback.as_deref().unwrap_or("anthropic");
-    let model = config
-        .dream_mode
-        .model
-        .as_deref()
-        .or(fallback.model.as_deref())
-        .unwrap_or("claude-haiku-4-5-20251001");
+    // Resolve the provider only if dream_mode.model is configured (opt-in LLM).
+    let (provider, model): (
+        Option<Box<dyn zeroclaw_api::provider::Provider>>,
+        Option<String>,
+    ) = if config.dream_mode.model.is_some() {
+        let fallback = config
+            .providers
+            .fallback_provider()
+            .context("dream worker: dream_mode.model set but no fallback provider configured")?;
+        let provider_name = config.providers.fallback.as_deref().unwrap_or("anthropic");
+        let model_name = config
+            .dream_mode
+            .model
+            .as_deref()
+            .or(fallback.model.as_deref())
+            .unwrap_or("claude-haiku-4-5-20251001")
+            .to_string();
 
-    let provider_runtime_options =
-        zeroclaw_providers::provider_runtime_options_from_config(&config);
-    let provider = zeroclaw_providers::create_routed_provider_with_options(
-        provider_name,
-        fallback.api_key.as_deref(),
-        fallback.base_url.as_deref(),
-        &config.reliability,
-        &config.providers.model_routes,
-        model,
-        &provider_runtime_options,
-    )?;
+        let provider_runtime_options =
+            zeroclaw_providers::provider_runtime_options_from_config(&config);
+        let p = zeroclaw_providers::create_routed_provider_with_options(
+            provider_name,
+            fallback.api_key.as_deref(),
+            fallback.base_url.as_deref(),
+            &config.reliability,
+            &config.providers.model_routes,
+            &model_name,
+            &provider_runtime_options,
+        )?;
+        tracing::info!("Dream mode: LLM reflection enabled (model='{model_name}')");
+        (Some(p), Some(model_name))
+    } else {
+        tracing::info!("Dream mode: local-only (no dream_mode.model configured)");
+        (None, None)
+    };
 
     // Parse the cron schedule for cycle timing.
     let schedule = cron::Schedule::from_str(&config.dream_mode.schedule).context(format!(
@@ -891,7 +903,11 @@ async fn run_dream_worker(config: Config) -> Result<()> {
         };
 
         match engine
-            .run_cycle(mem.as_ref(), provider.as_ref(), model)
+            .run_cycle(
+                mem.as_ref(),
+                provider.as_ref().map(|p| p.as_ref()),
+                model.as_deref(),
+            )
             .await
         {
             Ok(result) => {
