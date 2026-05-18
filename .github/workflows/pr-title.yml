@@ -1,7 +1,7 @@
 name: Validate PR title
 
 on:
-  pull_request_target:
+  pull_request:
     types:
       - opened
       - reopened
@@ -9,20 +9,16 @@ on:
       - synchronize
 
 permissions:
-  pull-requests: read
+  contents: read
 
 jobs:
   main:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Conventional Commits format
+      - uses: actions/checkout@v4
+      - name: Run validator unit tests
+        run: ./scripts/check-pr-title.test.sh
+      - name: Check PR title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\([a-z0-9._/:-]+\)!?: .+'
-          if ! printf '%s' "$PR_TITLE" | grep -qE "$pattern"; then
-            echo "::error::PR title must follow Conventional Commits with a scope: 'type(scope): description'"
-            echo "Allowed types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test"
-            echo "Got: $PR_TITLE"
-            exit 1
-          fi
+        run: ./scripts/check-pr-title.sh "$PR_TITLE"
