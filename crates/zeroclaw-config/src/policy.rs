@@ -222,7 +222,34 @@ pub struct SecurityPolicy {
     pub block_high_risk_commands: bool,
     pub shell_env_passthrough: Vec<String>,
     pub shell_timeout_secs: u64,
+    /// Tool name allowlist. `None` is unrestricted (default for agents
+    /// without an explicit `risk_profile.allowed_tools` setting).
+    /// `Some(vec![])` denies every tool. `Some(list)` admits only the
+    /// listed names. Enforced at the agent loop's tool-dispatch site.
+    pub allowed_tools: Option<Vec<String>>,
+    /// Tool name denylist. Subtracts from the allowed set (whether the
+    /// allowed set comes from `allowed_tools` or from the unrestricted
+    /// default). `None` and `Some(vec![])` both mean "exclude nothing".
+    pub excluded_tools: Option<Vec<String>>,
     pub tracker: PerSenderTracker,
+}
+
+impl SecurityPolicy {
+    /// True when `name` is admissible under the current policy.
+    ///
+    /// `allowed_tools = None` is unrestricted; `Some(list)` is the
+    /// allowlist. `excluded_tools` always subtracts.
+    pub fn is_tool_allowed(&self, name: &str) -> bool {
+        let allowed = self
+            .allowed_tools
+            .as_ref()
+            .is_none_or(|list| list.iter().any(|t| t == name));
+        let excluded = self
+            .excluded_tools
+            .as_ref()
+            .is_some_and(|list| list.iter().any(|t| t == name));
+        allowed && !excluded
+    }
 }
 
 /// Default allowed commands for Unix platforms.
@@ -501,6 +528,8 @@ impl Default for SecurityPolicy {
             block_high_risk_commands: true,
             shell_env_passthrough: vec![],
             shell_timeout_secs: 60,
+            allowed_tools: None,
+            excluded_tools: None,
             tracker: PerSenderTracker::new(),
         }
     }
@@ -2220,6 +2249,8 @@ impl SecurityPolicy {
             block_high_risk_commands: risk_profile.block_high_risk_commands,
             shell_env_passthrough: risk_profile.shell_env_passthrough.clone(),
             shell_timeout_secs: runtime.shell_timeout_secs,
+            allowed_tools: None,
+            excluded_tools: None,
             tracker: PerSenderTracker::new(),
         }
     }
