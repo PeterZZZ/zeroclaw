@@ -13,7 +13,7 @@ pub mod windows;
 use commands::onboarding::read_onboarding_complete;
 use gateway_client::GatewayClient;
 use state::shared_state;
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
 
 /// Attempt to auto-pair with the gateway so the WebView has a valid token
 /// before the React frontend mounts. Runs on localhost so the admin endpoints
@@ -82,6 +82,33 @@ fn set_dock_icon() {
     }
 }
 
+/// Track the last-known accessibility status so we can detect revocations
+/// when the app resumes from the background.
+#[cfg(target_os = "macos")]
+static AX_WAS_GRANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Check accessibility status on resume. If it was previously granted but is
+/// now denied, emit an `accessibility-lost` event to all webviews.
+#[cfg(target_os = "macos")]
+fn check_ax_on_resume<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let current = crate::macos::permissions::check_accessibility() == "granted";
+    let was_granted = AX_WAS_GRANTED.load(std::sync::atomic::Ordering::Relaxed);
+
+    if was_granted && !current {
+        // Accessibility was revoked while the app was in the background.
+        let _ = app.emit("accessibility-lost", ());
+    }
+
+    AX_WAS_GRANTED.store(current, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Initialize AX tracking — snapshot the current accessibility status.
+#[cfg(target_os = "macos")]
+fn init_ax_tracking() {
+    let granted = crate::macos::permissions::check_accessibility() == "granted";
+    AX_WAS_GRANTED.store(granted, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Configure and run the Tauri application.
 pub fn run() {
     let shared = shared_state();
@@ -122,6 +149,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             set_dock_icon();
 
+            // Snapshot initial accessibility status for revocation detection.
+            #[cfg(target_os = "macos")]
+            init_ax_tracking();
+
             // Set up the system tray.
             let _ = tray::setup_tray(app);
 
@@ -152,11 +183,19 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
-            // Keep the app running in the background when all windows are closed.
-            // This is the standard pattern for menu bar / tray apps.
-            if let RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+        .run(|app, event| {
+            match event {
+                // Keep the app running in the background when all windows are closed.
+                // This is the standard pattern for menu bar / tray apps.
+                RunEvent::ExitRequested { api, .. } => {
+                    api.prevent_exit();
+                }
+                // Re-check accessibility when the app returns to the foreground.
+                RunEvent::Resumed => {
+                    #[cfg(target_os = "macos")]
+                    check_ax_on_resume(app);
+                }
+                _ => {}
             }
         });
 }

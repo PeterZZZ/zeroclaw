@@ -127,17 +127,17 @@ pub fn get_permissions_status() -> Vec<PermissionInfo> {
 pub fn get_runtime_platform() -> String {
     #[cfg(target_os = "macos")]
     {
-        return "macos".into();
+        "macos".into()
     }
 
     #[cfg(target_os = "linux")]
     {
-        return "linux".into();
+        "linux".into()
     }
 
     #[cfg(target_os = "windows")]
     {
-        return "windows".into();
+        "windows".into()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -160,9 +160,10 @@ pub fn request_permission<R: Runtime>(app: AppHandle<R>, name: String) -> Result
             "microphone" => Ok(permissions::request_microphone().into()),
             "screen_recording" => Ok(permissions::request_screen_recording().into()),
             "input_monitoring" => Ok(permissions::request_input_monitoring().into()),
+            "accessibility" => Ok(permissions::request_accessibility().into()),
             // These permissions cannot be requested programmatically — open Settings.
-            "accessibility" | "automation" | "notifications" | "speech_recognition"
-            | "full_disk_access" | "local_network" => {
+            "automation" | "notifications" | "speech_recognition" | "full_disk_access"
+            | "local_network" => {
                 permissions::open_system_settings(&name).map(|_| "open_settings".into())
             }
             _ => Err(format!("Unknown permission: {name}")),

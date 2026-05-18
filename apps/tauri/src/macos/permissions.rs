@@ -10,12 +10,33 @@ use std::process::Command;
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
+    -> bool;
 }
 
 /// Check if the app has Accessibility permission.
 pub fn check_accessibility() -> &'static str {
     // Safety: AXIsProcessTrusted is a simple boolean query with no side effects.
     let trusted = unsafe { AXIsProcessTrusted() };
+    if trusted { "granted" } else { "denied" }
+}
+
+/// Request Accessibility permission by showing the system dialog that directs
+/// the user to System Settings → Privacy & Security → Accessibility.
+/// Returns the current status after the dialog is dismissed.
+pub fn request_accessibility() -> &'static str {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    let key = CFString::new("AXTrustedCheckOptionPrompt");
+    let value = CFBoolean::true_value();
+    let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
+
+    // Safety: AXIsProcessTrustedWithOptions is the supported API for prompting.
+    // Passing kAXTrustedCheckOptionPrompt => true shows the system accessibility dialog.
+    let trusted = unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) };
     if trusted { "granted" } else { "denied" }
 }
 
