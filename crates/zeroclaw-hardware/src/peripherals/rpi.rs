@@ -6,8 +6,13 @@
 use crate::peripherals::Peripheral;
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
 use zeroclaw_config::schema::PeripheralBoardConfig;
+
+tool_attribution!(RpiGpioReadTool, ToolKind::Plugin);
+tool_attribution!(RpiGpioWriteTool, ToolKind::Plugin);
 
 /// RPi GPIO peripheral — direct access via rppal.
 pub struct RpiGpioPeripheral {

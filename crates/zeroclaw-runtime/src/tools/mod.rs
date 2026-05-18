@@ -15,6 +15,7 @@
 //! To add a new tool, implement [`Tool`] in a new submodule and register it in
 //! [`all_tools_with_runtime`]. See `AGENTS.md` §7.3 for the full change playbook.
 
+pub mod attribution;
 pub mod cron_add;
 pub mod cron_list;
 pub mod cron_remove;
@@ -184,6 +185,15 @@ struct ArcDelegatingTool {
 impl ArcDelegatingTool {
     fn boxed(inner: Arc<dyn Tool>) -> Box<dyn Tool> {
         Box::new(Self { inner })
+    }
+}
+
+impl ::zeroclaw_api::attribution::Attributable for ArcDelegatingTool {
+    fn role(&self) -> ::zeroclaw_api::attribution::Role {
+        self.inner.role()
+    }
+    fn alias(&self) -> &str {
+        self.inner.alias()
     }
 }
 

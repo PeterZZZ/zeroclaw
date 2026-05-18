@@ -1612,6 +1612,15 @@ impl ToolArcRef {
     }
 }
 
+impl ::zeroclaw_api::attribution::Attributable for ToolArcRef {
+    fn role(&self) -> ::zeroclaw_api::attribution::Role {
+        self.inner.role()
+    }
+    fn alias(&self) -> &str {
+        self.inner.alias()
+    }
+}
+
 #[async_trait]
 impl Tool for ToolArcRef {
     fn name(&self) -> &str {
@@ -1658,6 +1667,8 @@ mod tests {
         DEFAULT_DELEGATE_AGENTIC_TIMEOUT_SECS, DEFAULT_DELEGATE_TIMEOUT_SECS,
     };
     use zeroclaw_providers::{ChatRequest, ChatResponse, ToolCall};
+
+    zeroclaw_api::mock_tool_attribution!(EchoTool, FakeMcpTool);
 
     fn test_security() -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy::default())
@@ -2677,6 +2688,16 @@ mod tests {
         let config = AliasedAgentConfig::default();
 
         struct MockShellTool;
+        impl ::zeroclaw_api::attribution::Attributable for MockShellTool {
+            fn role(&self) -> ::zeroclaw_api::attribution::Role {
+                ::zeroclaw_api::attribution::Role::Tool(
+                    ::zeroclaw_api::attribution::ToolKind::Shell,
+                )
+            }
+            fn alias(&self) -> &str {
+                <Self as Tool>::name(self)
+            }
+        }
         #[async_trait]
         impl Tool for MockShellTool {
             fn name(&self) -> &str {

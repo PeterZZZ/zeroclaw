@@ -120,27 +120,18 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     }
 }
 
-/// Returns the subset of `tool_specs` that should be sent to the LLM for this turn.
-///
-/// Rules (mirrors NullClaw `filterToolSpecsForTurn`):
-/// - Built-in tools (names that do not start with `"mcp_"`) always pass through.
-/// - When `groups` is empty, all tools pass through (backward compatible default).
-/// - An MCP tool is included if at least one group matches it:
-///   - `always` group: included unconditionally if any pattern matches the tool name.
-///   - `dynamic` group: included if any pattern matches AND the user message contains
-///     at least one keyword (case-insensitive substring).
 /// Drop tools from `tools` that fail either gate.
 ///
 /// 1. The parent agent's `SecurityPolicy.allowed_tools` allowlist plus
 ///    `SecurityPolicy.excluded_tools` denylist, evaluated via
-///    [`SecurityPolicy::is_tool_allowed`].
+///    `SecurityPolicy::is_tool_allowed`.
 /// 2. The caller-supplied `caller_allowed` filter (the existing
 ///    `agent::run`-level `allowed_tools` parameter).
 ///
 /// A tool survives only when BOTH gates admit its name. `None` on
-/// either gate is unrestricted for that gate alone — the other still
-/// applies. Built-in tools, MCP tools, and skill tools all flow through
-/// the same filter; the helper does not know or care about category.
+/// either gate is unrestricted for that gate alone. Built-in tools,
+/// MCP tools, and skill tools all flow through the same filter; the
+/// helper does not know or care about category.
 pub fn apply_policy_tool_filter(
     tools: &mut Vec<Box<dyn Tool>>,
     policy: Option<&zeroclaw_config::policy::SecurityPolicy>,
@@ -154,6 +145,15 @@ pub fn apply_policy_tool_filter(
     });
 }
 
+/// Returns the subset of `tool_specs` that should be sent to the LLM for this turn.
+///
+/// Rules (mirrors NullClaw `filterToolSpecsForTurn`):
+/// - Built-in tools (names that do not start with `"mcp_"`) always pass through.
+/// - When `groups` is empty, all tools pass through (backward compatible default).
+/// - An MCP tool is included if at least one group matches it:
+///   - `always` group: included unconditionally if any pattern matches the tool name.
+///   - `dynamic` group: included if any pattern matches AND the user message contains
+///     at least one keyword (case-insensitive substring).
 pub fn filter_tool_specs_for_turn(
     tool_specs: Vec<crate::tools::ToolSpec>,
     groups: &[zeroclaw_config::schema::ToolFilterGroup],
@@ -2471,15 +2471,14 @@ pub async fn run(
         if tools_registry.len() != before_filter {
             ::zeroclaw_log::record!(
                 INFO,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(
-                    ::serde_json::json!({
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(::serde_json::json!({
                         "before": before_filter,
                         "retained": tools_registry.len(),
                         "policy_allowed": security.allowed_tools.as_ref().map(|v| v.len()),
                         "policy_excluded": security.excluded_tools.as_ref().map(|v| v.len()),
                         "caller_allowed": allowed_tools.as_ref().map(|v| v.len()),
-                    })
-                ),
+                    })),
                 "Applied capability-based tool access filter"
             );
         }
@@ -4107,6 +4106,15 @@ mod tests {
     use tempfile::tempdir;
     use zeroclaw_providers::ChatMessage;
     use zeroclaw_tool_call_parser::parse_tool_calls;
+
+    zeroclaw_api::mock_tool_attribution!(
+        CountingTool,
+        EmptySuccessTool,
+        RecordingArgsTool,
+        DelayTool,
+        FailingTool,
+        NamedMockTool,
+    );
 
     // ── truncate_tool_result tests ────────────────────────────────
 
@@ -8727,8 +8735,10 @@ Let me check the result."#;
             mock_tool("spawn_subagent"),
             mock_tool("memory_recall"),
         ];
-        let mut policy = TestPolicy::default();
-        policy.allowed_tools = Some(vec!["shell".into(), "memory_recall".into()]);
+        let policy = TestPolicy {
+            allowed_tools: Some(vec!["shell".into(), "memory_recall".into()]),
+            ..TestPolicy::default()
+        };
 
         super::apply_policy_tool_filter(&mut tools, Some(&policy), None);
         assert_eq!(tool_names(&tools), vec!["shell", "memory_recall"]);
@@ -8737,8 +8747,10 @@ Let me check the result."#;
     #[test]
     fn apply_policy_tool_filter_policy_excluded_subtracts_from_unrestricted() {
         let mut tools = vec![mock_tool("shell"), mock_tool("spawn_subagent")];
-        let mut policy = TestPolicy::default();
-        policy.excluded_tools = Some(vec!["spawn_subagent".into()]);
+        let policy = TestPolicy {
+            excluded_tools: Some(vec!["spawn_subagent".into()]),
+            ..TestPolicy::default()
+        };
 
         super::apply_policy_tool_filter(&mut tools, Some(&policy), None);
         assert_eq!(tool_names(&tools), vec!["shell"]);
@@ -8764,8 +8776,10 @@ Let me check the result."#;
             mock_tool("spawn_subagent"),
             mock_tool("memory_recall"),
         ];
-        let mut policy = TestPolicy::default();
-        policy.allowed_tools = Some(vec!["shell".into(), "memory_recall".into()]);
+        let policy = TestPolicy {
+            allowed_tools: Some(vec!["shell".into(), "memory_recall".into()]),
+            ..TestPolicy::default()
+        };
         let caller = vec!["shell".to_string(), "spawn_subagent".to_string()];
 
         super::apply_policy_tool_filter(&mut tools, Some(&policy), Some(&caller));
@@ -8778,10 +8792,15 @@ Let me check the result."#;
     #[test]
     fn apply_policy_tool_filter_policy_deny_all_drops_everything() {
         let mut tools = vec![mock_tool("shell"), mock_tool("spawn_subagent")];
-        let mut policy = TestPolicy::default();
-        policy.allowed_tools = Some(vec![]);
+        let policy = TestPolicy {
+            allowed_tools: Some(vec![]),
+            ..TestPolicy::default()
+        };
 
         super::apply_policy_tool_filter(&mut tools, Some(&policy), None);
-        assert!(tools.is_empty(), "Some(vec![]) on policy must deny every tool");
+        assert!(
+            tools.is_empty(),
+            "Some(vec![]) on policy must deny every tool"
+        );
     }
 }

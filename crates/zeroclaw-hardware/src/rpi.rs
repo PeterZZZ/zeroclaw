@@ -20,7 +20,14 @@ use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::fs;
 use std::time::Duration;
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(GpioRpiWriteTool, ToolKind::Plugin);
+tool_attribution!(GpioRpiReadTool, ToolKind::Plugin);
+tool_attribution!(GpioRpiBlinkTool, ToolKind::Plugin);
+tool_attribution!(RpiSystemInfoTool, ToolKind::Plugin);
 
 // ─── LED sysfs helpers ──────────────────────────────────────────────────────
 

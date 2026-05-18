@@ -1903,6 +1903,13 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    zeroclaw_api::mock_tool_attribution!(
+        CountingTool,
+        NamedMockTool,
+        MockTool,
+        CapturingApprovalArgTool,
+    );
+
     struct MockModelProvider {
         responses: Mutex<Vec<zeroclaw_providers::ChatResponse>>,
     }

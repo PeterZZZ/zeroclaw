@@ -23,7 +23,11 @@ use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(SubprocessTool, ToolKind::Plugin);
 
 /// Subprocess timeout — kill the child process after this many seconds.
 const SUBPROCESS_TIMEOUT_SECS: u64 = 10;

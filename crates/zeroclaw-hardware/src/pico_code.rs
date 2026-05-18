@@ -16,7 +16,13 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(DeviceReadCodeTool, ToolKind::Plugin);
+tool_attribution!(DeviceWriteCodeTool, ToolKind::Plugin);
+tool_attribution!(DeviceExecTool, ToolKind::Plugin);
 
 /// Default timeout for `mpremote` operations (seconds).
 const MPREMOTE_TIMEOUT_SECS: u64 = 30;

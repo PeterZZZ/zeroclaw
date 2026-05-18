@@ -12,8 +12,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
 use zeroclaw_config::schema::PeripheralBoardConfig;
+
+tool_attribution!(GpioReadTool, ToolKind::Plugin);
+tool_attribution!(GpioWriteTool, ToolKind::Plugin);
 
 /// Allowed serial path patterns (security: deny arbitrary paths).
 const ALLOWED_PATH_PREFIXES: &[&str] = &[

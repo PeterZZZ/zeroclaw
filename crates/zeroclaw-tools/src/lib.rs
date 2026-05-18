@@ -1,5 +1,6 @@
 //! Tool implementations for agent-callable capabilities.
 
+pub mod attribution;
 pub mod microsoft365;
 pub mod util_helpers;
 

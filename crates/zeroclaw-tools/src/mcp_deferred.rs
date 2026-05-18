@@ -291,6 +291,16 @@ mod tests {
         use zeroclaw_api::tool::ToolResult;
 
         struct FakeTool;
+        impl ::zeroclaw_api::attribution::Attributable for FakeTool {
+            fn role(&self) -> ::zeroclaw_api::attribution::Role {
+                ::zeroclaw_api::attribution::Role::Tool(
+                    ::zeroclaw_api::attribution::ToolKind::Plugin,
+                )
+            }
+            fn alias(&self) -> &str {
+                <Self as Tool>::name(self)
+            }
+        }
         #[async_trait]
         impl Tool for FakeTool {
             fn name(&self) -> &str {
@@ -325,6 +335,16 @@ mod tests {
         use zeroclaw_api::tool::ToolResult;
 
         struct FakeTool;
+        impl ::zeroclaw_api::attribution::Attributable for FakeTool {
+            fn role(&self) -> ::zeroclaw_api::attribution::Role {
+                ::zeroclaw_api::attribution::Role::Tool(
+                    ::zeroclaw_api::attribution::ToolKind::Plugin,
+                )
+            }
+            fn alias(&self) -> &str {
+                <Self as Tool>::name(self)
+            }
+        }
         #[async_trait]
         impl Tool for FakeTool {
             fn name(&self) -> &str {
@@ -356,6 +376,16 @@ mod tests {
         use zeroclaw_api::tool::ToolResult;
 
         struct FakeTool(&'static str);
+        impl ::zeroclaw_api::attribution::Attributable for FakeTool {
+            fn role(&self) -> ::zeroclaw_api::attribution::Role {
+                ::zeroclaw_api::attribution::Role::Tool(
+                    ::zeroclaw_api::attribution::ToolKind::Plugin,
+                )
+            }
+            fn alias(&self) -> &str {
+                <Self as Tool>::name(self)
+            }
+        }
         #[async_trait]
         impl Tool for FakeTool {
             fn name(&self) -> &str {

@@ -7,7 +7,11 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::process::Command;
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(ArduinoUploadTool, ToolKind::Plugin);
 
 /// Tool: upload Arduino sketch (agent-generated code) to the board.
 pub struct ArduinoUploadTool {

@@ -15,7 +15,11 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(PicoFlashTool, ToolKind::Plugin);
 
 /// How long to wait for the Pico serial port after flashing (seconds).
 const PORT_WAIT_SECS: u64 = 20;

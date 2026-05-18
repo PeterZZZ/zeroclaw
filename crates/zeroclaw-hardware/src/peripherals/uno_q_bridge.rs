@@ -8,7 +8,12 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(UnoQGpioReadTool, ToolKind::Plugin);
+tool_attribution!(UnoQGpioWriteTool, ToolKind::Plugin);
 
 const BRIDGE_HOST: &str = "127.0.0.1";
 const BRIDGE_PORT: u16 = 9999;

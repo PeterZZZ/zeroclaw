@@ -116,6 +116,8 @@ impl ModelProvider for BenchModelProvider {
 
 struct NoopTool;
 
+zeroclaw_api::mock_tool_attribution!(NoopTool);
+
 #[async_trait]
 impl Tool for NoopTool {
     fn name(&self) -> &str {

@@ -2456,9 +2456,11 @@ mod tests {
 
     #[test]
     fn is_tool_allowed_none_is_unrestricted() {
-        let mut p = SecurityPolicy::default();
-        p.allowed_tools = None;
-        p.excluded_tools = None;
+        let p = SecurityPolicy {
+            allowed_tools: None,
+            excluded_tools: None,
+            ..SecurityPolicy::default()
+        };
         assert!(p.is_tool_allowed("shell"));
         assert!(p.is_tool_allowed("spawn_subagent"));
         assert!(p.is_tool_allowed("anything_else"));
@@ -2466,16 +2468,20 @@ mod tests {
 
     #[test]
     fn is_tool_allowed_some_empty_denies_all() {
-        let mut p = SecurityPolicy::default();
-        p.allowed_tools = Some(vec![]);
+        let p = SecurityPolicy {
+            allowed_tools: Some(vec![]),
+            ..SecurityPolicy::default()
+        };
         assert!(!p.is_tool_allowed("shell"));
         assert!(!p.is_tool_allowed("spawn_subagent"));
     }
 
     #[test]
     fn is_tool_allowed_allowlist_admits_only_listed() {
-        let mut p = SecurityPolicy::default();
-        p.allowed_tools = Some(vec!["shell".into(), "memory_recall".into()]);
+        let p = SecurityPolicy {
+            allowed_tools: Some(vec!["shell".into(), "memory_recall".into()]),
+            ..SecurityPolicy::default()
+        };
         assert!(p.is_tool_allowed("shell"));
         assert!(p.is_tool_allowed("memory_recall"));
         assert!(!p.is_tool_allowed("spawn_subagent"));
@@ -2484,9 +2490,11 @@ mod tests {
 
     #[test]
     fn is_tool_allowed_excluded_overrides_allowlist() {
-        let mut p = SecurityPolicy::default();
-        p.allowed_tools = Some(vec!["shell".into(), "spawn_subagent".into()]);
-        p.excluded_tools = Some(vec!["spawn_subagent".into()]);
+        let p = SecurityPolicy {
+            allowed_tools: Some(vec!["shell".into(), "spawn_subagent".into()]),
+            excluded_tools: Some(vec!["spawn_subagent".into()]),
+            ..SecurityPolicy::default()
+        };
         assert!(p.is_tool_allowed("shell"));
         assert!(
             !p.is_tool_allowed("spawn_subagent"),
@@ -2496,9 +2504,11 @@ mod tests {
 
     #[test]
     fn is_tool_allowed_excluded_alone_subtracts_from_unrestricted() {
-        let mut p = SecurityPolicy::default();
-        p.allowed_tools = None;
-        p.excluded_tools = Some(vec!["spawn_subagent".into()]);
+        let p = SecurityPolicy {
+            allowed_tools: None,
+            excluded_tools: Some(vec!["spawn_subagent".into()]),
+            ..SecurityPolicy::default()
+        };
         assert!(p.is_tool_allowed("shell"));
         assert!(!p.is_tool_allowed("spawn_subagent"));
     }

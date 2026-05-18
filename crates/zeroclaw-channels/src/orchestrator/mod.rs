@@ -9200,6 +9200,15 @@ BTC is currently around $65,000 based on latest tool output."#
 
     struct MockPriceTool;
 
+    impl ::zeroclaw_api::attribution::Attributable for MockPriceTool {
+        fn role(&self) -> ::zeroclaw_api::attribution::Role {
+            ::zeroclaw_api::attribution::Role::Tool(::zeroclaw_api::attribution::ToolKind::Plugin)
+        }
+        fn alias(&self) -> &str {
+            <Self as ::zeroclaw_api::tool::Tool>::name(self)
+        }
+    }
+
     #[derive(Default)]
     struct ModelCaptureModelProvider {
         call_count: AtomicUsize,

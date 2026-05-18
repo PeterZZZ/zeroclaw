@@ -321,6 +321,15 @@ async fn agent_survives_large_tool_output() {
     /// Tool that returns a very large output.
     struct LargeOutputTool;
 
+    impl ::zeroclaw_api::attribution::Attributable for LargeOutputTool {
+        fn role(&self) -> ::zeroclaw_api::attribution::Role {
+            ::zeroclaw_api::attribution::Role::Tool(::zeroclaw_api::attribution::ToolKind::Plugin)
+        }
+        fn alias(&self) -> &str {
+            <Self as Tool>::name(self)
+        }
+    }
+
     #[async_trait::async_trait]
     impl Tool for LargeOutputTool {
         fn name(&self) -> &str {

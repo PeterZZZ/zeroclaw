@@ -18,7 +18,11 @@
 
 use async_trait::async_trait;
 use std::path::PathBuf;
+use zeroclaw_api::attribution::ToolKind;
 use zeroclaw_api::tool::{Tool, ToolResult};
+use zeroclaw_api::tool_attribution;
+
+tool_attribution!(DatasheetTool, ToolKind::Plugin);
 
 // ── DatasheetManager ─────────────────────────────────────────────────────────
 

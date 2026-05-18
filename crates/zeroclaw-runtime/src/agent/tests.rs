@@ -35,6 +35,8 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use zeroclaw_config::schema::{AliasedAgentConfig, MemoryConfig};
 use zeroclaw_memory::{self, Memory};
+
+zeroclaw_api::mock_tool_attribution!(CountingTool, EchoTool, FailingTool, PanickingTool);
 use zeroclaw_providers::{
     ChatMessage, ChatRequest, ChatResponse, ConversationMessage, ModelProvider, ToolCall,
     ToolResultMessage,

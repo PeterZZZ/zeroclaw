@@ -315,6 +315,8 @@ mod tests {
     use async_trait::async_trait;
     use zeroclaw_api::tool::Tool;
 
+    zeroclaw_api::mock_tool_attribution!(TestTool);
+
     struct TestTool;
 
     #[async_trait]
