@@ -1,11 +1,66 @@
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
 use zeroclaw_api::channel::{Channel, ChannelMessage, SendMessage};
 
 const MAX_MATTERMOST_AUDIO_BYTES: u64 = 25 * 1024 * 1024;
+/// Cadence at which auto-discovery re-runs to pick up newly-created DMs
+/// and team channel changes.
+const DISCOVERY_REFRESH: Duration = Duration::from_secs(60);
+/// Poll interval per discovery iteration. Matches the previous single-channel
+/// cadence so operators see no change in latency.
+const POLL_INTERVAL: Duration = Duration::from_secs(3);
+
+/// One channel the bot will poll. `is_direct` flags DM (`type=D`) and group DM
+/// (`type=G`) channels so the receive path can bypass `mention_only` for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetChannel {
+    pub id: String,
+    pub is_direct: bool,
+}
+
+/// Mattermost channel `type` is a single-character code: `O` = open/public,
+/// `P` = private, `G` = group DM, `D` = direct DM. Group DMs are private
+/// multi-user conversations and share the no-ambient-noise semantic with 1:1
+/// DMs, so both are treated as "direct" for `mention_only` purposes.
+pub(crate) fn is_direct_channel(channel_type: &str) -> bool {
+    matches!(channel_type, "D" | "G")
+}
+
+/// Filter a raw `/api/v4/users/me/channels` response down to the channels the
+/// bot should poll. Public/private channels are gated by `team_ids` (empty =
+/// all teams); DM/group-DM channels are gated by `discover_dms`. DMs carry
+/// no `team_id`, so the team allowlist deliberately doesn't apply to them.
+pub(crate) fn filter_discovered_channels(
+    channels: &[serde_json::Value],
+    team_ids: &[String],
+    discover_dms: bool,
+) -> Vec<TargetChannel> {
+    channels
+        .iter()
+        .filter_map(|c| {
+            let id = c.get("id").and_then(|v| v.as_str())?;
+            let ty = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let team = c.get("team_id").and_then(|v| v.as_str()).unwrap_or("");
+            let direct = is_direct_channel(ty);
+            if direct {
+                if !discover_dms {
+                    return None;
+                }
+            } else if !team_ids.is_empty() && !team_ids.iter().any(|allowed| allowed == team) {
+                return None;
+            }
+            Some(TargetChannel {
+                id: id.to_string(),
+                is_direct: direct,
+            })
+        })
+        .collect()
+}
 
 /// Mattermost channel — polls channel posts via REST API v4.
 /// Mattermost is API-compatible with many Slack patterns but uses a dedicated v4 structure.
@@ -25,9 +80,13 @@ pub struct MattermostChannel {
     /// inside `get_bot_identity`. Read by `self_handle` /
     /// `self_addressed_mention` so the identity block reaches the prompt.
     bot_identity: OnceCell<(String, String)>,
-    /// Channel IDs to listen on. Currently only the first is used at runtime;
-    /// multi-channel listening lands separately.
+    /// Channel IDs from config. Empty or `["*"]` triggers auto-discovery.
     channel_ids: Vec<String>,
+    /// Team allowlist for auto-discovery. Empty = all teams.
+    team_ids: Vec<String>,
+    /// When true, auto-discovery includes DM (`type=D`) and group DM (`type=G`)
+    /// channels. Defaults to true at construction; `with_discover_dms` overrides.
+    discover_dms: bool,
     /// The alias key under `[channels.mattermost.<alias>]` this handle is
     /// bound to. Used to scope peer-group writes and resolver lookups.
     alias: String,
@@ -69,6 +128,8 @@ impl MattermostChannel {
             session_token: OnceCell::new(),
             bot_identity: OnceCell::new(),
             channel_ids,
+            team_ids: Vec::new(),
+            discover_dms: true,
             alias: alias.into(),
             peer_resolver,
             thread_replies,
@@ -78,6 +139,101 @@ impl MattermostChannel {
             transcription: None,
             transcription_manager: None,
         }
+    }
+
+    /// Restrict auto-discovery to the given team IDs. Empty = all teams the
+    /// bot belongs to. No effect when `channel_ids` lists explicit IDs.
+    pub fn with_team_ids(mut self, team_ids: Vec<String>) -> Self {
+        self.team_ids = team_ids;
+        self
+    }
+
+    /// Include (`true`, default) or omit (`false`) DM and group-DM channels
+    /// during auto-discovery. No effect when `channel_ids` lists explicit IDs.
+    pub fn with_discover_dms(mut self, discover_dms: bool) -> Self {
+        self.discover_dms = discover_dms;
+        self
+    }
+
+    /// Normalize a raw `channel_ids` entry: trim, drop blanks and the `*`
+    /// wildcard sentinel. Returns `None` when the entry should not contribute
+    /// to the explicit-scope list.
+    pub(crate) fn normalized_channel_id(input: Option<&str>) -> Option<String> {
+        input
+            .map(str::trim)
+            .filter(|v| !v.is_empty() && *v != "*")
+            .map(ToOwned::to_owned)
+    }
+
+    /// Resolve the explicit channel scope from `channel_ids`. Returns `None`
+    /// when the config asks for auto-discovery (empty list or wildcard-only).
+    pub(crate) fn scoped_channel_ids(&self) -> Option<Vec<String>> {
+        let mut seen = HashSet::new();
+        let ids: Vec<String> = self
+            .channel_ids
+            .iter()
+            .filter_map(|entry| Self::normalized_channel_id(Some(entry)))
+            .filter(|id| seen.insert(id.clone()))
+            .collect();
+        if ids.is_empty() { None } else { Some(ids) }
+    }
+
+    /// Resolve the set of channels this listener should poll, combining:
+    ///
+    /// - explicit `channel_ids` from config (looked up to learn each channel's
+    ///   type so the DM/non-DM distinction reaches the receive path), or
+    /// - auto-discovery via `/api/v4/users/me/channels` filtered by
+    ///   `team_ids` and `discover_dms`.
+    pub(crate) async fn list_target_channels(&self) -> Result<Vec<TargetChannel>> {
+        let token = self.token().await?.to_string();
+        if let Some(ids) = self.scoped_channel_ids() {
+            let mut out = Vec::with_capacity(ids.len());
+            for id in ids {
+                let resp = self
+                    .http_client()
+                    .get(format!("{}/api/v4/channels/{}", self.base_url, id))
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                    .with_context(|| format!("GET /channels/{id} failed"))?;
+                if !resp.status().is_success() {
+                    bail!(
+                        "GET /channels/{id} returned {}: explicit channel_id is not accessible to this bot",
+                        resp.status()
+                    );
+                }
+                let body: serde_json::Value = resp
+                    .json()
+                    .await
+                    .with_context(|| format!("decode /channels/{id} body"))?;
+                let ty = body.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                out.push(TargetChannel {
+                    id,
+                    is_direct: is_direct_channel(ty),
+                });
+            }
+            return Ok(out);
+        }
+        let resp = self
+            .http_client()
+            .get(format!("{}/api/v4/users/me/channels", self.base_url))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .context("GET /users/me/channels failed")?;
+        if !resp.status().is_success() {
+            bail!("GET /users/me/channels returned {}", resp.status());
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .context("decode /users/me/channels body")?;
+        let arr = body.as_array().cloned().unwrap_or_default();
+        Ok(filter_discovered_channels(
+            &arr,
+            &self.team_ids,
+            self.discover_dms,
+        ))
     }
 
     /// Return the alias under `[channels.mattermost.<alias>]` that this
@@ -459,115 +615,95 @@ impl Channel for MattermostChannel {
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
-        let channel_id = self.channel_ids.first().cloned().ok_or_else(|| {
-            anyhow::anyhow!("channel_ids must contain at least one entry for listening")
-        })?;
-        if self.channel_ids.len() > 1 {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
-                &format!(
-                    "channel_ids has {} entries; only the first ({channel_id}) is currently used for listening",
-                    self.channel_ids.len()
-                )
-            );
-        }
-
         // Resolve auth up front so misconfiguration fails fast at listen-time.
         let initial_token = self.token().await?.to_string();
-
         let (bot_user_id, bot_username) = self.get_bot_identity().await;
-        #[allow(clippy::cast_possible_truncation)]
-        let mut last_create_at = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()) as i64;
+
+        let auto_discover = self.scoped_channel_ids().is_none();
+        let mut target_channels = self.list_target_channels().await?;
+        let mut last_discovery = Instant::now();
+        let mut last_create_at_by_channel: HashMap<String, i64> = HashMap::new();
 
         ::zeroclaw_log::record!(
             INFO,
-            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
-            &format!("channel listening on {}...", channel_id)
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(
+                ::serde_json::json!({
+                    "alias": self.alias,
+                    "channel_count": target_channels.len(),
+                    "auto_discover": auto_discover,
+                    "team_ids": self.team_ids,
+                    "discover_dms": self.discover_dms,
+                })
+            ),
+            "Mattermost channel listening"
         );
 
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            tokio::time::sleep(POLL_INTERVAL).await;
 
-            let resp = match self
-                .http_client()
-                .get(format!(
-                    "{}/api/v4/channels/{}/posts",
-                    self.base_url, channel_id
-                ))
-                .bearer_auth(&initial_token)
-                .query(&[("since", last_create_at.to_string())])
-                .send()
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    ::zeroclaw_log::record!(
-                        WARN,
-                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+            if auto_discover && last_discovery.elapsed() >= DISCOVERY_REFRESH {
+                match self.list_target_channels().await {
+                    Ok(refreshed) => {
+                        if refreshed != target_channels {
+                            ::zeroclaw_log::record!(
+                                INFO,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Note,
+                                )
+                                .with_attrs(::serde_json::json!({
+                                    "alias": self.alias,
+                                    "before": target_channels.len(),
+                                    "after": refreshed.len(),
+                                })),
+                                "Mattermost auto-discovery refreshed channel list"
+                            );
+                            target_channels = refreshed;
+                        }
+                    }
+                    Err(e) => {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Note,
+                            )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
-                        "poll error"
-                    );
-                    continue;
+                            .with_attrs(::serde_json::json!({
+                                "alias": self.alias,
+                                "error": e.to_string(),
+                            })),
+                            "Mattermost auto-discovery refresh failed; keeping previous channel list"
+                        );
+                    }
                 }
-            };
+                last_discovery = Instant::now();
+            }
 
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    ::zeroclaw_log::record!(
-                        WARN,
-                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
-                        "parse error"
-                    );
-                    continue;
-                }
-            };
+            if target_channels.is_empty() {
+                continue;
+            }
 
-            if let Some(posts) = data.get("posts").and_then(|p| p.as_object()) {
-                // Process in chronological order
-                let mut post_list: Vec<_> = posts.values().collect();
-                post_list.sort_by_key(|p| p.get("create_at").and_then(|c| c.as_i64()).unwrap_or(0));
+            #[allow(clippy::cast_possible_truncation)]
+            let bootstrap_ms = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()) as i64;
 
-                let last_create_at_before_this_batch = last_create_at;
-                for post in post_list {
-                    let create_at = post
-                        .get("create_at")
-                        .and_then(|c| c.as_i64())
-                        .unwrap_or(last_create_at);
-                    last_create_at = last_create_at.max(create_at);
-
-                    let effective_text = if post
-                        .get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("")
-                        .trim()
-                        .is_empty()
-                        && post_has_audio_attachment(post)
-                    {
-                        self.try_transcribe_audio_attachment(post).await
-                    } else {
-                        None
-                    };
-
-                    if let Some(channel_msg) = self.parse_mattermost_post(
-                        post,
+            for target in target_channels.clone() {
+                if self
+                    .poll_channel(
+                        &target,
+                        &initial_token,
                         &bot_user_id,
                         &bot_username,
-                        last_create_at_before_this_batch,
-                        &channel_id,
-                        effective_text.as_deref(),
-                    ) && tx.send(channel_msg).await.is_err()
-                    {
-                        return Ok(());
-                    }
+                        bootstrap_ms,
+                        &mut last_create_at_by_channel,
+                        &tx,
+                    )
+                    .await
+                {
+                    return Ok(());
                 }
             }
         }
@@ -647,6 +783,116 @@ impl Channel for MattermostChannel {
 }
 
 impl MattermostChannel {
+    /// Poll one target channel for new posts since its cursor, dispatch each
+    /// post through `parse_mattermost_post`, and update the cursor in place.
+    /// Returns `true` when the outbound mpsc was closed (caller exits the
+    /// listen loop). Errors during the poll are logged and treated as a
+    /// no-op for this iteration; the next iteration retries.
+    #[allow(clippy::too_many_arguments)]
+    async fn poll_channel(
+        &self,
+        target: &TargetChannel,
+        token: &str,
+        bot_user_id: &str,
+        bot_username: &str,
+        bootstrap_ms: i64,
+        cursors: &mut HashMap<String, i64>,
+        tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> bool {
+        let cursor = *cursors.entry(target.id.clone()).or_insert(bootstrap_ms);
+
+        let resp = match self
+            .http_client()
+            .get(format!(
+                "{}/api/v4/channels/{}/posts",
+                self.base_url, target.id
+            ))
+            .bearer_auth(token)
+            .query(&[("since", cursor.to_string())])
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                        .with_attrs(::serde_json::json!({
+                            "alias": self.alias,
+                            "channel_id": target.id,
+                            "error": e.to_string(),
+                        })),
+                    "Mattermost poll error"
+                );
+                return false;
+            }
+        };
+
+        let data: serde_json::Value = match resp.json().await {
+            Ok(d) => d,
+            Err(e) => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                        .with_attrs(::serde_json::json!({
+                            "alias": self.alias,
+                            "channel_id": target.id,
+                            "error": e.to_string(),
+                        })),
+                    "Mattermost parse error"
+                );
+                return false;
+            }
+        };
+
+        let Some(posts) = data.get("posts").and_then(|p| p.as_object()) else {
+            return false;
+        };
+
+        let mut post_list: Vec<_> = posts.values().collect();
+        post_list.sort_by_key(|p| p.get("create_at").and_then(|c| c.as_i64()).unwrap_or(0));
+
+        let cursor_before_batch = cursor;
+        let mut new_cursor = cursor;
+        for post in post_list {
+            let create_at = post
+                .get("create_at")
+                .and_then(|c| c.as_i64())
+                .unwrap_or(new_cursor);
+            new_cursor = new_cursor.max(create_at);
+
+            let effective_text = if post
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+                && post_has_audio_attachment(post)
+            {
+                self.try_transcribe_audio_attachment(post).await
+            } else {
+                None
+            };
+
+            if let Some(channel_msg) = self.parse_mattermost_post(
+                post,
+                bot_user_id,
+                bot_username,
+                cursor_before_batch,
+                &target.id,
+                effective_text.as_deref(),
+                target.is_direct,
+            ) && tx.send(channel_msg).await.is_err()
+            {
+                return true;
+            }
+        }
+        cursors.insert(target.id.clone(), new_cursor);
+        false
+    }
+
     fn parse_mattermost_post(
         &self,
         post: &serde_json::Value,
@@ -655,6 +901,7 @@ impl MattermostChannel {
         last_create_at: i64,
         channel_id: &str,
         injected_text: Option<&str>,
+        is_direct: bool,
     ) -> Option<ChannelMessage> {
         let id = post.get("id").and_then(|i| i.as_str()).unwrap_or("");
         let user_id = post.get("user_id").and_then(|u| u.as_str()).unwrap_or("");
@@ -683,8 +930,10 @@ impl MattermostChannel {
             return None;
         }
 
-        // mention_only filtering: skip messages that don't @-mention the bot.
-        let content = if self.mention_only {
+        // DM and group-DM channels have no ambient noise to filter against, so
+        // mention_only is bypassed for them. The flag still applies on public
+        // and private team channels.
+        let content = if self.mention_only && !is_direct {
             let normalized =
                 normalize_mattermost_content(effective_text, bot_user_id, bot_username, post);
             normalized?
@@ -921,6 +1170,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan789",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.sender, "user456");
@@ -959,6 +1209,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan789",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.reply_target, "chan789:post123"); // Threaded reply
@@ -995,6 +1246,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan789",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.reply_target, "chan789:root789"); // Stays in the thread
@@ -1029,6 +1281,7 @@ mod tests {
             1_500_000_000_000_i64,
             "chan789",
             None,
+            false,
         );
         assert!(msg.is_none());
     }
@@ -1062,6 +1315,7 @@ mod tests {
             1_500_000_000_000_i64,
             "chan789",
             None,
+            false,
         );
         assert!(msg.is_none());
     }
@@ -1097,6 +1351,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan789",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.reply_target, "chan789"); // No thread suffix
@@ -1134,6 +1389,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan789",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.reply_target, "chan789:root789"); // Stays in existing thread
@@ -1171,6 +1427,7 @@ mod tests {
             1_500_000_000_000_i64,
             "chan1",
             None,
+            false,
         );
         assert!(msg.is_none());
     }
@@ -1206,6 +1463,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "@mybot what is the weather?");
@@ -1242,6 +1500,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "@mybot  run status");
@@ -1278,6 +1537,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "@mybot");
@@ -1314,6 +1574,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "@MyBot hello");
@@ -1354,6 +1615,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         // Content is preserved as-is since no @username was in the text to strip.
@@ -1391,6 +1653,7 @@ mod tests {
             1_500_000_000_000_i64,
             "chan1",
             None,
+            false,
         );
         assert!(msg.is_none());
     }
@@ -1426,6 +1689,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "hey @mybot how are you?");
@@ -1463,6 +1727,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan1",
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "no mention here");
@@ -1784,6 +2049,7 @@ mod tests {
                 1_500_000_000_000_i64,
                 "chan789",
                 Some("transcript text"),
+                false,
             )
             .unwrap();
         assert_eq!(msg.content, "transcript text");
@@ -1819,6 +2085,7 @@ mod tests {
             1_500_000_000_000_i64,
             "chan789",
             None,
+            false,
         );
         assert!(msg.is_none());
     }
@@ -2028,6 +2295,309 @@ mod tests {
 
             let result = ch.try_transcribe_audio_attachment(&post).await;
             assert!(result.is_none());
+        }
+    }
+
+    // ── Multi-channel + DM contract (red) ────────────────────────────
+
+    fn make_ch_for_scope(channel_ids: Vec<String>) -> MattermostChannel {
+        MattermostChannel::new(
+            "https://mm.example.com".into(),
+            Some("token".into()),
+            None,
+            None,
+            channel_ids,
+            "mattermost_scope_alias",
+            Arc::new(|| vec!["*".into()]),
+            true,
+            false,
+        )
+    }
+
+    #[test]
+    fn normalized_channel_id_strips_wildcard_and_blank() {
+        assert_eq!(MattermostChannel::normalized_channel_id(None), None);
+        assert_eq!(MattermostChannel::normalized_channel_id(Some("")), None);
+        assert_eq!(MattermostChannel::normalized_channel_id(Some("   ")), None);
+        assert_eq!(MattermostChannel::normalized_channel_id(Some("*")), None);
+        assert_eq!(
+            MattermostChannel::normalized_channel_id(Some("  abc123 ")),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn scoped_channel_ids_empty_returns_none() {
+        let ch = make_ch_for_scope(Vec::new());
+        assert_eq!(ch.scoped_channel_ids(), None);
+    }
+
+    #[test]
+    fn scoped_channel_ids_wildcard_only_returns_none() {
+        let ch = make_ch_for_scope(vec!["*".into()]);
+        assert_eq!(ch.scoped_channel_ids(), None);
+    }
+
+    #[test]
+    fn scoped_channel_ids_explicit_returns_dedup() {
+        let ch = make_ch_for_scope(vec![
+            "abc".into(),
+            "  def  ".into(),
+            "abc".into(),
+            "*".into(),
+            "".into(),
+        ]);
+        assert_eq!(
+            ch.scoped_channel_ids(),
+            Some(vec!["abc".to_string(), "def".to_string()])
+        );
+    }
+
+    #[test]
+    fn is_direct_channel_treats_dm_and_group_dm_as_direct() {
+        assert!(is_direct_channel("D"));
+        assert!(is_direct_channel("G"));
+    }
+
+    #[test]
+    fn is_direct_channel_rejects_public_and_private_team_channels() {
+        assert!(!is_direct_channel("O"));
+        assert!(!is_direct_channel("P"));
+        assert!(!is_direct_channel(""));
+        assert!(!is_direct_channel("X"));
+    }
+
+    fn ch_obj(id: &str, ty: &str, team: &str) -> serde_json::Value {
+        json!({"id": id, "type": ty, "team_id": team})
+    }
+
+    #[test]
+    fn filter_discovered_channels_includes_all_when_no_filters() {
+        let raw = vec![
+            ch_obj("pub1", "O", "teamA"),
+            ch_obj("priv1", "P", "teamA"),
+            ch_obj("dm1", "D", ""),
+            ch_obj("gdm1", "G", ""),
+        ];
+        let kept = filter_discovered_channels(&raw, &[], true);
+        let ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["pub1", "priv1", "dm1", "gdm1"]);
+        assert!(!kept[0].is_direct);
+        assert!(!kept[1].is_direct);
+        assert!(kept[2].is_direct);
+        assert!(kept[3].is_direct);
+    }
+
+    #[test]
+    fn filter_discovered_channels_respects_team_ids_allowlist() {
+        let raw = vec![
+            ch_obj("pub_a", "O", "teamA"),
+            ch_obj("pub_b", "O", "teamB"),
+            ch_obj("priv_a", "P", "teamA"),
+        ];
+        let kept = filter_discovered_channels(&raw, &["teamA".to_string()], true);
+        let ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["pub_a", "priv_a"]);
+    }
+
+    #[test]
+    fn filter_discovered_channels_omits_dms_when_discover_dms_false() {
+        let raw = vec![
+            ch_obj("pub1", "O", "teamA"),
+            ch_obj("dm1", "D", ""),
+            ch_obj("gdm1", "G", ""),
+        ];
+        let kept = filter_discovered_channels(&raw, &[], false);
+        let ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["pub1"]);
+    }
+
+    #[test]
+    fn filter_discovered_channels_keeps_dms_regardless_of_team_ids() {
+        let raw = vec![
+            ch_obj("pub_b", "O", "teamB"),
+            ch_obj("dm1", "D", ""),
+            ch_obj("gdm1", "G", ""),
+        ];
+        let kept = filter_discovered_channels(&raw, &["teamA".to_string()], true);
+        let ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["dm1", "gdm1"]);
+    }
+
+    #[test]
+    fn mention_only_bypassed_for_direct_channels_in_parse() {
+        let ch = MattermostChannel::new(
+            "url".into(),
+            Some("token".into()),
+            None,
+            None,
+            Vec::new(),
+            "mattermost_dm_alias",
+            Arc::new(|| vec!["*".into()]),
+            false,
+            true,
+        );
+        let post = json!({
+            "id": "post1",
+            "user_id": "user1",
+            "message": "no mention here, just talking",
+            "create_at": 1_600_000_000_000_i64,
+            "root_id": ""
+        });
+
+        let msg = ch
+            .parse_mattermost_post(
+                &post,
+                "bot123",
+                "mybot",
+                1_500_000_000_000_i64,
+                "dm_channel",
+                None,
+                true,
+            )
+            .expect("DM message must bypass mention_only and produce a ChannelMessage");
+        assert_eq!(msg.content, "no mention here, just talking");
+    }
+
+    #[test]
+    fn mention_only_applied_in_parse_when_is_direct_false() {
+        let ch = MattermostChannel::new(
+            "url".into(),
+            Some("token".into()),
+            None,
+            None,
+            Vec::new(),
+            "mattermost_group_alias",
+            Arc::new(|| vec!["*".into()]),
+            false,
+            true,
+        );
+        let post = json!({
+            "id": "post1",
+            "user_id": "user1",
+            "message": "no mention here, just talking",
+            "create_at": 1_600_000_000_000_i64,
+            "root_id": ""
+        });
+
+        let msg = ch.parse_mattermost_post(
+            &post,
+            "bot123",
+            "mybot",
+            1_500_000_000_000_i64,
+            "pub_channel",
+            None,
+            false,
+        );
+        assert!(msg.is_none(), "public channel must enforce mention_only");
+    }
+
+    #[cfg(test)]
+    mod discovery_http_tests {
+        use super::*;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        #[tokio::test]
+        async fn list_target_channels_discovers_via_users_me_channels() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v4/users/me"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"id": "bot123", "username": "mybot"})),
+                )
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v4/users/me/channels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {"id": "pub_a", "type": "O", "team_id": "teamA"},
+                    {"id": "pub_b", "type": "O", "team_id": "teamB"},
+                    {"id": "dm_x",  "type": "D", "team_id": ""},
+                    {"id": "gdm_y", "type": "G", "team_id": ""},
+                ])))
+                .mount(&mock_server)
+                .await;
+
+            let ch = MattermostChannel::new(
+                mock_server.uri(),
+                Some("token".into()),
+                None,
+                None,
+                Vec::new(),
+                "mattermost_discover_alias",
+                Arc::new(|| vec!["*".into()]),
+                false,
+                false,
+            )
+            .with_team_ids(vec!["teamA".to_string()])
+            .with_discover_dms(true);
+
+            let targets = ch
+                .list_target_channels()
+                .await
+                .expect("discovery must succeed");
+            let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
+            assert_eq!(
+                ids,
+                vec!["pub_a", "dm_x", "gdm_y"],
+                "discovery should keep teamA channels and all DMs"
+            );
+            assert!(!targets[0].is_direct);
+            assert!(targets[1].is_direct);
+            assert!(targets[2].is_direct);
+        }
+
+        #[tokio::test]
+        async fn list_target_channels_explicit_ids_skip_discovery_and_lookup_types() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v4/channels/explicit_dm"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "explicit_dm",
+                    "type": "D",
+                    "team_id": ""
+                })))
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v4/channels/explicit_pub"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "explicit_pub",
+                    "type": "O",
+                    "team_id": "teamA"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let ch = MattermostChannel::new(
+                mock_server.uri(),
+                Some("token".into()),
+                None,
+                None,
+                vec!["explicit_dm".into(), "explicit_pub".into()],
+                "mattermost_explicit_alias",
+                Arc::new(|| vec!["*".into()]),
+                false,
+                false,
+            );
+
+            let targets = ch
+                .list_target_channels()
+                .await
+                .expect("explicit lookup must succeed");
+            let by_id: std::collections::HashMap<_, _> = targets
+                .iter()
+                .map(|t| (t.id.as_str(), t.is_direct))
+                .collect();
+            assert_eq!(by_id.get("explicit_dm"), Some(&true));
+            assert_eq!(by_id.get("explicit_pub"), Some(&false));
+            assert_eq!(targets.len(), 2);
         }
     }
 }

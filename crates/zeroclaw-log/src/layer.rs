@@ -630,31 +630,44 @@ mod e2e_tests {
             .await;
         }
 
-        // Drain captured events and find ours.
+        // Drain captured events and find ours. `recv` is awaited inside a
+        // deadline so the receiver can recover from `Lagged` errors caused
+        // by other workspace tests firing `record!` into the same global
+        // broadcast hook in parallel; a single Lagged would otherwise abort
+        // the search prematurely.
         let mut found = false;
-        while let Ok(value) = rx.try_recv() {
-            if value
-                .get("message")
-                .and_then(|v| v.as_str())
-                .map(|s| s.contains("attribution-span e2e test"))
-                .unwrap_or(false)
-            {
-                let zc = value.get("zeroclaw").expect("zeroclaw block present");
-                assert_eq!(
-                    zc.get("channel").and_then(|v| v.as_str()),
-                    Some("telegram.clamps"),
-                    "expected channel composite, got: {zc:?}"
-                );
-                assert_eq!(
-                    zc.get("channel_type").and_then(|v| v.as_str()),
-                    Some("telegram"),
-                );
-                assert_eq!(
-                    zc.get("channel_alias").and_then(|v| v.as_str()),
-                    Some("clamps"),
-                );
-                found = true;
-                break;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !found && std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let step = remaining.min(std::time::Duration::from_millis(50));
+            match tokio::time::timeout(step, rx.recv()).await {
+                Ok(Ok(value)) => {
+                    if value
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.contains("attribution-span e2e test"))
+                        .unwrap_or(false)
+                    {
+                        let zc = value.get("zeroclaw").expect("zeroclaw block present");
+                        assert_eq!(
+                            zc.get("channel").and_then(|v| v.as_str()),
+                            Some("telegram.clamps"),
+                            "expected channel composite, got: {zc:?}"
+                        );
+                        assert_eq!(
+                            zc.get("channel_type").and_then(|v| v.as_str()),
+                            Some("telegram"),
+                        );
+                        assert_eq!(
+                            zc.get("channel_alias").and_then(|v| v.as_str()),
+                            Some("clamps"),
+                        );
+                        found = true;
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                Err(_elapsed) => {}
             }
         }
         assert!(

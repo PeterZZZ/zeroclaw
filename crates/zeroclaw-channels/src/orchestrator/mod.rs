@@ -4723,17 +4723,21 @@ fn build_channel_by_id(
                 let alias = alias.clone();
                 Arc::new(move || cfg_arc.read().channel_external_peers("mattermost", &alias))
             };
-            Ok(Arc::new(MattermostChannel::new(
-                mm.url.clone(),
-                mm.bot_token.clone(),
-                mm.login_id.clone(),
-                mm.password.clone(),
-                mm.channel_ids.clone(),
-                alias,
-                peer_resolver,
-                mm.thread_replies.unwrap_or(true),
-                mm.mention_only.unwrap_or(false),
-            )))
+            Ok(Arc::new(
+                MattermostChannel::new(
+                    mm.url.clone(),
+                    mm.bot_token.clone(),
+                    mm.login_id.clone(),
+                    mm.password.clone(),
+                    mm.channel_ids.clone(),
+                    alias,
+                    peer_resolver,
+                    mm.thread_replies.unwrap_or(true),
+                    mm.mention_only.unwrap_or(false),
+                )
+                .with_team_ids(mm.team_ids.clone())
+                .with_discover_dms(mm.discover_dms.unwrap_or(true)),
+            ))
         }
         "signal" => {
             let sg = config
@@ -5421,6 +5425,8 @@ fn collect_configured_channels(
                     mm.thread_replies.unwrap_or(true),
                     mm.mention_only.unwrap_or(false),
                 )
+                .with_team_ids(mm.team_ids.clone())
+                .with_discover_dms(mm.discover_dms.unwrap_or(true))
                 .with_proxy_url(mm.proxy_url.clone())
                 .with_transcription(config.transcription.clone()),
             ),
@@ -13513,6 +13519,8 @@ This is an example JSON object for profile settings."#;
                 login_id: None,
                 password: None,
                 channel_ids: vec!["channel-1".to_string()],
+                team_ids: vec![],
+                discover_dms: None,
                 thread_replies: Some(true),
                 mention_only: Some(false),
                 interrupt_on_new_message: false,

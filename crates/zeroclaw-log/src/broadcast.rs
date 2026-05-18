@@ -52,8 +52,11 @@ pub fn subscribe() -> Option<broadcast::Receiver<Value>> {
 }
 
 /// Test-only convenience: ensure a broadcast hook is installed and
-/// return a receiver. If no hook is set yet, install one with a 1024-
-/// element ring buffer and subscribe. Idempotent.
+/// return a receiver. If no hook is set yet, install one with a 64K
+/// ring buffer (large enough that parallel workspace tests firing
+/// `record!` into the global hook can't evict the test's own event
+/// during the short window between emit and receive) and subscribe.
+/// Idempotent.
 #[doc(hidden)]
 #[must_use]
 pub fn subscribe_or_install() -> broadcast::Receiver<Value> {
@@ -63,7 +66,7 @@ pub fn subscribe_or_install() -> broadcast::Receiver<Value> {
             return sender.subscribe();
         }
     }
-    let (tx, rx) = broadcast::channel(1024);
+    let (tx, rx) = broadcast::channel(65_536);
     set_broadcast_hook(tx);
     rx
 }

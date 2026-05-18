@@ -1283,6 +1283,8 @@ mod tests {
                 login_id: None,
                 password: None,
                 channel_ids: vec!["channel-id".into()],
+                team_ids: vec![],
+                discover_dms: None,
                 thread_replies: Some(true),
                 mention_only: Some(false),
                 interrupt_on_new_message: false,

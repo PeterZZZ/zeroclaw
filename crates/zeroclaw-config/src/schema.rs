@@ -10399,17 +10399,35 @@ pub struct MattermostConfig {
     #[cfg_attr(feature = "schema-export", schemars(extend("x-secret" = true)))]
     #[serde(default)]
     pub password: Option<String>,
-    /// Channel IDs to restrict the bot to. Empty = listen across all
-    /// accessible channels. Migrated from the legacy `channel_id` singular
+    /// Channel IDs to restrict the bot to. Empty or `["*"]` = auto-discover
+    /// every channel the bot can read (public, private, DMs, group DMs) and
+    /// poll them all. Explicit IDs disable discovery and pin the bot to the
+    /// listed channels only. Migrated from the legacy `channel_id` singular
     /// field.
     #[serde(default)]
     pub channel_ids: Vec<String>,
+    /// Team IDs to restrict auto-discovery to. Empty = discover across every
+    /// team the bot belongs to. Non-empty = only discover public/private
+    /// channels whose `team_id` is in this list. DMs and group DMs (which
+    /// have no team) are governed by `discover_dms` instead.
+    #[serde(default)]
+    pub team_ids: Vec<String>,
+    /// When true (default), auto-discovery includes DM (`type=D`) and group
+    /// DM (`type=G`) channels. Set false to restrict the bot to public and
+    /// private team channels only. Has no effect when `channel_ids` lists
+    /// explicit IDs. Defaults to `true` at the call site via
+    /// `discover_dms.unwrap_or(true)`.
+    #[serde(default)]
+    pub discover_dms: Option<bool>,
     /// When true (default), replies thread on the original post.
     /// When false, replies go to the channel root.
     #[serde(default)]
     pub thread_replies: Option<bool>,
-    /// When true, only respond to messages that @-mention the bot.
-    /// Other messages in the channel are silently ignored.
+    /// When true, only respond to messages that @-mention the bot. Other
+    /// messages in the channel are silently ignored. DM and group DM
+    /// channels always bypass this filter: a 1:1 (or small-group) direct
+    /// conversation has no ambient noise to gate against, so every message
+    /// is treated as addressed to the bot.
     #[serde(default)]
     pub mention_only: Option<bool>,
     /// When true, a newer Mattermost message from the same sender in the same channel
