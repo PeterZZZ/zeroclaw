@@ -245,22 +245,6 @@ impl V2Config {
             );
         }
 
-        // 4. cron → restructure
-        if let Some(cron_value) = cron {
-            let (new_cron, scheduler_extras) = restructure_cron(cron_value);
-            if !new_cron.is_empty() {
-                passthrough.insert("cron".to_string(), toml::Value::Table(new_cron));
-            }
-            if !scheduler_extras.is_empty() {
-                merge_into_table(&mut passthrough, "scheduler", scheduler_extras);
-            }
-            ::zeroclaw_log::record!(
-                INFO,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
-                "[cron] restructured into [cron.<alias>] + [scheduler]"
-            );
-        }
-
         // V3 eradicated provider fallback. Strip the V2 reliability
         // fields that referenced it; the rest of [reliability] stays.
         if let Some(toml::Value::Table(reliability_table)) = passthrough.get_mut("reliability") {
@@ -396,6 +380,21 @@ impl V2Config {
             );
         }
 
+        if let Some(cron_value) = cron {
+            let (new_cron, scheduler_extras) = restructure_cron(cron_value);
+            if !new_cron.is_empty() {
+                passthrough.insert("cron".to_string(), toml::Value::Table(new_cron));
+            }
+            if !scheduler_extras.is_empty() {
+                merge_into_table(&mut passthrough, "scheduler", scheduler_extras);
+            }
+            ::zeroclaw_log::record!(
+                INFO,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                "[cron] restructured into [cron.<alias>] + [scheduler]"
+            );
+        }
+
         // V3 makes agents explicit — V1/V2 had an implicit single-agent
         // model. Strip inline brain fields onto provider aliases; if no
         // [agents] blocks but brain config exists, synthesize a default
@@ -506,6 +505,7 @@ fn restructure_cron(cron_value: toml::Value) -> (toml::Table, toml::Table) {
             let stripped = match job {
                 toml::Value::Table(mut t) => {
                     t.remove("id");
+                    dot_delivery_channel(&mut t);
                     toml::Value::Table(t)
                 }
                 other => other,
@@ -535,6 +535,18 @@ fn restructure_cron(cron_value: toml::Value) -> (toml::Table, toml::Table) {
     }
 
     (new_cron, scheduler_extras)
+}
+
+fn dot_delivery_channel(job: &mut toml::Table) {
+    let Some(toml::Value::Table(delivery)) = job.get_mut("delivery") else {
+        return;
+    };
+    let Some(toml::Value::String(channel)) = delivery.get_mut("channel") else {
+        return;
+    };
+    if !channel.contains('.') {
+        *channel = format!("{channel}.default");
+    }
 }
 
 /// Normalize a V2 provider type string to its V3 canonical name plus the

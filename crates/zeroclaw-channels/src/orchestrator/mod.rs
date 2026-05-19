@@ -7259,94 +7259,83 @@ pub async fn deliver_announcement(
         return ch.send(&make_msg(&safe_output)).await;
     }
 
-    match channel.to_ascii_lowercase().as_str() {
+    let (raw_type, alias) = channel.split_once('.').ok_or_else(|| {
+        anyhow::Error::msg(format!(
+            "delivery channel {channel:?} must be a dotted <type>.<alias> ref (e.g. telegram.work)"
+        ))
+    })?;
+    let channel_type = raw_type.to_ascii_lowercase();
+    let not_configured = || {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+            &format!("[channels.{channel_type}.{alias}] not configured")
+        );
+        anyhow::Error::msg(format!("[channels.{channel_type}.{alias}] not configured"))
+    };
+    match channel_type.as_str() {
         #[cfg(feature = "channel-telegram")]
         "telegram" => {
-            let tg = config.channels.telegram.get("default").ok_or_else(|| {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "telegram channel not configured"
-                );
-                anyhow::Error::msg("telegram channel not configured")
-            })?;
-            // One-shot delivery: a snapshot resolver is sufficient
-            // because the channel handle is dropped immediately after
-            // the single send call. No long-running cache risk.
-            let peers = config.channel_external_peers("telegram", "default");
+            let tg = config
+                .channels
+                .telegram
+                .get(alias)
+                .ok_or_else(not_configured)?;
+            let peers = config.channel_external_peers("telegram", alias);
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
                 Arc::new(move || peers.clone());
-            let ch = TelegramChannel::new(
-                tg.bot_token.clone(),
-                "default",
-                peer_resolver,
-                tg.mention_only,
-            );
+            let ch =
+                TelegramChannel::new(tg.bot_token.clone(), alias, peer_resolver, tg.mention_only);
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         "discord" => {
-            let dc = config.channels.discord.get("default").ok_or_else(|| {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "discord channel not configured"
-                );
-                anyhow::Error::msg("discord channel not configured")
-            })?;
-            // One-shot delivery: snapshot resolver is sufficient.
-            let peers = config.channel_external_peers("discord", "default");
+            let dc = config
+                .channels
+                .discord
+                .get(alias)
+                .ok_or_else(not_configured)?;
+            let peers = config.channel_external_peers("discord", alias);
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
                 Arc::new(move || peers.clone());
             let ch = DiscordChannel::new(
                 dc.bot_token.clone(),
                 dc.guild_ids.clone(),
-                "default",
+                alias,
                 peer_resolver,
                 dc.listen_to_bots,
                 dc.mention_only,
             )
             .with_channel_ids(dc.channel_ids.clone())
-            .with_workspace_dir(config.data_dir.clone());
+            .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         "slack" => {
-            let sl = config.channels.slack.get("default").ok_or_else(|| {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "slack channel not configured"
-                );
-                anyhow::Error::msg("slack channel not configured")
-            })?;
-            // One-shot delivery: snapshot resolver is sufficient.
-            let peers = config.channel_external_peers("slack", "default");
+            let sl = config
+                .channels
+                .slack
+                .get(alias)
+                .ok_or_else(not_configured)?;
+            let peers = config.channel_external_peers("slack", alias);
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
                 Arc::new(move || peers.clone());
             let ch = SlackChannel::new(
                 sl.bot_token.clone(),
                 sl.app_token.clone(),
                 sl.channel_ids.clone(),
-                "default",
+                alias,
                 peer_resolver,
             )
-            .with_workspace_dir(config.data_dir.clone());
+            .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         "signal" => {
-            let sg = config.channels.signal.get("default").ok_or_else(|| {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "signal channel not configured"
-                );
-                anyhow::Error::msg("signal channel not configured")
-            })?;
-            // One-shot delivery: snapshot resolver is sufficient.
-            let peers = config.channel_external_peers("signal", "default");
+            let sg = config
+                .channels
+                .signal
+                .get(alias)
+                .ok_or_else(not_configured)?;
+            let peers = config.channel_external_peers("signal", alias);
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
                 Arc::new(move || peers.clone());
             let ch = SignalChannel::new(
@@ -7354,7 +7343,7 @@ pub async fn deliver_announcement(
                 sg.account.clone(),
                 sg.group_ids.clone(),
                 sg.dm_only,
-                "default",
+                alias,
                 peer_resolver,
                 sg.ignore_attachments,
                 sg.ignore_stories,
@@ -7363,29 +7352,22 @@ pub async fn deliver_announcement(
         }
         #[cfg(feature = "channel-wechat")]
         "wechat" => {
-            let wc = config.channels.wechat.get("default").ok_or_else(|| {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "wechat channel not configured"
-                );
-                anyhow::Error::msg("wechat channel not configured")
-            })?;
-            // One-shot delivery: snapshot resolver is sufficient. No
-            // `.with_persistence` — paired-user writes need a long-running
-            // shared Config handle which this path does not have.
-            let peers = config.channel_external_peers("wechat", "default");
+            let wc = config
+                .channels
+                .wechat
+                .get(alias)
+                .ok_or_else(not_configured)?;
+            let peers = config.channel_external_peers("wechat", alias);
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
                 Arc::new(move || peers.clone());
             let ch = WeChatChannel::new(
-                "default",
+                alias,
                 peer_resolver,
                 wc.api_base_url.clone(),
                 wc.cdn_base_url.clone(),
                 wc.state_dir.as_ref().map(std::path::PathBuf::from),
             )?
-            .with_workspace_dir(config.data_dir.clone());
+            .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         #[cfg(not(feature = "channel-wechat"))]
@@ -7393,22 +7375,13 @@ pub async fn deliver_announcement(
             anyhow::bail!("WeChat channel requires the `channel-wechat` feature");
         }
         "webhook" => {
-            // FIXME (alias audit task): `.get("default")` is a v0.8.0
-            // alias-rule violation — this branch picks the literally-
-            // named "default" entry. Replace with a real alias-resolution
-            // path (e.g. first enabled, or operator-selected) when the
-            // direct-send delivery surface gets reworked.
-            let (alias, wh) = config.channels.webhook.iter().next().ok_or_else(|| {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "webhook channel not configured"
-                );
-                anyhow::Error::msg("webhook channel not configured")
-            })?;
+            let wh = config
+                .channels
+                .webhook
+                .get(alias)
+                .ok_or_else(not_configured)?;
             let ch = WebhookChannel::new(
-                alias.clone(),
+                alias.to_string(),
                 wh.port,
                 wh.listen_path.clone(),
                 wh.send_url.clone(),
