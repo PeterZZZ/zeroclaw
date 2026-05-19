@@ -2029,7 +2029,7 @@ function MemoriesTab() {
           {visibleEntries.map((entry) => (
             <div
               key={entry.id}
-              className="flex items-start justify-between gap-3 py-3 px-4 rounded-xl"
+              className="flex items-center justify-between gap-3 py-3 px-4 rounded-xl"
               style={{ background: 'var(--pc-bg-elevated)' }}
             >
               <div className="flex-1 min-w-0">
