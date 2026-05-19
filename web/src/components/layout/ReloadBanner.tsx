@@ -60,7 +60,7 @@ export default function ReloadBanner() {
 
   return (
     <div
-      className="px-4 py-3 border-b flex items-start gap-3"
+      className="px-4 py-3 border-b flex items-center gap-3"
       style={{
         background: 'rgba(245, 180, 0, 0.06)',
         borderColor: 'rgba(245, 180, 0, 0.25)',
