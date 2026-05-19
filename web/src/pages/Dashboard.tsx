@@ -1941,7 +1941,7 @@ function MemoriesTab() {
           title="Add a memory entry"
         >
           <Plus className="h-3 w-3" />
-          Add memory
+          {t('dashboard.add_memory')}
         </button>
 
         <div className="ml-auto flex items-center gap-2 flex-wrap">
@@ -2109,7 +2109,7 @@ function MemoriesTab() {
                 className="text-lg font-semibold"
                 style={{ color: 'var(--pc-text-primary)' }}
               >
-                Add memory
+                {t('dashboard.add_memory')}
               </h3>
               <button
                 type="button"

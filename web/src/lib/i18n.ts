@@ -431,6 +431,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'dashboard.overview': 'Overview',
     'dashboard.system_info': 'System Information',
     'dashboard.quick_actions': 'Quick Actions',
+    'dashboard.add_memory': 'Add memory',
 
     // Agent / Chat
     'agent.title': 'Agent Chat',
