@@ -49,10 +49,16 @@ impl Tool for ArduinoUploadTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let code = args
-            .get("code")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'code' parameter"))?;
+        let code = args.get("code").and_then(|v| v.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "code"})),
+                "arduino_upload tool: missing parameter"
+            );
+            anyhow::Error::msg("Missing 'code' parameter")
+        })?;
 
         if code.trim().is_empty() {
             return Ok(ToolResult {

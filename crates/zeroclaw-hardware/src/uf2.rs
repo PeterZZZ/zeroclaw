@@ -62,7 +62,15 @@ pub fn find_rpi_rp2_mount() -> Option<PathBuf> {
 pub fn ensure_firmware_dir() -> Result<PathBuf> {
     use directories::BaseDirs;
 
-    let base = BaseDirs::new().ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+            "cannot determine the user home directory"
+        );
+        anyhow::Error::msg("cannot determine home directory")
+    })?;
 
     let firmware_dir = base
         .home_dir()
@@ -135,7 +143,16 @@ pub async fn flash_uf2(mount_point: &Path, firmware_dir: &Path) -> Result<()> {
         let dst = uf2_dst.clone();
         let result = tokio::task::spawn_blocking(move || std::fs::copy(&src, &dst))
             .await
-            .map_err(|e| anyhow::anyhow!("copy task panicked: {e}"));
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "UF2 copy task panicked"
+                );
+                anyhow::Error::msg(format!("copy task panicked: {e}"))
+            });
 
         match result {
             Ok(Ok(_)) => {
@@ -252,7 +269,7 @@ pub async fn flash_uf2(mount_point: &Path, firmware_dir: &Path) -> Result<()> {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "sudo cp spawn failed"
             ),
         }

@@ -184,7 +184,7 @@ pub fn hydrate_from_snapshot(workspace_dir: &Path) -> Result<usize> {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string(), "key": key})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e), "key": key})),
                     "hydrate: failed to insert key ''"
                 );
             }

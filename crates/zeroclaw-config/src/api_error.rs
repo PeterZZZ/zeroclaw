@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn from_validation_uses_message() {
-        let anyhow_err = anyhow::anyhow!("gateway.host must not be empty");
+        let anyhow_err = anyhow::Error::msg("gateway.host must not be empty");
         let api_err = ConfigApiError::from_validation(anyhow_err);
         assert_eq!(api_err.code, ConfigApiCode::ValidationFailed);
         assert!(api_err.message.contains("gateway.host"));

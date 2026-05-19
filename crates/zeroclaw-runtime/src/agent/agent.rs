@@ -359,9 +359,16 @@ impl AgentBuilder {
     }
 
     pub fn build(self) -> Result<Agent> {
-        let mut tools = self
-            .tools
-            .ok_or_else(|| anyhow::anyhow!("tools are required"))?;
+        let mut tools = self.tools.ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing_field": "tools"})),
+                "AgentBuilder::build missing required field"
+            );
+            anyhow::Error::msg("tools are required")
+        })?;
         let allowed = self.allowed_tools.clone();
         if let Some(ref allow_list) = allowed {
             tools.retain(|t| allow_list.iter().any(|name| name == t.name()));
@@ -369,23 +376,51 @@ impl AgentBuilder {
         let tool_specs = tools.iter().map(|tool| tool.spec()).collect();
 
         Ok(Agent {
-            model_provider: self
-                .model_provider
-                .ok_or_else(|| anyhow::anyhow!("model_provider is required"))?,
+            model_provider: self.model_provider.ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing_field": "model_provider"})),
+                    "AgentBuilder::build missing required field"
+                );
+                anyhow::Error::msg("model_provider is required")
+            })?,
             tools,
             tool_specs,
-            memory: self
-                .memory
-                .ok_or_else(|| anyhow::anyhow!("memory is required"))?,
-            observer: self
-                .observer
-                .ok_or_else(|| anyhow::anyhow!("observer is required"))?,
+            memory: self.memory.ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing_field": "memory"})),
+                    "AgentBuilder::build missing required field"
+                );
+                anyhow::Error::msg("memory is required")
+            })?,
+            observer: self.observer.ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing_field": "observer"})),
+                    "AgentBuilder::build missing required field"
+                );
+                anyhow::Error::msg("observer is required")
+            })?,
             prompt_builder: self
                 .prompt_builder
                 .unwrap_or_else(SystemPromptBuilder::with_defaults),
-            tool_dispatcher: self
-                .tool_dispatcher
-                .ok_or_else(|| anyhow::anyhow!("tool_dispatcher is required"))?,
+            tool_dispatcher: self.tool_dispatcher.ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing_field": "tool_dispatcher"})),
+                    "AgentBuilder::build missing required field"
+                );
+                anyhow::Error::msg("tool_dispatcher is required")
+            })?,
             memory_loader: self
                 .memory_loader
                 .unwrap_or_else(|| Box::new(DefaultMemoryLoader::default())),
@@ -753,7 +788,7 @@ impl Agent {
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "MCP registry failed to initialize"
                     );
                 }
@@ -1053,7 +1088,7 @@ impl Agent {
                         }
                         Ok(None) => continue,
                         Err(e) => {
-                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"tool": tool_name, "channel": ch_name, "error": e.to_string()})), "channel approval request failed");
+                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"tool": tool_name, "channel": ch_name, "error": format!("{}", e)})), "channel approval request failed");
                         }
                     }
                 }

@@ -112,9 +112,15 @@ impl Channel for VoiceWakeChannel {
             use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
             let host = cpal::default_host();
-            let device = host
-                .default_input_device()
-                .ok_or_else(|| anyhow::anyhow!("No default audio input device available"))?;
+            let device = host.default_input_device().ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "No default audio input device available"
+                );
+                anyhow::Error::msg("No default audio input device available")
+            })?;
 
             let supported = device.default_input_config()?;
             sample_rate = supported.sample_rate().0;
@@ -136,7 +142,7 @@ impl Channel for VoiceWakeChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                         "VoiceWake: audio stream error"
                     );
                 },
@@ -256,7 +262,7 @@ impl Channel for VoiceWakeChannel {
                                         ::zeroclaw_log::Action::Note
                                     )
                                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "VoiceWake: transcription error during wake check"
                                 );
                                 state = WakeState::Listening;
@@ -323,7 +329,7 @@ impl Channel for VoiceWakeChannel {
                                             )
                                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                                             .with_attrs(
-                                                ::serde_json::json!({"error": e.to_string()})
+                                                ::serde_json::json!({"error": format!("{}", e)})
                                             ),
                                             "VoiceWake: failed to dispatch message"
                                         );
@@ -338,7 +344,7 @@ impl Channel for VoiceWakeChannel {
                                         ::zeroclaw_log::Action::Note
                                     )
                                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "VoiceWake: transcription error for utterance"
                                 );
                             }

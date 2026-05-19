@@ -103,10 +103,19 @@ impl AuthService {
         let data = self.store.load().await?;
         let profile_id = resolve_requested_profile_id(&model_provider, requested_profile);
 
-        let profile = data
-            .profiles
-            .get(&profile_id)
-            .ok_or_else(|| anyhow::anyhow!("Auth profile not found: {profile_id}"))?;
+        let profile = data.profiles.get(&profile_id).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "profile_id": &profile_id,
+                        "reason": "auth_profile_not_found",
+                    })),
+                "auth: profile not found"
+            );
+            anyhow::Error::msg(format!("Auth profile not found: {profile_id}"))
+        })?;
 
         if profile.model_provider != model_provider {
             anyhow::bail!(
@@ -391,9 +400,16 @@ impl std::str::FromStr for AuthProvider {
             anyhow::bail!("ModelProvider name cannot be empty");
         }
         serde_json::from_value(serde_json::Value::String(normalized.clone())).map_err(|_| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"normalized": &normalized})),
+                "auth: unknown auth provider"
+            );
+            anyhow::Error::msg(format!(
                 "Unknown auth provider `{normalized}`. Supported: openai-codex, anthropic, gemini.",
-            )
+            ))
         })
     }
 }
@@ -490,7 +506,7 @@ async fn refresh_openai_access_token_with_retries(
             Ok(tokens) => return Ok(tokens),
             Err(err) => {
                 let should_retry = attempt < OAUTH_REFRESH_MAX_ATTEMPTS;
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"attempt": attempt, "max_attempts": OAUTH_REFRESH_MAX_ATTEMPTS, "retry": should_retry, "error": err.to_string()})), "OpenAI token refresh failed");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"attempt": attempt, "max_attempts": OAUTH_REFRESH_MAX_ATTEMPTS, "retry": should_retry, "error": format!("{}", err)})), "OpenAI token refresh failed");
                 last_error = Some(err);
                 if should_retry {
                     tokio::time::sleep(Duration::from_millis(
@@ -502,7 +518,16 @@ async fn refresh_openai_access_token_with_retries(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("OpenAI token refresh failed")))
+    Err(last_error.unwrap_or_else(|| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"oauth_provider": "openai"})),
+            "auth: OpenAI token refresh exhausted retries"
+        );
+        anyhow::Error::msg("OpenAI token refresh failed")
+    }))
 }
 
 async fn refresh_gemini_access_token_with_retries(
@@ -520,7 +545,7 @@ async fn refresh_gemini_access_token_with_retries(
             Ok(tokens) => return Ok(tokens),
             Err(err) => {
                 let should_retry = attempt < OAUTH_REFRESH_MAX_ATTEMPTS;
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"attempt": attempt, "max_attempts": OAUTH_REFRESH_MAX_ATTEMPTS, "retry": should_retry, "error": err.to_string()})), "Gemini token refresh failed");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"attempt": attempt, "max_attempts": OAUTH_REFRESH_MAX_ATTEMPTS, "retry": should_retry, "error": format!("{}", err)})), "Gemini token refresh failed");
                 last_error = Some(err);
                 if should_retry {
                     tokio::time::sleep(Duration::from_millis(
@@ -532,7 +557,16 @@ async fn refresh_gemini_access_token_with_retries(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Gemini token refresh failed")))
+    Err(last_error.unwrap_or_else(|| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"oauth_provider": "gemini"})),
+            "auth: Gemini token refresh exhausted retries"
+        );
+        anyhow::Error::msg("Gemini token refresh failed")
+    }))
 }
 
 fn refresh_lock_for_profile(profile_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -902,7 +936,17 @@ impl AuthProviderFlow for OpenaiCodexFlow {
         input: Option<&str>,
     ) -> Result<()> {
         let pending = load_pending_oauth_login(ctx.config, "openai")?.ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "openai",
+                        "profile": profile,
+                    })),
+                "auth: no pending OpenAI login"
+            );
+            anyhow::Error::msg(
                 "No pending OpenAI login found. Run `zeroclaw auth login --model-provider openai-codex` first.",
             )
         })?;
@@ -914,7 +958,14 @@ impl AuthProviderFlow for OpenaiCodexFlow {
             );
         }
         let redirect_input = input.ok_or_else(|| {
-            anyhow::anyhow!("paste-redirect requires the redirect URL or OAuth code")
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"oauth_provider": "openai"})),
+                "auth: paste-redirect requires URL or code"
+            );
+            anyhow::Error::msg("paste-redirect requires the redirect URL or OAuth code")
         })?;
         let code = crate::auth::openai_oauth::parse_code_from_redirect(
             redirect_input,
@@ -967,11 +1018,22 @@ impl GeminiFlow {
     /// the operator's Google Cloud OAuth app credentials.
     fn alias_creds<'a>(config: &'a Config, profile: &str) -> Result<(&'a str, &'a str)> {
         let alias_cfg = config.providers.models.gemini.get(profile).ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "gemini",
+                        "profile": profile,
+                        "missing": "alias_cfg",
+                    })),
+                "auth: gemini OAuth missing alias config"
+            );
+            anyhow::Error::msg(format!(
                 "Gemini OAuth requires `[model_providers.gemini.{profile}]` to exist with \
                  `oauth_client_id` and `oauth_client_secret` set. Register a Google Cloud \
                  OAuth app and configure the credentials before running this auth flow.",
-            )
+            ))
         })?;
         let client_id = alias_cfg
             .oauth_client_id
@@ -979,9 +1041,20 @@ impl GeminiFlow {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "oauth_provider": "gemini",
+                            "profile": profile,
+                            "missing": "oauth_client_id",
+                        })),
+                    "auth: gemini OAuth missing oauth_client_id"
+                );
+                anyhow::Error::msg(format!(
                     "Gemini OAuth requires `oauth_client_id` on `[model_providers.gemini.{profile}]`.",
-                )
+                ))
             })?;
         let client_secret = alias_cfg
             .oauth_client_secret
@@ -989,9 +1062,20 @@ impl GeminiFlow {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "oauth_provider": "gemini",
+                            "profile": profile,
+                            "missing": "oauth_client_secret",
+                        })),
+                    "auth: gemini OAuth missing oauth_client_secret"
+                );
+                anyhow::Error::msg(format!(
                     "Gemini OAuth requires `oauth_client_secret` on `[model_providers.gemini.{profile}]`.",
-                )
+                ))
             })?;
         Ok((client_id, client_secret))
     }
@@ -1109,7 +1193,17 @@ impl AuthProviderFlow for GeminiFlow {
     ) -> Result<()> {
         let (client_id, client_secret) = Self::alias_creds(ctx.config, profile)?;
         let pending = load_pending_oauth_login(ctx.config, "gemini")?.ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "gemini",
+                        "profile": profile,
+                    })),
+                "auth: no pending Gemini login"
+            );
+            anyhow::Error::msg(
                 "No pending Gemini login found. Run `zeroclaw auth login --model-provider gemini` first.",
             )
         })?;
@@ -1121,7 +1215,14 @@ impl AuthProviderFlow for GeminiFlow {
             );
         }
         let redirect_input = input.ok_or_else(|| {
-            anyhow::anyhow!("paste-redirect requires the redirect URL or OAuth code")
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"oauth_provider": "gemini"})),
+                "auth: paste-redirect requires URL or code"
+            );
+            anyhow::Error::msg("paste-redirect requires the redirect URL or OAuth code")
         })?;
         let code = crate::auth::gemini_oauth::parse_code_from_redirect(
             redirect_input,

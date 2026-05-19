@@ -282,7 +282,7 @@ fn service_error_response(err: ServiceError) -> Response {
     (
         status,
         Json(serde_json::json!({
-            "error": err.to_string(),
+            "error": format!("{}", err),
         })),
     )
         .into_response()

@@ -182,12 +182,32 @@ impl Tool for PicoFlashTool {
                         let alias = a.to_string();
                         reg.reconnect(&alias, Some(&port_str)).await
                     }
-                    None => Err(anyhow::anyhow!(
-                        "no pico alias found in registry; cannot reconnect transport"
-                    )),
+                    None => {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Fail
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"port": port_str})),
+                            "no pico alias in registry; cannot reconnect transport after flash"
+                        );
+                        Err(anyhow::Error::msg(
+                            "no pico alias found in registry; cannot reconnect transport",
+                        ))
+                    }
                 }
             }
-            None => Err(anyhow::anyhow!("no serial port to reconnect")),
+            None => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "pico reconnect skipped: no serial port"
+                );
+                Err(anyhow::Error::msg("no serial port to reconnect"))
+            }
         };
 
         // ── 7. Return result ──────────────────────────────────────────────

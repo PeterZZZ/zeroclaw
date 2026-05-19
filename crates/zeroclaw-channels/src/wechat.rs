@@ -302,7 +302,16 @@ fn encrypt_aes_ecb(plaintext: &[u8], key: &[u8; 16]) -> anyhow::Result<Vec<u8>> 
     buffer[..plaintext.len()].copy_from_slice(plaintext);
     let encrypted = Aes128EcbEnc::new(&(*key).into())
         .encrypt_padded_mut::<Pkcs7>(&mut buffer, plaintext.len())
-        .map_err(|e| anyhow::anyhow!("media encrypt failed: {e}"))?;
+        .map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "media encrypt failed"
+            );
+            anyhow::Error::msg(format!("media encrypt failed: {e}"))
+        })?;
     Ok(encrypted.to_vec())
 }
 
@@ -311,34 +320,102 @@ fn decrypt_aes_ecb(ciphertext: &[u8], key: &[u8; 16]) -> anyhow::Result<Vec<u8>>
     Aes128EcbDec::new(&(*key).into())
         .decrypt_padded_mut::<Pkcs7>(&mut buffer)
         .map(|decrypted| decrypted.to_vec())
-        .map_err(|e| anyhow::anyhow!("media decrypt failed: {e}"))
+        .map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "wechat: media decrypt failed"
+            );
+            anyhow::Error::msg(format!("media decrypt failed: {e}"))
+        })
 }
 
 fn parse_aes_key(raw: &str) -> anyhow::Result<[u8; 16]> {
     let raw = raw.trim();
     if raw.len() == 32 && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
-        let bytes =
-            hex::decode(raw).map_err(|e| anyhow::anyhow!("media hex aes_key invalid: {e}"))?;
-        return <[u8; 16]>::try_from(bytes.as_slice())
-            .map_err(|_| anyhow::anyhow!("media hex aes_key must be 16 bytes"));
+        let bytes = hex::decode(raw).map_err(|e| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "media hex aes_key invalid"
+            );
+            anyhow::Error::msg(format!("media hex aes_key invalid: {e}"))
+        })?;
+        return <[u8; 16]>::try_from(bytes.as_slice()).map_err(|_| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"key_kind": "hex", "expected_bytes": 16})),
+                "wechat: media hex aes_key has wrong byte length"
+            );
+            anyhow::Error::msg("media hex aes_key must be 16 bytes")
+        });
     }
 
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(raw)
-        .map_err(|e| anyhow::anyhow!("media base64 aes_key invalid: {e}"))?;
+        .map_err(|e| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "media base64 aes_key invalid"
+            );
+            anyhow::Error::msg(format!("media base64 aes_key invalid: {e}"))
+        })?;
 
     if decoded.len() == 16 {
-        return <[u8; 16]>::try_from(decoded.as_slice())
-            .map_err(|_| anyhow::anyhow!("media base64 aes_key must be 16 bytes"));
+        return <[u8; 16]>::try_from(decoded.as_slice()).map_err(|_| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"key_kind": "base64", "expected_bytes": 16})),
+                "wechat: media base64 aes_key has wrong byte length"
+            );
+            anyhow::Error::msg("media base64 aes_key must be 16 bytes")
+        });
     }
 
     if decoded.len() == 32 && decoded.iter().all(u8::is_ascii_hexdigit) {
-        let hex_text = std::str::from_utf8(&decoded)
-            .map_err(|e| anyhow::anyhow!("media aes_key utf8 invalid: {e}"))?;
-        let bytes = hex::decode(hex_text)
-            .map_err(|e| anyhow::anyhow!("media nested hex aes_key invalid: {e}"))?;
-        return <[u8; 16]>::try_from(bytes.as_slice())
-            .map_err(|_| anyhow::anyhow!("media nested hex aes_key must be 16 bytes"));
+        let hex_text = std::str::from_utf8(&decoded).map_err(|e| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "media aes_key utf8 invalid"
+            );
+            anyhow::Error::msg(format!("media aes_key utf8 invalid: {e}"))
+        })?;
+        let bytes = hex::decode(hex_text).map_err(|e| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "media nested hex aes_key invalid"
+            );
+            anyhow::Error::msg(format!("media nested hex aes_key invalid: {e}"))
+        })?;
+        return <[u8; 16]>::try_from(bytes.as_slice()).map_err(|_| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(
+                        ::serde_json::json!({"key_kind": "nested_hex", "expected_bytes": 16})
+                    ),
+                "wechat: media nested hex aes_key has wrong byte length"
+            );
+            anyhow::Error::msg("media nested hex aes_key must be 16 bytes")
+        });
     }
 
     anyhow::bail!(
@@ -501,8 +578,16 @@ fn render_login_qr(code: &str) -> anyhow::Result<String> {
         anyhow::bail!("QR payload is empty");
     }
 
-    let qr = qrcode::QrCode::new(payload.as_bytes())
-        .map_err(|err| anyhow::anyhow!("Failed to encode WeChat QR payload: {err}"))?;
+    let qr = qrcode::QrCode::new(payload.as_bytes()).map_err(|err| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
+            "Failed to encode WeChat QR payload"
+        );
+        anyhow::Error::msg(format!("Failed to encode WeChat QR payload: {err}"))
+    })?;
 
     Ok(qr
         .render::<qrcode::render::unicode::Dense1x2>()
@@ -688,7 +773,7 @@ impl WeChatChannel {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "failed to create state dir"
             );
             return;
@@ -708,7 +793,7 @@ impl WeChatChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "failed to write account data"
                     );
                 }
@@ -717,7 +802,7 @@ impl WeChatChannel {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "failed to serialize account data"
             ),
         }
@@ -730,7 +815,7 @@ impl WeChatChannel {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "failed to create state dir"
             );
             return;
@@ -746,7 +831,7 @@ impl WeChatChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "failed to write sync data"
                     );
                 }
@@ -755,7 +840,7 @@ impl WeChatChannel {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "failed to serialize sync data"
             ),
         }
@@ -1119,23 +1204,55 @@ impl WeChatChannel {
                 Ok(resp) => {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
-                    let error = anyhow::anyhow!(
-                        "CDN upload failed on attempt {attempt} ({status}): {body}"
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "attempt": attempt,
+                                "status": status.as_u16(),
+                                "body": body,
+                                "phase": "cdn_upload",
+                            })),
+                        "wechat: CDN upload failed (non-success status)"
                     );
+                    let error = anyhow::Error::msg(format!(
+                        "CDN upload failed on attempt {attempt} ({status}): {body}"
+                    ));
                     if status.is_client_error() {
                         return Err(error);
                     }
                     last_error = Some(error);
                 }
                 Err(err) => {
-                    last_error = Some(anyhow::anyhow!(
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "attempt": attempt,
+                                "phase": "cdn_upload",
+                                "error": format!("{}", err),
+                            })),
+                        "wechat: CDN upload request failed"
+                    );
+                    last_error = Some(anyhow::Error::msg(format!(
                         "CDN upload request failed on attempt {attempt}: {err}"
-                    ));
+                    )));
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("CDN upload failed")))
+        Err(last_error.unwrap_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"phase": "cdn_upload"})),
+                "wechat: CDN upload exhausted retries"
+            );
+            anyhow::Error::msg("CDN upload failed")
+        }))
     }
 
     async fn upload_media_payload(
@@ -1332,7 +1449,7 @@ impl WeChatChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     "attachment download skipped"
                 );
                 return None;
@@ -1345,7 +1462,7 @@ impl WeChatChannel {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                 "Failed to create WeChat attachment dir"
             );
             return None;
@@ -1450,7 +1567,7 @@ impl WeChatChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                         "failed to render terminal QR code"
                     )
                 }
@@ -1494,7 +1611,7 @@ impl WeChatChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "QR poll error"
                         );
                         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1515,7 +1632,7 @@ impl WeChatChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "QR poll parse error"
                         );
                         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1621,7 +1738,7 @@ impl WeChatChannel {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string(), "uid": uid})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e), "uid": uid})),
                 "failed to persist scanned identity"
             );
         }
@@ -1820,7 +1937,7 @@ impl WeChatChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "pairing error"
                         );
                     }
@@ -1923,7 +2040,7 @@ impl Channel for WeChatChannel {
                                 ::zeroclaw_log::Action::Fail
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "re-login failed"
                         );
                         tokio::time::sleep(BACKOFF_DELAY).await;
@@ -1987,7 +2104,7 @@ impl Channel for WeChatChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "getUpdates parse error"
                     );
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
@@ -2030,7 +2147,7 @@ impl Channel for WeChatChannel {
                                 ::zeroclaw_log::Action::Fail
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "re-login after session expiry failed"
                         );
                     }

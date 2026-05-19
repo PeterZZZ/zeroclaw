@@ -97,7 +97,7 @@ pub fn load_sops_from_directory(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     &format!("Failed to load SOP from {}", path.display().to_string())
                 );
             }

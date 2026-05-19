@@ -200,7 +200,7 @@ pub fn load_routines_from_file(path: &std::path::Path) -> Vec<Routine> {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     &format!(
                         "Failed to parse routines file {}",
                         path.display().to_string()
@@ -213,7 +213,7 @@ pub fn load_routines_from_file(path: &std::path::Path) -> Vec<Routine> {
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 &format!("Routines file not found at {}", path.display().to_string())
             );
             Vec::new()

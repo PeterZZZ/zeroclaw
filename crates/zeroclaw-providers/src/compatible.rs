@@ -450,7 +450,7 @@ impl OpenAiCompatibleModelProvider {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": error.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", error)})),
                     "Failed to build proxied timeout client with custom headers: "
                 );
                 Client::new()
@@ -513,7 +513,7 @@ impl OpenAiCompatibleModelProvider {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": error.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", error)})),
                     "Failed to build proxied streaming client with custom headers: "
                 );
                 Client::new()
@@ -528,7 +528,7 @@ impl OpenAiCompatibleModelProvider {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": error.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", error)})),
                 "Failed to build proxied streaming client: "
             );
             Client::new()
@@ -1529,9 +1529,19 @@ fn sse_bytes_to_events_for_contract(
 fn parse_chat_response_body(name: &str, body: &str) -> anyhow::Result<ApiChatResponse> {
     serde_json::from_str(body).map_err(|_| {
         let sanitized = super::sanitize_api_error(body);
-        anyhow::anyhow!(
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "model_provider": name,
+                    "body": &sanitized,
+                })),
+            "compatible: unexpected chat-completions payload"
+        );
+        anyhow::Error::msg(format!(
             "{name} API returned an unexpected chat-completions payload; body={sanitized}"
-        )
+        ))
     })
 }
 
@@ -1976,14 +1986,43 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 .send()
                 .await
                 .map_err(|e| {
-                    anyhow::anyhow!("{} model list request failed: {url}: {e}", self.name)
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "model_provider": &self.name,
+                                "url": &url,
+                                "phase": "model_list_request",
+                                "error": format!("{}", e),
+                            })),
+                        "compatible: model list request failed"
+                    );
+                    anyhow::Error::msg(format!(
+                        "{} model list request failed: {url}: {e}",
+                        self.name
+                    ))
                 })?;
             if !response.status().is_success() {
                 let status = response.status();
                 anyhow::bail!("{} model list failed at {url}: HTTP {status}", self.name);
             }
             let body: ModelsResponse = response.json().await.map_err(|e| {
-                anyhow::anyhow!("{} model list returned invalid JSON: {e}", self.name)
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "model_provider": &self.name,
+                            "phase": "model_list_parse",
+                            "error": format!("{}", e),
+                        })),
+                    "compatible: model list returned invalid JSON"
+                );
+                anyhow::Error::msg(format!(
+                    "{} model list returned invalid JSON: {e}",
+                    self.name
+                ))
             })?;
             return Ok(normalize_model_ids(body));
         }
@@ -2108,7 +2147,16 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                     c.message.effective_content()
                 }
             })
-            .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"model_provider": &self.name})),
+                    "compatible: empty choices in response"
+                );
+                anyhow::Error::msg(format!("No response from {}", self.name))
+            })
     }
 
     async fn chat_with_history(
@@ -2180,7 +2228,16 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                     c.message.effective_content()
                 }
             })
-            .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"model_provider": &self.name})),
+                    "compatible: empty choices in response"
+                );
+                anyhow::Error::msg(format!("No response from {}", self.name))
+            })
     }
 
     async fn chat_with_tools(
@@ -2266,11 +2323,16 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             output_tokens: u.completion_tokens,
             cached_input_tokens: None,
         });
-        let choice = chat_response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))?;
+        let choice = chat_response.choices.into_iter().next().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"model_provider": &self.name})),
+                "compatible: empty choices in response"
+            );
+            anyhow::Error::msg(format!("No response from {}", self.name))
+        })?;
 
         let text = choice.message.effective_content_optional();
         let reasoning_content = choice.message.reasoning_content;
@@ -2380,7 +2442,16 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .into_iter()
             .next()
             .map(|choice| choice.message)
-            .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"model_provider": &self.name})),
+                    "compatible: empty choices in response"
+                );
+                anyhow::Error::msg(format!("No response from {}", self.name))
+            })?;
 
         let mut result = self.parse_native_response(message);
         result.usage = usage;

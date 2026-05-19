@@ -163,7 +163,7 @@ pub fn record_tool_loop_cost_usage(
         .tracker
         .record_usage_with_agent(cost_usage.clone(), ctx.agent_alias.as_deref())
     {
-        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"model_provider": model_provider_name, "model": model, "error": error.to_string()})), "Failed to record cost tracking usage: ");
+        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"model_provider": model_provider_name, "model": model, "error": format!("{}", error)})), "Failed to record cost tracking usage: ");
     }
 
     {

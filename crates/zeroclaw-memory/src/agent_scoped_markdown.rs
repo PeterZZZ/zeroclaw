@@ -170,7 +170,7 @@ impl Memory for AgentScopedMarkdownMemory {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"peer": peer.alias, "error": error.to_string()})
+                            ::serde_json::json!({"peer": peer.alias, "error": format!("{}", error)})
                         ),
                     "AgentScopedMarkdownMemory peer recall failed; continuing with other peers"
                 ),
@@ -223,7 +223,7 @@ impl Memory for AgentScopedMarkdownMemory {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"peer": peer.alias, "error": error.to_string()})
+                            ::serde_json::json!({"peer": peer.alias, "error": format!("{}", error)})
                         ),
                     "AgentScopedMarkdownMemory peer recall failed; continuing with other peers"
                 ),

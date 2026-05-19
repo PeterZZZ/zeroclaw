@@ -403,7 +403,7 @@ impl Channel for SignalChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "SSE connect error, retrying..."
                     );
                     tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
@@ -428,7 +428,7 @@ impl Channel for SignalChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "SSE chunk error, reconnecting"
                         );
                         break;
@@ -444,7 +444,7 @@ impl Channel for SignalChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "SSE invalid UTF-8, skipping chunk"
                         );
                         continue;
@@ -492,7 +492,9 @@ impl Channel for SignalChannel {
                                             module_path!(),
                                             ::zeroclaw_log::Action::Note
                                         )
-                                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                        .with_attrs(
+                                            ::serde_json::json!({"error": format!("{}", e)})
+                                        ),
                                         "SSE parse skip"
                                     );
                                 }
@@ -534,7 +536,7 @@ impl Channel for SignalChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "SSE trailing parse skip"
                         );
                     }

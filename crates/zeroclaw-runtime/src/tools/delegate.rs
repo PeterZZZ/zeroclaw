@@ -323,16 +323,36 @@ impl DelegateTool {
             return Ok(Arc::clone(&self.security));
         };
         let mut target_policy = SecurityPolicy::for_agent(config, target_alias).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "target_agent": target_alias,
+                        "error": format!("{}", e),
+                    })),
+                "delegate: could not resolve target's security policy"
+            );
+            anyhow::Error::msg(format!(
                 "could not resolve security policy for delegate target {target_alias:?}: {e}"
-            )
+            ))
         })?;
         target_policy
             .ensure_no_escalation_beyond(&self.security)
             .map_err(|violation| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "target_agent": target_alias,
+                            "violation": violation.to_string(),
+                        })),
+                    "delegate refused: target policy escalates beyond caller"
+                );
+                anyhow::Error::msg(format!(
                     "delegate target {target_alias:?} policy escalates beyond caller: {violation}"
-                )
+                ))
             })?;
         // Refuse strict narrowing. `DelegateTool::execute_agentic`
         // reuses the caller's `parent_tools` registry (every tool
@@ -348,13 +368,23 @@ impl DelegateTool {
         self.security
             .ensure_no_escalation_beyond(&target_policy)
             .map_err(|violation| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "target_agent": target_alias,
+                            "violation": violation.to_string(),
+                        })),
+                    "delegate refused: target policy narrows caller's (use spawn_subagent for narrowed runs)"
+                );
+                anyhow::Error::msg(format!(
                     "delegate target {target_alias:?} policy narrows the caller's ({violation}); \
                      DelegateTool reuses the caller's tool registry, so narrowing is not enforced \
                      by the spawned tool calls. Either align caller and target risk_profile / \
                      workspace.access so the policies are equivalent, or use `spawn_subagent` for \
                      a narrowed run."
-                )
+                ))
             })?;
         target_policy.tracker = self.security.tracker.clone();
         Ok(Arc::new(target_policy))
@@ -583,7 +613,17 @@ impl Tool for DelegateTool {
             .get("agent")
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .ok_or_else(|| anyhow::anyhow!("Missing 'agent' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "agent"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing 'agent' parameter")
+            })?;
 
         if agent_name.is_empty() {
             return Ok(ToolResult {
@@ -597,7 +637,17 @@ impl Tool for DelegateTool {
             .get("prompt")
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .ok_or_else(|| anyhow::anyhow!("Missing 'prompt' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "prompt"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing 'prompt' parameter")
+            })?;
 
         if prompt.is_empty() {
             return Ok(ToolResult {
@@ -1019,7 +1069,17 @@ impl DelegateTool {
             .get("prompt")
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .ok_or_else(|| anyhow::anyhow!("Missing 'prompt' parameter for parallel execution"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "prompt"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing 'prompt' parameter for parallel execution")
+            })?;
 
         if prompt.is_empty() {
             return Ok(ToolResult {
@@ -1205,7 +1265,17 @@ impl DelegateTool {
         let task_id = args
             .get("task_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'task_id' parameter for check_result"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "task_id"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing 'task_id' parameter for check_result")
+            })?;
 
         if let Err(e) = Self::validate_task_id(task_id) {
             return Ok(ToolResult {
@@ -1288,7 +1358,17 @@ impl DelegateTool {
         let task_id = args
             .get("task_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'task_id' parameter for cancel_task"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "task_id"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing 'task_id' parameter for cancel_task")
+            })?;
 
         if let Err(e) = Self::validate_task_id(task_id) {
             return Ok(ToolResult {
@@ -1660,7 +1740,6 @@ impl Observer for NoopObserver {
 mod tests {
     use super::*;
     use crate::security::{AutonomyLevel, SecurityPolicy};
-    use anyhow::anyhow;
     use std::path::Path;
     use tokio::time::{Instant, sleep};
     use zeroclaw_config::schema::{
@@ -1881,7 +1960,7 @@ mod tests {
             _model: &str,
             _temperature: Option<f64>,
         ) -> anyhow::Result<ChatResponse> {
-            Err(anyhow!("model_provider boom"))
+            Err(anyhow::Error::msg("model_provider boom"))
         }
     }
     impl ::zeroclaw_api::attribution::Attributable for FailingModelProvider {

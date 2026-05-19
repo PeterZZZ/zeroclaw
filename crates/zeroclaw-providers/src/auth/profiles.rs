@@ -233,10 +233,16 @@ impl AuthProfilesStore {
         let _lock = self.acquire_lock().await?;
         let mut data = self.load_locked().await?;
 
-        let profile = data
-            .profiles
-            .get_mut(profile_id)
-            .ok_or_else(|| anyhow::anyhow!("Auth profile not found: {profile_id}"))?;
+        let profile = data.profiles.get_mut(profile_id).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"profile_id": profile_id})),
+                "auth_profiles: profile not found for update"
+            );
+            anyhow::Error::msg(format!("Auth profile not found: {profile_id}"))
+        })?;
 
         updater(profile)?;
         profile.updated_at = Utc::now();
@@ -280,7 +286,20 @@ impl AuthProfilesStore {
             let token_set = match kind {
                 AuthProfileKind::OAuth => {
                     let access = access_token.ok_or_else(|| {
-                        anyhow::anyhow!("OAuth profile missing access_token: {id}")
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Reject
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "profile_id": id,
+                                "missing": "access_token",
+                            })),
+                            "auth_profiles: OAuth profile missing access_token"
+                        );
+                        anyhow::Error::msg(format!("OAuth profile missing access_token: {id}"))
                     })?;
                     Some(TokenSet {
                         access_token: access,

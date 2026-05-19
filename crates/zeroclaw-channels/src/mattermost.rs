@@ -251,13 +251,33 @@ impl MattermostChannel {
                     return Ok::<String, anyhow::Error>(t.clone());
                 }
                 let login_id = self.login_id.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "bot_token is unset; configure either bot_token or both login_id and password"
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "missing": "login_id",
+                                "reason": "no_bot_token",
+                            })),
+                        "mattermost: bot_token unset and login_id missing"
+                    );
+                    anyhow::Error::msg(
+                        "bot_token is unset; configure either bot_token or both login_id and password",
                     )
                 })?;
                 let password = self.password.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "bot_token is unset and password is missing; both login_id and password must be set"
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "missing": "password",
+                                "reason": "no_bot_token",
+                            })),
+                        "mattermost: bot_token unset and password missing"
+                    );
+                    anyhow::Error::msg(
+                        "bot_token is unset and password is missing; both login_id and password must be set",
                     )
                 })?;
                 self.login(login_id, password).await
@@ -289,7 +309,15 @@ impl MattermostChannel {
             .headers()
             .get("Token")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| anyhow::anyhow!("login succeeded but the response had no Token header"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "login succeeded but the response had no Token header"
+                );
+                anyhow::Error::msg("login succeeded but the response had no Token header")
+            })?
             .to_string();
         ::zeroclaw_log::record!(
             INFO,
@@ -372,7 +400,7 @@ impl MattermostChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "auth failed in get_bot_identity"
                 );
                 return (String::new(), String::new());
@@ -442,7 +470,7 @@ impl MattermostChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "file_id": file_id})
+                            ::serde_json::json!({"error": format!("{}", e), "file_id": file_id})
                         ),
                     "audio download auth failed for"
                 );
@@ -463,7 +491,7 @@ impl MattermostChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "file_id": file_id})
+                            ::serde_json::json!({"error": format!("{}", e), "file_id": file_id})
                         ),
                     "audio download failed for"
                 );
@@ -504,7 +532,7 @@ impl MattermostChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "file_id": file_id})
+                            ::serde_json::json!({"error": format!("{}", e), "file_id": file_id})
                         ),
                     "failed to read audio bytes for"
                 );
@@ -531,7 +559,7 @@ impl MattermostChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "audio transcription failed"
                 );
                 None
@@ -671,7 +699,7 @@ impl Channel for MattermostChannel {
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(::serde_json::json!({
                                 "alias": self.alias,
-                                "error": e.to_string(),
+                                "error": format!("{}", e),
                             })),
                             "Mattermost auto-discovery refresh failed; keeping previous channel list"
                         );
@@ -821,7 +849,7 @@ impl MattermostChannel {
                         .with_attrs(::serde_json::json!({
                             "alias": self.alias,
                             "channel_id": target.id,
-                            "error": e.to_string(),
+                            "error": format!("{}", e),
                         })),
                     "Mattermost poll error"
                 );
@@ -839,7 +867,7 @@ impl MattermostChannel {
                         .with_attrs(::serde_json::json!({
                             "alias": self.alias,
                             "channel_id": target.id,
-                            "error": e.to_string(),
+                            "error": format!("{}", e),
                         })),
                     "Mattermost parse error"
                 );

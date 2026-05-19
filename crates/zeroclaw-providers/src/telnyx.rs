@@ -70,7 +70,14 @@ impl TelnyxModelProvider {
     /// Returns a list of model IDs that can be used with the chat API.
     pub async fn list_models(&self) -> anyhow::Result<Vec<String>> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Telnyx API key not set. Set TELNYX_API_KEY environment variable.")
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "api_key"})),
+                "telnyx: API key not configured"
+            );
+            anyhow::Error::msg("Telnyx API key not set. Set TELNYX_API_KEY environment variable.")
         })?;
 
         let response = self
@@ -159,8 +166,15 @@ impl ModelProvider for TelnyxModelProvider {
     ) -> anyhow::Result<String> {
         let temperature = temperature.unwrap_or(self.default_temperature());
         let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Telnyx API key not set. Set TELNYX_API_KEY environment variable or run `zeroclaw onboard`."
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "api_key"})),
+                "telnyx: API key not configured"
+            );
+            anyhow::Error::msg(
+                "Telnyx API key not set. Set TELNYX_API_KEY environment variable or run `zeroclaw onboard`.",
             )
         })?;
 
@@ -207,7 +221,15 @@ impl ModelProvider for TelnyxModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from Telnyx"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "telnyx: empty choices in response"
+                );
+                anyhow::Error::msg("No response from Telnyx")
+            })
     }
 
     async fn chat_with_history(
@@ -218,8 +240,15 @@ impl ModelProvider for TelnyxModelProvider {
     ) -> anyhow::Result<String> {
         let temperature = temperature.unwrap_or(self.default_temperature());
         let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Telnyx API key not set. Set TELNYX_API_KEY environment variable or run `zeroclaw onboard`."
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "api_key"})),
+                "telnyx: API key not configured"
+            );
+            anyhow::Error::msg(
+                "Telnyx API key not set. Set TELNYX_API_KEY environment variable or run `zeroclaw onboard`.",
             )
         })?;
 
@@ -260,7 +289,15 @@ impl ModelProvider for TelnyxModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from Telnyx"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "telnyx: empty choices in response"
+                );
+                anyhow::Error::msg("No response from Telnyx")
+            })
     }
 
     async fn warmup(&self) -> anyhow::Result<()> {

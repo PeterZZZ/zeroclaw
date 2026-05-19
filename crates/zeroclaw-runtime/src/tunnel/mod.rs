@@ -80,9 +80,18 @@ pub fn create_tunnel(config: &TunnelConfig) -> Result<Option<Box<dyn Tunnel>>> {
 
         "cloudflare" => {
             let cf = config.cloudflare.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
+                {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"tunnel_provider": "cloudflare"})),
+                    "tunnel create refused: provider selected but config block missing"
+                );
+                anyhow::Error::msg(
                     "tunnel.tunnel_provider = \"cloudflare\" but [tunnel.cloudflare] section is missing"
                 )
+            }
             })?;
             Ok(Some(Box::new(CloudflareTunnel::new(cf.token.clone()))))
         }
@@ -100,8 +109,15 @@ pub fn create_tunnel(config: &TunnelConfig) -> Result<Option<Box<dyn Tunnel>>> {
 
         "ngrok" => {
             let ng = config.ngrok.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tunnel.tunnel_provider = \"ngrok\" but [tunnel.ngrok] section is missing"
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"tunnel_provider": "ngrok"})),
+                    "tunnel create refused: provider selected but config block missing"
+                );
+                anyhow::Error::msg(
+                    "tunnel.tunnel_provider = \"ngrok\" but [tunnel.ngrok] section is missing",
                 )
             })?;
             Ok(Some(Box::new(NgrokTunnel::new(
@@ -112,8 +128,15 @@ pub fn create_tunnel(config: &TunnelConfig) -> Result<Option<Box<dyn Tunnel>>> {
 
         "openvpn" => {
             let ov = config.openvpn.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tunnel.tunnel_provider = \"openvpn\" but [tunnel.openvpn] section is missing"
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"tunnel_provider": "openvpn"})),
+                    "tunnel create refused: provider selected but config block missing"
+                );
+                anyhow::Error::msg(
+                    "tunnel.tunnel_provider = \"openvpn\" but [tunnel.openvpn] section is missing",
                 )
             })?;
             Ok(Some(Box::new(OpenVpnTunnel::new(
@@ -127,8 +150,15 @@ pub fn create_tunnel(config: &TunnelConfig) -> Result<Option<Box<dyn Tunnel>>> {
 
         "custom" => {
             let cu = config.custom.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tunnel.tunnel_provider = \"custom\" but [tunnel.custom] section is missing"
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"tunnel_provider": "custom"})),
+                    "tunnel create refused: provider selected but config block missing"
+                );
+                anyhow::Error::msg(
+                    "tunnel.tunnel_provider = \"custom\" but [tunnel.custom] section is missing",
                 )
             })?;
             Ok(Some(Box::new(CustomTunnel::new(
@@ -140,8 +170,15 @@ pub fn create_tunnel(config: &TunnelConfig) -> Result<Option<Box<dyn Tunnel>>> {
 
         "pinggy" => {
             let pg = config.pinggy.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tunnel.tunnel_provider = \"pinggy\" but [tunnel.pinggy] section is missing"
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"tunnel_provider": "pinggy"})),
+                    "tunnel create refused: provider selected but config block missing"
+                );
+                anyhow::Error::msg(
+                    "tunnel.tunnel_provider = \"pinggy\" but [tunnel.pinggy] section is missing",
                 )
             })?;
             Ok(Some(Box::new(PinggyTunnel::new(

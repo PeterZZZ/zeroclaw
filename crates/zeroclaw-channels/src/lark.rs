@@ -637,7 +637,7 @@ impl LarkChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     "failed to fetch token for reaction"
                 );
                 return;
@@ -652,7 +652,7 @@ impl LarkChannel {
             {
                 Ok(resp) => resp,
                 Err(err) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": err.to_string(), "message_id": message_id})), "failed to add reaction for");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", err), "message_id": message_id})), "failed to add reaction for");
                     return;
                 }
             };
@@ -680,7 +680,7 @@ impl LarkChannel {
             let payload: serde_json::Value = match response.json().await {
                 Ok(v) => v,
                 Err(err) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": err.to_string(), "message_id": message_id})), "add reaction decode failed for");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", err), "message_id": message_id})), "add reaction decode failed for");
                     return;
                 }
             };
@@ -718,9 +718,15 @@ impl LarkChannel {
                 resp.msg.as_deref().unwrap_or("(none)")
             );
         }
-        let ep = resp
-            .data
-            .ok_or_else(|| anyhow::anyhow!("WS endpoint: empty data"))?;
+        let ep = resp.data.ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "WS endpoint: empty data"
+            );
+            anyhow::Error::msg("WS endpoint: empty data")
+        })?;
         Ok((ep.url, ep.client_config.unwrap_or_default()))
     }
 
@@ -835,12 +841,12 @@ impl LarkChannel {
                             }
                         }
                         None => { ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS closed — reconnecting"); break; }
-                        Some(Err(e)) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": e.to_string()})), "WS read error"); break; }
+                        Some(Err(e)) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "WS read error"); break; }
                     };
 
                     let frame = match PbFrame::decode(&raw[..]) {
                         Ok(f) => f,
-                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": e.to_string()})), "proto decode"); continue; }
+                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "proto decode"); continue; }
                     };
 
                     // CONTROL frame
@@ -895,7 +901,7 @@ impl LarkChannel {
 
                     let event: LarkEvent = match serde_json::from_slice(&payload) {
                         Ok(e) => e,
-                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": e.to_string()})), "event JSON"); continue; }
+                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "event JSON"); continue; }
                     };
                     if event.header.event_type != "im.message.receive_v1" { continue; }
 
@@ -903,7 +909,7 @@ impl LarkChannel {
 
                     let recv: MsgReceivePayload = match serde_json::from_value(event_payload.clone()) {
                         Ok(r) => r,
-                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": e.to_string()})), "payload parse"); continue; }
+                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "payload parse"); continue; }
                     };
 
                     if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" { continue; }
@@ -1097,7 +1103,15 @@ impl LarkChannel {
         let token = data
             .get("tenant_access_token")
             .and_then(|t| t.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing tenant_access_token in response"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "missing tenant_access_token in response"
+                );
+                anyhow::Error::msg("missing tenant_access_token in response")
+            })?
             .to_string();
 
         let ttl_seconds = extract_lark_token_ttl_seconds(&data);
@@ -1130,7 +1144,7 @@ impl LarkChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "failed to get token for image download"
                 );
                 return None;
@@ -1152,7 +1166,7 @@ impl LarkChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "image_key": image_key})
+                            ::serde_json::json!({"error": format!("{}", e), "image_key": image_key})
                         ),
                     "image download request failed for"
                 );
@@ -1200,7 +1214,7 @@ impl LarkChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "image_key": image_key})
+                            ::serde_json::json!({"error": format!("{}", e), "image_key": image_key})
                         ),
                     "image body read failed for"
                 );
@@ -1252,7 +1266,7 @@ impl LarkChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "failed to get token for file download"
                 );
                 return None;
@@ -1274,7 +1288,7 @@ impl LarkChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "file_key": file_key})
+                            ::serde_json::json!({"error": format!("{}", e), "file_key": file_key})
                         ),
                     "file download request failed for"
                 );
@@ -1325,7 +1339,7 @@ impl LarkChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "file_key": file_key})
+                            ::serde_json::json!({"error": format!("{}", e), "file_key": file_key})
                         ),
                     "file body read failed for"
                 );
@@ -1553,7 +1567,7 @@ impl LarkChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "message_id": message_id})
+                            ::serde_json::json!({"error": format!("{}", e), "message_id": message_id})
                         ),
                     "audio download failed for"
                 );
@@ -1577,7 +1591,7 @@ impl LarkChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "message_id": message_id})
+                            ::serde_json::json!({"error": format!("{}", e), "message_id": message_id})
                         ),
                     "transcription failed for"
                 );
@@ -2100,7 +2114,14 @@ impl LarkChannel {
         }
 
         let port = self.port.ok_or_else(|| {
-            anyhow::anyhow!("webhook mode requires `port` to be set in [channels_config.lark]")
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"mode": "webhook", "missing": "port"})),
+                "lark: webhook mode requires port"
+            );
+            anyhow::Error::msg("webhook mode requires `port` to be set in [channels_config.lark]")
         })?;
 
         let state = AppState {

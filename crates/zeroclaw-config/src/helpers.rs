@@ -213,27 +213,56 @@ fn prop_name_to_serde_field(prefix: &str, name: &str) -> anyhow::Result<String> 
     } else {
         name.strip_prefix(prefix)
             .and_then(|s| s.strip_prefix('.'))
-            .ok_or_else(|| anyhow::anyhow!("Unknown property '{name}'"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"prefix": prefix, "name": name})),
+                    "prop_name_to_serde_field: property name does not share the configured prefix"
+                );
+                anyhow::Error::msg(format!("Unknown property '{name}'"))
+            })?
     };
     let field_part = suffix.split('.').next().unwrap_or(suffix);
     Ok(field_part.replace('-', "_"))
 }
 
 fn parse_prop_value(value_str: &str, kind: PropKind) -> anyhow::Result<toml::Value> {
+    let reject = |reason: &'static str, attrs: serde_json::Value| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(attrs),
+            "parse_prop_value rejected input"
+        );
+        let _ = reason;
+    };
     match kind {
         PropKind::Bool => Ok(toml::Value::Boolean(value_str.parse().map_err(|_| {
-            anyhow::anyhow!("Invalid bool value '{value_str}' — expected 'true' or 'false'")
+            reject(
+                "bool",
+                ::serde_json::json!({"kind": "bool", "got_len": value_str.len()}),
+            );
+            anyhow::Error::msg(format!(
+                "Invalid bool value '{value_str}', expected 'true' or 'false'"
+            ))
         })?)),
-        PropKind::Integer => {
-            Ok(toml::Value::Integer(value_str.parse().map_err(|_| {
-                anyhow::anyhow!("Invalid integer value '{value_str}'")
-            })?))
-        }
-        PropKind::Float => {
-            Ok(toml::Value::Float(value_str.parse().map_err(|_| {
-                anyhow::anyhow!("Invalid float value '{value_str}'")
-            })?))
-        }
+        PropKind::Integer => Ok(toml::Value::Integer(value_str.parse().map_err(|_| {
+            reject(
+                "integer",
+                ::serde_json::json!({"kind": "integer", "got_len": value_str.len()}),
+            );
+            anyhow::Error::msg(format!("Invalid integer value '{value_str}'"))
+        })?)),
+        PropKind::Float => Ok(toml::Value::Float(value_str.parse().map_err(|_| {
+            reject(
+                "float",
+                ::serde_json::json!({"kind": "float", "got_len": value_str.len()}),
+            );
+            anyhow::Error::msg(format!("Invalid float value '{value_str}'"))
+        })?)),
         PropKind::String | PropKind::Enum => Ok(toml::Value::String(value_str.to_string())),
         PropKind::StringArray => {
             let trimmed = value_str.trim();
@@ -255,13 +284,22 @@ fn parse_prop_value(value_str: &str, kind: PropKind) -> anyhow::Result<toml::Val
         }
         // `Vec<T>` of structs: round-trip a JSON array of objects to a
         // TOML array. JSON `null` (used by serde for `Option::None`) is
-        // dropped because TOML has no null — the absent key conveys the
+        // dropped because TOML has no null - the absent key conveys the
         // same meaning when the field deserializes back into `Option<T>`.
         PropKind::ObjectArray => {
-            let v: serde_json::Value = serde_json::from_str(value_str)
-                .map_err(|e| anyhow::anyhow!("invalid JSON array of objects: {e}"))?;
+            let v: serde_json::Value = serde_json::from_str(value_str).map_err(|e| {
+                reject(
+                    "object_array",
+                    ::serde_json::json!({"kind": "object_array", "error": format!("{}", e)}),
+                );
+                anyhow::Error::msg(format!("invalid JSON array of objects: {e}"))
+            })?;
             json_to_toml(v).ok_or_else(|| {
-                anyhow::anyhow!("JSON value contained only nulls — nothing to write")
+                reject(
+                    "object_array_nulls",
+                    ::serde_json::json!({"kind": "object_array", "reason": "all-null"}),
+                );
+                anyhow::Error::msg("JSON value contained only nulls, nothing to write")
             })
         }
         // Struct-shaped scalar: parse the JSON object into a TOML table so
@@ -269,13 +307,26 @@ fn parse_prop_value(value_str: &str, kind: PropKind) -> anyhow::Result<toml::Val
         // (e.g. `Option<ModelPricing>`). Inserting a raw String here would
         // fail serde because the field is typed, not free-form text.
         PropKind::Object => {
-            let v: serde_json::Value = serde_json::from_str(value_str)
-                .map_err(|e| anyhow::anyhow!("invalid JSON object: {e}"))?;
+            let v: serde_json::Value = serde_json::from_str(value_str).map_err(|e| {
+                reject(
+                    "object",
+                    ::serde_json::json!({"kind": "object", "error": format!("{}", e)}),
+                );
+                anyhow::Error::msg(format!("invalid JSON object: {e}"))
+            })?;
             if !matches!(v, serde_json::Value::Object(_)) {
+                reject(
+                    "object_shape",
+                    ::serde_json::json!({"kind": "object", "got_shape": "non-object"}),
+                );
                 anyhow::bail!("Object field requires a JSON object; got {v}");
             }
             json_to_toml(v).ok_or_else(|| {
-                anyhow::anyhow!("JSON object contained only nulls — nothing to write")
+                reject(
+                    "object_nulls",
+                    ::serde_json::json!({"kind": "object", "reason": "all-null"}),
+                );
+                anyhow::Error::msg("JSON object contained only nulls, nothing to write")
             })
         }
     }

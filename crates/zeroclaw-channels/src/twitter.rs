@@ -97,7 +97,15 @@ impl TwitterChannel {
             .get("data")
             .and_then(|d| d.get("id"))
             .and_then(|id| id.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing user id in Twitter response"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "Missing user id in Twitter response"
+                );
+                anyhow::Error::msg("Missing user id in Twitter response")
+            })?
             .to_string();
 
         Ok(user_id)
@@ -254,7 +262,7 @@ impl Channel for TwitterChannel {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "failed to parse mentions response"
                             );
                             tokio::time::sleep(poll_interval).await;
@@ -389,14 +397,14 @@ impl Channel for TwitterChannel {
                         continue;
                     }
                     let err = resp.text().await.unwrap_or_default();
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": err.to_string(), "status": status.to_string()})), "mentions request failed");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", err), "status": status.to_string()})), "mentions request failed");
                 }
                 Err(e) => {
                     ::zeroclaw_log::record!(
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "mentions request error"
                     );
                 }

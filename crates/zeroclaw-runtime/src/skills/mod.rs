@@ -538,7 +538,7 @@ pub fn load_skills_from_directory(skills_dir: &Path, allow_scripts: bool) -> Vec
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(::serde_json::json!({
                                 "path": toml_path.display().to_string(),
-                                "error": e.to_string(),
+                                "error": format!("{}", e),
                             })),
                         "failed to load SKILL.toml — skill directory skipped"
                     );
@@ -630,7 +630,7 @@ fn load_open_skills_from_directory(skills_dir: &Path, allow_scripts: bool) -> Ve
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(::serde_json::json!({
                                 "path": toml_path.display().to_string(),
-                                "error": e.to_string(),
+                                "error": format!("{}", e),
                             })),
                         "failed to load SKILL.toml — skill directory skipped"
                     );
@@ -873,7 +873,7 @@ fn clone_open_skills_repo(repo_dir: &Path) -> bool {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                 "failed to run git clone for open-skills"
             );
             false
@@ -911,7 +911,7 @@ fn pull_open_skills_repo(repo_dir: &Path) -> bool {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                 "failed to run git pull for open-skills"
             );
             false
@@ -1486,8 +1486,16 @@ fn clawhub_skill_dir_name(source: &str) -> Result<String> {
         });
     }
 
-    let parsed = parse_clawhub_url(source)
-        .ok_or_else(|| anyhow::anyhow!("invalid clawhub URL: {source}"))?;
+    let parsed = parse_clawhub_url(source).ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"source": source})),
+            "skill install rejected: invalid clawhub URL"
+        );
+        anyhow::Error::msg(format!("invalid clawhub URL: {source}"))
+    })?;
 
     let path = parsed
         .path_segments()
@@ -1915,7 +1923,7 @@ fn pull_skills_registry(registry_dir: &Path) -> bool {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                 "failed to run git pull for skills registry"
             );
             false
@@ -2059,7 +2067,7 @@ pub fn load_plugin_skills_from_config(config: &zeroclaw_config::schema::Config) 
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                 "failed to discover plugin skills"
             );
             return Vec::new();

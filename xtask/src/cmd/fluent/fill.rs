@@ -12,7 +12,7 @@ struct Backend {
 fn resolve_backend(model_provider: &str) -> anyhow::Result<Backend> {
     let cfg = read_model_provider_config(model_provider)?;
     let model = cfg.model
-        .ok_or_else(|| anyhow::anyhow!("No model set for model_provider '{model_provider}' — add `model = \"...\"` to [providers.models.{model_provider}] in config.toml"))?;
+        .ok_or_else(|| anyhow::Error::msg("No model set for model_provider '{model_provider}' — add `model = \"...\"` to [providers.models.{model_provider}] in config.toml"))?;
     Ok(Backend {
         base_url: cfg.base_url,
         model,
@@ -40,8 +40,8 @@ pub fn run(
     };
 
     let provider_name = model_provider.ok_or_else(|| {
-        anyhow::anyhow!(
-            "--model-provider <name> is required (configured in [providers.models.<name>] in config.toml)"
+        anyhow::Error::msg(
+            "--model-provider <name> is required (configured in [providers.models.<name>] in config.toml)",
         )
     })?;
     let backend = resolve_backend(provider_name)?;
@@ -182,12 +182,13 @@ fn call_api(
         anyhow::bail!("API error {status}: {text}");
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("Failed to parse API response: {e}\n{text}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        anyhow::Error::msg(format!("Failed to parse API response: {e}\n{text}"))
+    })?;
 
     let content = parsed["choices"][0]["message"]["content"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No content in response: {text}"))?;
+        .ok_or_else(|| anyhow::Error::msg("No content in response: {text}"))?;
 
     // Strip markdown code fences and stray inline backticks. Models sometimes
     // wrap a single-line JSON response in `` `…` `` instead of a fenced block,
@@ -202,12 +203,13 @@ fn call_api(
         .trim_end_matches('`')
         .trim();
 
-    let translations: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse translation JSON: {e}\n{json_str}"))?;
+    let translations: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        anyhow::Error::msg(format!("Failed to parse translation JSON: {e}\n{json_str}"))
+    })?;
 
     let obj = translations
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("Expected JSON object in translation response"))?;
+        .ok_or_else(|| anyhow::Error::msg("Expected JSON object in translation response"))?;
 
     let mut result = vec![];
     for (key, value) in obj {

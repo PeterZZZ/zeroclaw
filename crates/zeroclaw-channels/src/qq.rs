@@ -354,7 +354,15 @@ impl QQChannel {
         let token = data
             .get("access_token")
             .and_then(|t| t.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing access_token in QQ response"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "Missing access_token in QQ response"
+                );
+                anyhow::Error::msg("Missing access_token in QQ response")
+            })?
             .to_string();
 
         let expires_in = data
@@ -410,7 +418,19 @@ impl QQChannel {
         }
 
         Err(last_err.unwrap_or_else(|| {
-            anyhow::anyhow!("getAppAccessToken failed after {AUTH_RETRY_MAX_ATTEMPTS} attempts")
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "getAppAccessToken",
+                        "max_attempts": AUTH_RETRY_MAX_ATTEMPTS,
+                    })),
+                "qq: getAppAccessToken exhausted retries"
+            );
+            anyhow::Error::msg(format!(
+                "getAppAccessToken failed after {AUTH_RETRY_MAX_ATTEMPTS} attempts"
+            ))
         }))
     }
 
@@ -457,7 +477,15 @@ impl QQChannel {
         let url = data
             .get("url")
             .and_then(|u| u.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing gateway URL in QQ response"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "Missing gateway URL in QQ response"
+                );
+                anyhow::Error::msg("Missing gateway URL in QQ response")
+            })?
             .to_string();
 
         Ok(url)
@@ -808,7 +836,7 @@ impl QQChannel {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "failed to download attachment"
                             );
                             url.clone()
@@ -980,7 +1008,7 @@ impl Channel for QQChannel {
         // Send each media attachment
         for attachment in &attachments {
             if let Err(e) = self.send_attachment(&message.recipient, attachment).await {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"target": attachment.target, "error": e.to_string()})), "failed to send media attachment; falling back to text");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"target": attachment.target, "error": format!("{}", e)})), "failed to send media attachment; falling back to text");
                 // Degrade to text fallback
                 let fallback = format!(
                     "{}: {}",
@@ -1030,10 +1058,16 @@ impl Channel for QQChannel {
         let (mut write, mut read) = ws_stream.split();
 
         // Read Hello (opcode 10)
-        let hello = read
-            .next()
-            .await
-            .ok_or(anyhow::anyhow!("no hello frame"))??;
+        let hello = read.next().await.ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"phase": "gateway_hello"})),
+                "qq: gateway closed before Hello frame"
+            );
+            anyhow::Error::msg("no hello frame")
+        })??;
         let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
         let heartbeat_interval = hello_data
             .get("d")

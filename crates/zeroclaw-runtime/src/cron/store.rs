@@ -250,7 +250,7 @@ pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Skipping cron job with unparseable row data"
                 ),
             }
@@ -290,7 +290,7 @@ pub fn all_overdue_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJ
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Skipping cron job with unparseable row data"
                 ),
             }
@@ -1088,7 +1088,7 @@ fn add_column_if_missing(conn: &Connection, name: &str, sql_type: &str) -> Resul
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": err.to_string(), "name": name})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err), "name": name})),
                 "Column cron_jobs. already exists (concurrent migration)"
             );
             Ok(())

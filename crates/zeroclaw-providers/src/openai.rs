@@ -104,8 +104,16 @@ struct NativeToolFunctionSpec {
 }
 
 fn parse_native_tool_spec(value: serde_json::Value) -> anyhow::Result<NativeToolSpec> {
-    let spec: NativeToolSpec = serde_json::from_value(value)
-        .map_err(|e| anyhow::anyhow!("Invalid OpenAI tool specification: {e}"))?;
+    let spec: NativeToolSpec = serde_json::from_value(value).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+            "openai: invalid tool spec"
+        );
+        anyhow::Error::msg(format!("Invalid OpenAI tool specification: {e}"))
+    })?;
 
     if spec.kind != "function" {
         anyhow::bail!(
@@ -368,7 +376,14 @@ impl ModelProvider for OpenAiModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openai: API key not configured"
+            );
+            anyhow::Error::msg("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
         })?;
 
         let temperature = temperature.unwrap_or(self.default_temperature());
@@ -414,7 +429,15 @@ impl ModelProvider for OpenAiModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.effective_content())
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openai: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenAI")
+            })
     }
 
     async fn chat(
@@ -424,7 +447,14 @@ impl ModelProvider for OpenAiModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openai: API key not configured"
+            );
+            anyhow::Error::msg("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
         })?;
 
         let temperature = temperature.unwrap_or(self.default_temperature());
@@ -463,7 +493,15 @@ impl ModelProvider for OpenAiModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openai: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenAI")
+            })?;
         let mut result = Self::parse_native_response(message);
         result.usage = usage;
         Ok(result)
@@ -481,7 +519,14 @@ impl ModelProvider for OpenAiModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openai: API key not configured"
+            );
+            anyhow::Error::msg("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
         })?;
 
         let temperature = temperature.unwrap_or(self.default_temperature());
@@ -531,7 +576,15 @@ impl ModelProvider for OpenAiModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openai: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenAI")
+            })?;
         let mut result = Self::parse_native_response(message);
         result.usage = usage;
         Ok(result)

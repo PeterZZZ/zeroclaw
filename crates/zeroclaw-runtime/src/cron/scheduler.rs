@@ -74,7 +74,7 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "Failed to sync declarative cron jobs"
         ),
     }
@@ -108,7 +108,7 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Scheduler query failed"
                 );
                 continue;
@@ -154,7 +154,7 @@ async fn catch_up_overdue_jobs(config: &Config, event_tx: &EventBroadcast) {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Startup catch-up query failed"
             );
             return;
@@ -265,7 +265,7 @@ async fn process_due_jobs(
         let security = match SecurityPolicy::for_agent(config, &agent_alias) {
             Ok(s) => Arc::new(s),
             Err(e) => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"job_id": job.id, "agent": agent_alias, "error": e.to_string()})), "Cron job: failed to build SecurityPolicy for owning agent");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"job_id": job.id, "agent": agent_alias, "error": format!("{}", e)})), "Cron job: failed to build SecurityPolicy for owning agent");
                 return None;
             }
         };
@@ -538,13 +538,13 @@ async fn persist_job_result(
         let channel = job.delivery.channel.as_deref().unwrap_or("");
         let target = job.delivery.to.as_deref().unwrap_or("");
         if job.delivery.best_effort {
-            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"job_id": job.id, "agent_alias": job.agent_alias, "channel": channel, "target": target, "error": e.to_string()})), "Cron delivery failed (best_effort)");
+            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"job_id": job.id, "agent_alias": job.agent_alias, "channel": channel, "target": target, "error": format!("{}", e)})), "Cron delivery failed (best_effort)");
             if success {
                 persisted_status = "degraded".to_string();
             }
         } else {
             success = false;
-            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"job_id": job.id, "agent_alias": job.agent_alias, "channel": channel, "target": target, "error": e.to_string()})), "Cron delivery failed");
+            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"job_id": job.id, "agent_alias": job.agent_alias, "channel": channel, "target": target, "error": format!("{}", e)})), "Cron delivery failed");
             persisted_status = "error".to_string();
         }
 
@@ -671,14 +671,26 @@ async fn deliver_if_configured(config: &Config, job: &CronJob, output: &str) -> 
         return Ok(());
     }
 
-    let channel = delivery
-        .channel
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("delivery.channel is required for announce mode"))?;
-    let target = delivery
-        .to
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("delivery.to is required for announce mode"))?;
+    let channel = delivery.channel.as_deref().ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"field": "channel"})),
+            "cron delivery announce refused: required field missing"
+        );
+        anyhow::Error::msg("delivery.channel is required for announce mode")
+    })?;
+    let target = delivery.to.as_deref().ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"field": "to"})),
+            "cron delivery announce refused: required field missing"
+        );
+        anyhow::Error::msg("delivery.to is required for announce mode")
+    })?;
 
     deliver_announcement(
         config,

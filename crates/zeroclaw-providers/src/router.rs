@@ -353,7 +353,7 @@ impl ModelProvider for RouterModelProvider {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "model_provider": name})
+                            ::serde_json::json!({"error": format!("{}", e), "model_provider": name})
                         ),
                     "Warmup failed (non-fatal)"
                 );

@@ -133,7 +133,7 @@ impl WebhookAuditHook {
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                     .with_attrs(
-                        ::serde_json::json!({"hook": "webhook-audit", "error": e.to_string()})
+                        ::serde_json::json!({"hook": "webhook-audit", "error": format!("{}", e)})
                     ),
                 "webhook URL validation failed"
             );
@@ -336,7 +336,7 @@ impl HookHandler for WebhookAuditHook {
                     }
                 }
                 Err(e) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"hook": "webhook-audit", "url": url, "error": e.to_string()})), "failed to POST audit payload");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"hook": "webhook-audit", "url": url, "error": format!("{}", e)})), "failed to POST audit payload");
                 }
             }
         });

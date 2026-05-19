@@ -397,9 +397,15 @@ impl Channel for IrcChannel {
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let mut guard = self.writer.lock().await;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
+        let writer = guard.as_mut().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "IRC not connected"
+            );
+            anyhow::Error::msg("IRC not connected")
+        })?;
 
         // Calculate safe payload size:
         // 512 - sender prefix (~64 bytes for :nick!user@host) - "PRIVMSG " - target - " :" - "\r\n"
@@ -462,7 +468,16 @@ impl Channel for IrcChannel {
             let n = tokio::time::timeout(READ_TIMEOUT, buf_reader.read_line(&mut line))
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!("IRC read timed out (no data for {READ_TIMEOUT:?})")
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Timeout)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "timeout": format!("{:?}", READ_TIMEOUT),
+                            })),
+                        "irc: read timed out"
+                    );
+                    anyhow::Error::msg(format!("IRC read timed out (no data for {READ_TIMEOUT:?})"))
                 })??;
             if n == 0 {
                 anyhow::bail!("IRC connection closed by server");

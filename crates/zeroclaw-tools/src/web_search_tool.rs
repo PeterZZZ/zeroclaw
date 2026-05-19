@@ -97,24 +97,55 @@ impl WebSearchTool {
     /// Re-read `config.toml` and decrypt `[web_search] brave_api_key`.
     fn reload_brave_api_key(&self) -> anyhow::Result<String> {
         let contents = std::fs::read_to_string(&self.config_path).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config_path.display().to_string(),
+                        "search_provider": "brave",
+                        "error": format!("{}", e),
+                    })),
+                "web_search: failed to read config for Brave API key"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to read config file {} for Brave API key: {e}",
                 self.config_path.display()
-            )
+            ))
         })?;
 
         let config: zeroclaw_config::schema::Config = toml::from_str(&contents).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config_path.display().to_string(),
+                        "search_provider": "brave",
+                        "error": format!("{}", e),
+                    })),
+                "web_search: failed to parse config for Brave API key"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to parse config file {} for Brave API key: {e}",
                 self.config_path.display()
-            )
+            ))
         })?;
 
         let raw_key = config
             .web_search
             .brave_api_key
             .filter(|k| !k.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Brave API key not configured"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"search_provider": "brave"})),
+                    "web_search: Brave API key not configured"
+                );
+                anyhow::Error::msg("Brave API key not configured")
+            })?;
 
         // Decrypt if necessary.
         if zeroclaw_config::secrets::SecretStore::is_encrypted(&raw_key) {
@@ -268,24 +299,55 @@ impl WebSearchTool {
     /// Re-read `config.toml` and decrypt `[web_search] tavily_api_key`.
     fn reload_tavily_api_key(&self) -> anyhow::Result<String> {
         let contents = std::fs::read_to_string(&self.config_path).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config_path.display().to_string(),
+                        "search_provider": "tavily",
+                        "error": format!("{}", e),
+                    })),
+                "web_search: failed to read config for Tavily API key"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to read config file {} for Tavily API key: {e}",
                 self.config_path.display()
-            )
+            ))
         })?;
 
         let config: zeroclaw_config::schema::Config = toml::from_str(&contents).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config_path.display().to_string(),
+                        "search_provider": "tavily",
+                        "error": format!("{}", e),
+                    })),
+                "web_search: failed to parse config for Tavily API key"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to parse config file {} for Tavily API key: {e}",
                 self.config_path.display()
-            )
+            ))
         })?;
 
         let raw_key = config
             .web_search
             .tavily_api_key
             .filter(|k| !k.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Tavily API key not configured"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"search_provider": "tavily"})),
+                    "web_search: Tavily API key not configured"
+                );
+                anyhow::Error::msg("Tavily API key not configured")
+            })?;
 
         if zeroclaw_config::secrets::SecretStore::is_encrypted(&raw_key) {
             let zeroclaw_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
@@ -368,7 +430,16 @@ impl WebSearchTool {
         let results = json
             .get("results")
             .and_then(|r| r.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid Tavily API response"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"search_provider": "tavily"})),
+                    "web_search: invalid Tavily response"
+                );
+                anyhow::Error::msg("Invalid Tavily API response")
+            })?;
 
         if results.is_empty() {
             return Ok(format!("No results found for: {}", query));
@@ -401,7 +472,16 @@ impl WebSearchTool {
             .get("web")
             .and_then(|w| w.get("results"))
             .and_then(|r| r.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid Brave API response"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"search_provider": "brave"})),
+                    "web_search: invalid Brave response"
+                );
+                anyhow::Error::msg("Invalid Brave API response")
+            })?;
 
         if results.is_empty() {
             return Ok(format!("No results found for: {}", query));
@@ -441,17 +521,39 @@ impl WebSearchTool {
 
         // Slow path: re-read config.toml to pick up values set after boot.
         let contents = std::fs::read_to_string(&self.config_path).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config_path.display().to_string(),
+                        "search_provider": "searxng",
+                        "error": format!("{}", e),
+                    })),
+                "web_search: failed to read config for SearXNG URL"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to read config file {} for SearXNG instance URL: {e}",
                 self.config_path.display()
-            )
+            ))
         })?;
 
         let config: zeroclaw_config::schema::Config = toml::from_str(&contents).map_err(|e| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config_path.display().to_string(),
+                        "search_provider": "searxng",
+                        "error": format!("{}", e),
+                    })),
+                "web_search: failed to parse config for SearXNG URL"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to parse config file {} for SearXNG instance URL: {e}",
                 self.config_path.display()
-            )
+            ))
         })?;
 
         config
@@ -459,9 +561,16 @@ impl WebSearchTool {
             .searxng_instance_url
             .filter(|u| !u.is_empty())
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"search_provider": "searxng"})),
+                    "web_search: SearXNG instance URL not configured"
+                );
+                anyhow::Error::msg(
                     "SearXNG instance URL not configured. Set [web_search] searxng_instance_url \
-                     in config.toml or the SEARXNG_INSTANCE_URL environment variable."
+                     in config.toml or the SEARXNG_INSTANCE_URL environment variable.",
                 )
             })
     }
@@ -505,7 +614,16 @@ impl WebSearchTool {
         let results = json
             .get("results")
             .and_then(|r| r.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid SearXNG API response"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"search_provider": "searxng"})),
+                    "web_search: invalid SearXNG response"
+                );
+                anyhow::Error::msg("Invalid SearXNG API response")
+            })?;
 
         if results.is_empty() {
             return Ok(format!("No results found for: {}", query));
@@ -594,10 +712,16 @@ impl Tool for WebSearchTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let query = args
-            .get("query")
-            .and_then(|q| q.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: query"))?;
+        let query = args.get("query").and_then(|q| q.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "query"})),
+                "web_search: missing query parameter"
+            );
+            anyhow::Error::msg("Missing required parameter: query")
+        })?;
 
         if query.trim().is_empty() {
             anyhow::bail!("Search query cannot be empty");

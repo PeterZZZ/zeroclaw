@@ -104,7 +104,16 @@ impl Tool for SkillHttpTool {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "skill_http tool: reqwest client build failed"
+                );
+                anyhow::Error::msg(format!("Failed to build HTTP client: {e}"))
+            })?;
 
         let response = match client.get(&url).send().await {
             Ok(resp) => resp,

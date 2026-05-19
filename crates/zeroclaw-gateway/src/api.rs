@@ -538,7 +538,7 @@ pub async fn handle_api_cron_run(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"job_id": job.id, "error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"job_id": job.id, "error": format!("{}", e)})),
                 "manual cron trigger delivery failed (best_effort)"
             );
         } else {
@@ -546,7 +546,7 @@ pub async fn handle_api_cron_run(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"job_id": job.id, "error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"job_id": job.id, "error": format!("{}", e)})),
                 "manual cron trigger delivery failed"
             );
             success = false;
@@ -567,7 +567,7 @@ pub async fn handle_api_cron_run(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"job_id": job.id, "error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"job_id": job.id, "error": format!("{}", e)})),
             "manual cron trigger: failed to persist run history"
         );
     }
@@ -578,7 +578,7 @@ pub async fn handle_api_cron_run(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"job_id": job.id, "error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"job_id": job.id, "error": format!("{}", e)})),
             "manual cron trigger: failed to update last_run state"
         );
     }

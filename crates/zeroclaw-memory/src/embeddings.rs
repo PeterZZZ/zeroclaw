@@ -15,9 +15,15 @@ pub trait EmbeddingProvider: Send + Sync {
     /// Embed a single text
     async fn embed_one(&self, text: &str) -> anyhow::Result<Vec<f32>> {
         let mut results = self.embed(&[text]).await?;
-        results
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("Empty embedding result"))
+        results.pop().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "embed_one: provider returned no embedding"
+            );
+            anyhow::Error::msg("Empty embedding result")
+        })
     }
 }
 
@@ -129,17 +135,30 @@ impl EmbeddingProvider for OpenAiEmbedding {
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let data = json
-            .get("data")
-            .and_then(|d| d.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: missing 'data'"))?;
+        let data = json.get("data").and_then(|d| d.as_array()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "embedding response missing 'data' field"
+            );
+            anyhow::Error::msg("Invalid embedding response: missing 'data'")
+        })?;
 
         let mut embeddings = Vec::with_capacity(data.len());
         for item in data {
             let embedding = item
                 .get("embedding")
                 .and_then(|e| e.as_array())
-                .ok_or_else(|| anyhow::anyhow!("Invalid embedding item"))?;
+                .ok_or_else(|| {
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                        "embedding response item missing 'embedding' array"
+                    );
+                    anyhow::Error::msg("Invalid embedding item")
+                })?;
 
             #[allow(clippy::cast_possible_truncation)]
             let vec: Vec<f32> = embedding

@@ -552,7 +552,15 @@ impl NextcloudTalkChannel {
             .pointer("/ocs/data/id")
             .and_then(|v| v.as_u64())
             .map(|id| id.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Talk: missing message ID in send response"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "Talk: missing message ID in send response"
+                );
+                anyhow::Error::msg("Talk: missing message ID in send response")
+            })?;
 
         Ok(message_id)
     }
@@ -745,7 +753,7 @@ impl Channel for NextcloudTalkChannel {
                 ::zeroclaw_log::record!(
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Talk update_draft skipped"
                 );
             }
@@ -794,7 +802,7 @@ impl Channel for NextcloudTalkChannel {
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Talk cancel_draft delete failed (non-fatal)"
             );
         }

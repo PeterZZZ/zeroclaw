@@ -73,7 +73,7 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
         ::zeroclaw_log::record!(
             DEBUG,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "audit pruning skipped"
         );
     }

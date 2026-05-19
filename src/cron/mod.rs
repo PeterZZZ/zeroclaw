@@ -1,14 +1,19 @@
 pub use zeroclaw_runtime::cron::*;
 
 use crate::config::Config;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 
 /// Bail with a clear error if the named agent isn't configured.
 fn require_configured_agent(config: &Config, agent_alias: &str) -> Result<()> {
     if config.agent(agent_alias).is_none() {
-        return Err(anyhow!(
-            "Unknown agent {agent_alias:?} (no [agents.{agent_alias}] entry configured)"
-        ));
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"agent_alias": agent_alias})),
+            "cron CLI rejected: unknown agent alias"
+        );
+        anyhow::bail!("Unknown agent {agent_alias:?} (no [agents.{agent_alias}] entry configured)");
     }
     Ok(())
 }
@@ -17,9 +22,19 @@ fn parse_explicit_rfc3339_utc(raw: &str) -> Result<chrono::DateTime<chrono::Utc>
     chrono::DateTime::parse_from_rfc3339(raw)
         .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
         .map_err(|err| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "raw": raw,
+                        "error": format!("{}", err),
+                    })),
+                "cron --at rejected: timestamp lacks explicit Z/offset or is malformed"
+            );
+            anyhow::Error::msg(format!(
                 "Invalid RFC3339 timestamp for --at: expected RFC3339 timestamp with explicit Z or offset, e.g. 2026-05-18T09:00:00Z or 2026-05-18T09:00:00-04:00; got '{raw}': {err}"
-            )
+            ))
         })
 }
 

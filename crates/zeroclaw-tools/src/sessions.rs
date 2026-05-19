@@ -262,7 +262,16 @@ impl Tool for SessionsHistoryTool {
         let session_id = args
             .get("session_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'session_id' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "session_id"})),
+                    "sessions: missing session_id parameter"
+                );
+                anyhow::Error::msg("Missing 'session_id' parameter")
+            })?;
 
         if let Err(error) = validate_session_id(session_id) {
             return Ok(error.into_tool_result());
@@ -362,7 +371,16 @@ impl Tool for SessionsSendTool {
         let session_id = args
             .get("session_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'session_id' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "session_id"})),
+                    "sessions: missing session_id parameter"
+                );
+                anyhow::Error::msg("Missing 'session_id' parameter")
+            })?;
 
         if let Err(error) = validate_session_id(session_id) {
             return Ok(error.into_tool_result());
@@ -371,7 +389,16 @@ impl Tool for SessionsSendTool {
         let message = args
             .get("message")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'message' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "message"})),
+                    "sessions: missing message parameter"
+                );
+                anyhow::Error::msg("Missing 'message' parameter")
+            })?;
 
         if message.trim().is_empty() {
             return Ok(ToolResult {
@@ -556,7 +583,16 @@ impl Tool for SessionResetTool {
         let session_id = args
             .get("session_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'session_id' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "session_id"})),
+                    "sessions: missing session_id parameter"
+                );
+                anyhow::Error::msg("Missing 'session_id' parameter")
+            })?;
 
         if let Err(error) = validate_session_id(session_id) {
             return Ok(error.into_tool_result());
@@ -667,7 +703,16 @@ impl Tool for SessionDeleteTool {
         let session_id = args
             .get("session_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'session_id' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "session_id"})),
+                    "sessions: missing session_id parameter"
+                );
+                anyhow::Error::msg("Missing 'session_id' parameter")
+            })?;
 
         if let Err(error) = validate_session_id(session_id) {
             return Ok(error.into_tool_result());

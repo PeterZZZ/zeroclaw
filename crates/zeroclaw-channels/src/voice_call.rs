@@ -327,9 +327,16 @@ impl VoiceCallChannel {
             interruption_scope_id: Some(call_id.to_string()),
             attachments: vec![],
         };
-        tx.send(msg)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to send call event: {e}"))?;
+        tx.send(msg).await.map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "Failed to send call event"
+            );
+            anyhow::Error::msg(format!("Failed to send call event: {e}"))
+        })?;
         Ok(())
     }
 
@@ -460,11 +467,27 @@ impl Channel for VoiceCallChannel {
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to bind voice webhook server: {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "Failed to bind voice webhook server"
+                );
+                anyhow::Error::msg(format!("Failed to bind voice webhook server: {e}"))
+            })?;
 
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| anyhow::anyhow!("Voice webhook server error: {e}"))?;
+        axum::serve(listener, app).await.map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "Voice webhook server error"
+            );
+            anyhow::Error::msg(format!("Voice webhook server error: {e}"))
+        })?;
 
         Ok(())
     }
@@ -495,7 +518,7 @@ impl Channel for VoiceCallChannel {
                 resp.status().is_success() || resp.status().as_u16() == 401
             }
             Err(e) => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": e.to_string(), "model_provider": self.config.model_provider})), "voice call health check failed");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", e), "model_provider": self.config.model_provider})), "voice call health check failed");
                 false
             }
         }

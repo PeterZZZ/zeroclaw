@@ -103,7 +103,7 @@ pub fn load_playbooks(dir: &Path) -> Vec<Playbook> {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 &format!("Failed to parse playbook {}", path.display().to_string())
                             );
                         }
@@ -116,7 +116,7 @@ pub fn load_playbooks(dir: &Path) -> Vec<Playbook> {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             &format!("Failed to read playbook {}", path.display().to_string())
                         );
                     }

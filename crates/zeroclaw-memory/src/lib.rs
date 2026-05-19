@@ -316,7 +316,7 @@ pub fn create_memory_with_storage_and_routes(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "memory hygiene skipped"
         );
     }
@@ -334,7 +334,7 @@ pub fn create_memory_with_storage_and_routes(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "memory snapshot skipped"
         );
     }
@@ -369,7 +369,7 @@ pub fn create_memory_with_storage_and_routes(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "memory hydration failed"
                 );
             }
@@ -602,7 +602,7 @@ pub fn create_response_cache(config: &MemoryConfig, workspace_dir: &Path) -> Opt
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Response cache disabled due to error"
             );
             None

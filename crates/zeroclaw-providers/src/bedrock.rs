@@ -107,16 +107,44 @@ impl AwsCredentials {
             let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
             format!("{home}/.aws/config")
         });
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| anyhow::anyhow!("Cannot read {config_path}: {e}"))?;
+        let content = std::fs::read_to_string(&config_path).map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "config_path": &config_path,
+                        "error": format!("{}", e),
+                    })),
+                "bedrock: cannot read AWS config file"
+            );
+            anyhow::Error::msg(format!("Cannot read {config_path}: {e}"))
+        })?;
         let profile = std::env::var("AWS_PROFILE").unwrap_or_else(|_| "default".to_string());
-        let (cmd, config_region) = Self::parse_aws_config(&content, &profile)
-            .ok_or_else(|| anyhow::anyhow!("No credential_process in [{profile}]"))?;
+        let (cmd, config_region) = Self::parse_aws_config(&content, &profile).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"profile": &profile})),
+                "bedrock: no credential_process in AWS profile"
+            );
+            anyhow::Error::msg(format!("No credential_process in [{profile}]"))
+        })?;
 
         let output = std::process::Command::new("sh")
             .args(["-c", &cmd])
             .output()
-            .map_err(|e| anyhow::anyhow!("Failed to run credential_process: {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "bedrock: failed to spawn credential_process"
+                );
+                anyhow::Error::msg(format!("Failed to run credential_process: {e}"))
+            })?;
         anyhow::ensure!(
             output.status.success(),
             "credential_process exited with {}: {}",
@@ -124,16 +152,42 @@ impl AwsCredentials {
             String::from_utf8_lossy(&output.stderr).trim()
         );
 
-        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .map_err(|e| anyhow::anyhow!("credential_process output is not valid JSON: {e}"))?;
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "bedrock: credential_process output is not valid JSON"
+            );
+            anyhow::Error::msg(format!("credential_process output is not valid JSON: {e}"))
+        })?;
 
         let access_key_id = json["AccessKeyId"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing AccessKeyId in credential_process output"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing": "AccessKeyId"})),
+                    "bedrock: credential_process missing AccessKeyId"
+                );
+                anyhow::Error::msg("Missing AccessKeyId in credential_process output")
+            })?
             .to_string();
         let secret_access_key = json["SecretAccessKey"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing SecretAccessKey in credential_process output"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing": "SecretAccessKey"})),
+                    "bedrock: credential_process missing SecretAccessKey"
+                );
+                anyhow::Error::msg("Missing SecretAccessKey in credential_process output")
+            })?
             .to_string();
         let session_token = json["SessionToken"].as_str().map(|s| s.to_string());
 
@@ -203,11 +257,35 @@ impl AwsCredentials {
 
         let access_key_id = creds_json["AccessKeyId"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing AccessKeyId in IMDS response"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "source": "imds",
+                            "missing": "AccessKeyId",
+                        })),
+                    "bedrock: IMDS response missing AccessKeyId"
+                );
+                anyhow::Error::msg("Missing AccessKeyId in IMDS response")
+            })?
             .to_string();
         let secret_access_key = creds_json["SecretAccessKey"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing SecretAccessKey in IMDS response"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "source": "imds",
+                            "missing": "SecretAccessKey",
+                        })),
+                    "bedrock: IMDS response missing SecretAccessKey"
+                );
+                anyhow::Error::msg("Missing SecretAccessKey in IMDS response")
+            })?
             .to_string();
         let session_token = creds_json["Token"].as_str().map(|s| s.to_string());
 
@@ -277,7 +355,18 @@ fn env_required(name: &str) -> anyhow::Result<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Environment variable {name} is required for Bedrock"))
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"env_var": name})),
+                "bedrock: required environment variable is missing"
+            );
+            anyhow::Error::msg(format!(
+                "Environment variable {name} is required for Bedrock"
+            ))
+        })
 }
 
 fn env_optional(name: &str) -> Option<String> {
@@ -1324,9 +1413,15 @@ impl ModelProvider for BedrockModelProvider {
 
         let response = self.send_converse_request(&auth, model, &request).await?;
 
-        Self::parse_converse_response(response)
-            .text
-            .ok_or_else(|| anyhow::anyhow!("No response from Bedrock"))
+        Self::parse_converse_response(response).text.ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "bedrock: empty text in response"
+            );
+            anyhow::Error::msg("No response from Bedrock")
+        })
     }
 
     async fn chat(

@@ -209,10 +209,16 @@ impl Tool for HttpRequestTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let url = args
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
+        let url = args.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "url"})),
+                "http_request: missing url parameter"
+            );
+            anyhow::Error::msg("Missing 'url' parameter")
+        })?;
 
         let method_str = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
         let headers_val = args.get("headers").cloned().unwrap_or(json!({}));
@@ -353,12 +359,27 @@ fn extract_host(url: &str) -> anyhow::Result<String> {
     let rest = url
         .strip_prefix("http://")
         .or_else(|| url.strip_prefix("https://"))
-        .ok_or_else(|| anyhow::anyhow!("Only http:// and https:// URLs are allowed"))?;
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"url": url})),
+                "http_request: non-http(s) URL rejected"
+            );
+            anyhow::Error::msg("Only http:// and https:// URLs are allowed")
+        })?;
 
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Invalid URL"))?;
+    let authority = rest.split(['/', '?', '#']).next().ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"url": url})),
+            "http_request: invalid URL"
+        );
+        anyhow::Error::msg("Invalid URL")
+    })?;
 
     if authority.is_empty() {
         anyhow::bail!("URL must include a host");

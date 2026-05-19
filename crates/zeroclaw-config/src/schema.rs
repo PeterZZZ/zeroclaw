@@ -7177,7 +7177,7 @@ impl ProxyConfig {
                     builder = builder.proxy(apply_no_proxy(proxy, no_proxy.clone()));
                 }
                 Err(error) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": url, "service_key": service_key, "error": error.to_string()})), "Ignoring invalid all_proxy URL: ");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": url, "service_key": service_key, "error": format!("{}", error)})), "Ignoring invalid all_proxy URL: ");
                 }
             }
         }
@@ -7188,7 +7188,7 @@ impl ProxyConfig {
                     builder = builder.proxy(apply_no_proxy(proxy, no_proxy.clone()));
                 }
                 Err(error) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": url, "service_key": service_key, "error": error.to_string()})), "Ignoring invalid http_proxy URL: ");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": url, "service_key": service_key, "error": format!("{}", error)})), "Ignoring invalid http_proxy URL: ");
                 }
             }
         }
@@ -7199,7 +7199,7 @@ impl ProxyConfig {
                     builder = builder.proxy(apply_no_proxy(proxy, no_proxy));
                 }
                 Err(error) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": url, "service_key": service_key, "error": error.to_string()})), "Ignoring invalid https_proxy URL: ");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": url, "service_key": service_key, "error": format!("{}", error)})), "Ignoring invalid https_proxy URL: ");
                 }
             }
         }
@@ -7349,14 +7349,27 @@ fn validate_mcp_config(config: &McpConfig) -> Result<()> {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "mcp.servers[{i}] with transport={} requires url",
-                            match server.transport {
-                                McpTransport::Http => "http",
-                                McpTransport::Sse => "sse",
-                                McpTransport::Stdio => "stdio",
-                            }
-                        )
+                        let transport_str = match server.transport {
+                            McpTransport::Http => "http",
+                            McpTransport::Sse => "sse",
+                            McpTransport::Stdio => "stdio",
+                        };
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Reject
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "index": i,
+                                "transport": transport_str,
+                            })),
+                            "mcp.servers entry rejected: transport requires url"
+                        );
+                        anyhow::Error::msg(format!(
+                            "mcp.servers[{i}] with transport={transport_str} requires url"
+                        ))
                     })?;
                 let parsed = reqwest::Url::parse(url)
                     .with_context(|| format!("mcp.servers[{i}].url is not a valid URL"))?;
@@ -7508,7 +7521,7 @@ pub fn build_runtime_proxy_client(service_key: &str) -> reqwest::Client {
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                 .with_attrs(
-                    ::serde_json::json!({"service_key": service_key, "error": error.to_string()})
+                    ::serde_json::json!({"service_key": service_key, "error": format!("{}", error)})
                 ),
             "Failed to build proxied client: "
         );
@@ -7539,7 +7552,7 @@ pub fn build_runtime_proxy_client_with_timeouts(
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                 .with_attrs(
-                    ::serde_json::json!({"service_key": service_key, "error": error.to_string()})
+                    ::serde_json::json!({"service_key": service_key, "error": format!("{}", error)})
                 ),
             "Failed to build proxied timeout client: "
         );
@@ -7627,7 +7640,7 @@ fn build_explicit_proxy_client(
     }
     builder = apply_explicit_proxy_to_builder(builder, service_key, proxy_url);
     let client = builder.build().unwrap_or_else(|error| {
-        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"service_key": service_key, "proxy_url": proxy_url, "error": error.to_string()})), "Failed to build channel proxy client: ");
+        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"service_key": service_key, "proxy_url": proxy_url, "error": format!("{}", error)})), "Failed to build channel proxy client: ");
         reqwest::Client::new()
     });
     set_runtime_proxy_cached_client(cache_key, client.clone());
@@ -7645,7 +7658,7 @@ fn apply_explicit_proxy_to_builder(
             builder = builder.proxy(proxy);
         }
         Err(error) => {
-            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": proxy_url, "service_key": service_key, "error": error.to_string()})), "Ignoring invalid channel proxy_url: ");
+            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"proxy_url": proxy_url, "service_key": service_key, "error": format!("{}", error)})), "Ignoring invalid channel proxy_url: ");
         }
     }
     builder
@@ -7807,7 +7820,16 @@ pub async fn ws_connect_with_proxy(
                 .with_context(|| format!("Invalid WebSocket URL: {ws_url}"))?;
             let target_host = target
                 .host_str()
-                .ok_or_else(|| anyhow::anyhow!("WebSocket URL has no host: {ws_url}"))?
+                .ok_or_else(|| {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"ws_url": ws_url})),
+                        "WebSocket URL has no host"
+                    );
+                    anyhow::Error::msg(format!("WebSocket URL has no host: {ws_url}"))
+                })?
                 .to_string();
             let target_port = target
                 .port_or_known_default()
@@ -7884,7 +7906,16 @@ async fn ws_connect_via_proxy(
         reqwest::Url::parse(ws_url).with_context(|| format!("Invalid WebSocket URL: {ws_url}"))?;
     let target_host = target
         .host_str()
-        .ok_or_else(|| anyhow::anyhow!("WebSocket URL has no host: {ws_url}"))?
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"ws_url": ws_url})),
+                "WebSocket URL has no host"
+            );
+            anyhow::Error::msg(format!("WebSocket URL has no host: {ws_url}"))
+        })?
         .to_string();
     let target_port = target
         .port_or_known_default()
@@ -13239,7 +13270,7 @@ impl Config {
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                     .with_attrs(::serde_json::json!({
                         "install": zeroclaw_dir.display().to_string(),
-                        "error": e.to_string(),
+                        "error": format!("{}", e),
                     })),
                 "[system] filesystem migration failed; continuing with legacy layout"
             );
@@ -13253,7 +13284,7 @@ impl Config {
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                     .with_attrs(::serde_json::json!({
                         "install": zeroclaw_dir.display().to_string(),
-                        "error": e.to_string(),
+                        "error": format!("{}", e),
                     })),
                 "[system] skills relocation to shared workspace failed; continuing"
             );
@@ -13532,7 +13563,13 @@ impl Config {
         // Tunnel — OpenVPN
         if self.tunnel.tunnel_provider.trim() == "openvpn" {
             let openvpn = self.tunnel.openvpn.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("tunnel.tunnel_provider='openvpn' requires [tunnel.openvpn]")
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "tunnel.tunnel_provider='openvpn' rejected: [tunnel.openvpn] block missing"
+                );
+                anyhow::Error::msg("tunnel.tunnel_provider='openvpn' requires [tunnel.openvpn]")
             })?;
 
             if openvpn.config_file.trim().is_empty() {
@@ -13621,7 +13658,22 @@ impl Config {
             let install_root = self.install_root_dir();
             for alias in self.skill_bundles.keys() {
                 let dir = crate::skill_bundles::resolve_directory(self, &install_root, alias)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(|e| {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Reject
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "skill_bundle": alias,
+                                "error": format!("{}", e),
+                            })),
+                            "skill_bundles.<alias>.directory could not be resolved"
+                        );
+                        anyhow::Error::msg(e.to_string())
+                    })?;
                 if let Err(e) = crate::skill_bundles::validate_directory(&dir, &install_root) {
                     validation_bail!(
                         InvalidFormat,
@@ -13871,7 +13923,18 @@ impl Config {
 
             if let Some(temp) = profile.temperature {
                 validate_temperature(temp).map_err(|e| {
-                    anyhow::anyhow!("providers.models.{profile_name}.temperature: {e}")
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "profile": profile_name,
+                                "temperature": temp,
+                                "error": format!("{}", e),
+                            })),
+                        "providers.models.<alias>.temperature rejected"
+                    );
+                    anyhow::Error::msg(format!("providers.models.{profile_name}.temperature: {e}"))
                 })?;
             }
 

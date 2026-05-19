@@ -49,10 +49,17 @@ fn resolve_audio_format(file_name: &str) -> Result<(String, &'static str)> {
         .map(|(_, e)| e)
         .unwrap_or("");
     let mime = mime_for_audio(extension).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Unsupported audio format '.{extension}' — \
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"extension": extension})),
+            "transcription: unsupported audio format"
+        );
+        anyhow::Error::msg(format!(
+            "Unsupported audio format '.{extension}'. \
              accepted: flac, mp3, mp4, mpeg, mpga, m4a, ogg, opus, wav, webm"
-        )
+        ))
     })?;
     Ok((normalized_name, mime))
 }
@@ -760,7 +767,7 @@ impl TranscriptionManager {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "local_whisper config invalid, provider skipped"
                     );
                 }
@@ -816,9 +823,19 @@ impl TranscriptionManager {
     ) -> Result<String> {
         let p = self.transcription_providers.get(transcription_provider).ok_or_else(|| {
             let available: Vec<&str> = self.transcription_providers.keys().map(|k| k.as_str()).collect();
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "transcription_provider": transcription_provider,
+                        "available": available,
+                    })),
+                "transcription: provider not configured"
+            );
+            anyhow::Error::msg(format!(
                 "Transcription transcription_provider '{transcription_provider}' not configured. Available: {available:?}"
-            )
+            ))
         })?;
 
         use ::zeroclaw_log::Instrument;

@@ -92,10 +92,16 @@ impl Tool for RpiGpioReadTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let pin = args
-            .get("pin")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'pin' parameter"))?;
+        let pin = args.get("pin").and_then(|v| v.as_u64()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"tool": "gpio_read", "param": "pin"})),
+                "tool argument validation failed: missing parameter"
+            );
+            anyhow::Error::msg("Missing 'pin' parameter")
+        })?;
         let pin_u8 = pin as u8;
 
         let value = tokio::task::spawn_blocking(move || {
@@ -147,14 +153,26 @@ impl Tool for RpiGpioWriteTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let pin = args
-            .get("pin")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'pin' parameter"))?;
-        let value = args
-            .get("value")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'value' parameter"))?;
+        let pin = args.get("pin").and_then(|v| v.as_u64()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"tool": "gpio_write", "param": "pin"})),
+                "tool argument validation failed: missing parameter"
+            );
+            anyhow::Error::msg("Missing 'pin' parameter")
+        })?;
+        let value = args.get("value").and_then(|v| v.as_u64()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"tool": "gpio_write", "param": "value"})),
+                "tool argument validation failed: missing parameter"
+            );
+            anyhow::Error::msg("Missing 'value' parameter")
+        })?;
         let pin_u8 = pin as u8;
         let level = match value {
             0 => rppal::gpio::Level::Low,

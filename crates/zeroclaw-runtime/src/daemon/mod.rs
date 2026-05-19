@@ -398,7 +398,7 @@ where
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "name": name})
+                                ::serde_json::json!({"error": format!("{}", e), "name": name})
                             ),
                         &format!("Daemon component '{name}' failed: {e}")
                     );
@@ -483,7 +483,7 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "Deadman alert delivery failed"
                             );
                         }
@@ -571,10 +571,25 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
                 .await
                 {
                     Ok(r) => r,
-                    Err(_) => Err(anyhow::anyhow!(
-                        "Phase 1 decision timed out ({}s)",
-                        config.heartbeat.task_timeout_secs
-                    )),
+                    Err(_) => {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Timeout
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "phase": "phase1_decision",
+                                "timeout_secs": config.heartbeat.task_timeout_secs,
+                            })),
+                            "heartbeat: phase1 decision timed out"
+                        );
+                        Err(anyhow::Error::msg(format!(
+                            "Phase 1 decision timed out ({}s)",
+                            config.heartbeat.task_timeout_secs
+                        )))
+                    }
                 }
             } else {
                 phase1_fut.await
@@ -608,7 +623,7 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "heartbeat phase 1 failed; running all tasks"
                     );
                     tasks
@@ -704,10 +719,25 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
                 .await
                 {
                     Ok(r) => r,
-                    Err(_) => Err(anyhow::anyhow!(
-                        "Heartbeat task timed out ({}s)",
-                        config.heartbeat.task_timeout_secs
-                    )),
+                    Err(_) => {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Timeout
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "phase": "phase2_heartbeat",
+                                "timeout_secs": config.heartbeat.task_timeout_secs,
+                            })),
+                            "heartbeat task timed out"
+                        );
+                        Err(anyhow::Error::msg(format!(
+                            "Heartbeat task timed out ({}s)",
+                            config.heartbeat.task_timeout_secs
+                        )))
+                    }
                 }
             } else {
                 phase2_fut.await
@@ -785,7 +815,7 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
                                         ::zeroclaw_log::Action::Note
                                     )
                                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "Heartbeat delivery failed"
                                 );
                             }
@@ -829,7 +859,7 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Heartbeat task failed"
                     );
                 }

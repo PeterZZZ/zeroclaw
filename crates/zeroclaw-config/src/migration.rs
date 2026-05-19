@@ -45,9 +45,16 @@ pub fn detect_version(value: &toml::Value) -> Result<u32> {
     match table.get("schema_version") {
         None => Ok(1),
         Some(toml::Value::Integer(n)) if *n >= 1 => Ok(*n as u32),
-        Some(other) => Err(anyhow::anyhow!(
-            "schema_version must be a positive integer, got {other}"
-        )),
+        Some(other) => {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"found": other.to_string()})),
+                "config schema_version is not a positive integer"
+            );
+            anyhow::bail!("schema_version must be a positive integer, got {other}")
+        }
     }
 }
 
@@ -67,9 +74,19 @@ pub fn migrate_file(input: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     if from > CURRENT_SCHEMA_VERSION {
-        return Err(anyhow::anyhow!(
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "from_version": from,
+                    "supported_version": CURRENT_SCHEMA_VERSION,
+                })),
+            "config schema_version is newer than this binary supports"
+        );
+        anyhow::bail!(
             "config schema_version {from} is newer than this binary supports ({CURRENT_SCHEMA_VERSION})"
-        ));
+        );
     }
     let migrated_value = run_chain(value, from)?;
     let migrated_table = match migrated_value {
@@ -266,9 +283,19 @@ pub fn migrate_to_current(input: &str) -> Result<Config> {
     let final_value = if from == CURRENT_SCHEMA_VERSION {
         value
     } else if from > CURRENT_SCHEMA_VERSION {
-        return Err(anyhow::anyhow!(
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "from_version": from,
+                    "supported_version": CURRENT_SCHEMA_VERSION,
+                })),
+            "config schema_version is newer than this binary supports"
+        );
+        anyhow::bail!(
             "config schema_version {from} is newer than this binary supports ({CURRENT_SCHEMA_VERSION})"
-        ));
+        );
     } else {
         run_chain(value, from)?
     };
@@ -357,12 +384,23 @@ pub fn migrate_file_in_place(path: &Path) -> Result<Option<MigrateReport>> {
         if backup_path.exists() {
             let _ = std::fs::copy(&backup_path, path);
         }
-        return Err(anyhow::anyhow!(
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "path": path.display().to_string(),
+                    "backup_path": backup_path.display().to_string(),
+                    "error": format!("{}", rename_err),
+                })),
+            "atomic rename failed during config migration"
+        );
+        anyhow::bail!(
             "failed to atomically replace {} with migrated config: {rename_err} \
              (backup retained at {})",
             path.display().to_string(),
             backup_path.display().to_string(),
-        ));
+        );
     }
 
     // 4. Fsync the parent directory so the rename is durable across crashes.

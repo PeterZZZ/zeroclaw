@@ -347,7 +347,16 @@ fn handle_edit(
         .list_skills(Some(target.bundle()))?
         .into_iter()
         .find(|s| s.r#ref.name() == target.name())
-        .ok_or_else(|| anyhow::anyhow!("skill '{target}' not found"))?;
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"skill_ref": target.to_string()})),
+                "skill show: target ref not found"
+            );
+            anyhow::Error::msg(format!("skill '{target}' not found"))
+        })?;
 
     let path = match file {
         Some(rel) => summary.directory.join(rel),
@@ -449,7 +458,16 @@ fn handle_bundle_show(config: &crate::config::Config, alias: String) -> Result<(
     let bundle = bundles
         .into_iter()
         .find(|b| b.alias == alias)
-        .ok_or_else(|| anyhow::anyhow!("skill bundle '{alias}' not configured"))?;
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"skill_bundle": alias})),
+                "skill bundle lookup failed: alias not in config"
+            );
+            anyhow::Error::msg(format!("skill bundle '{alias}' not configured"))
+        })?;
 
     println!(
         "{}",

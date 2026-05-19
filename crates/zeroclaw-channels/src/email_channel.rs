@@ -8,7 +8,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::unnecessary_map_or)]
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_imap::Session;
 use async_imap::extensions::idle::IdleResponse;
 use async_imap::types::Fetch;
@@ -241,7 +241,19 @@ impl EmailChannel {
         let session = client
             .login(&self.config.username, &self.config.password)
             .await
-            .map_err(|(e, _)| anyhow!("IMAP login failed: {}", e))?;
+            .map_err(|(e, _)| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "imap_login",
+                            "error": format!("{}", e),
+                        })),
+                    "email: IMAP login failed"
+                );
+                anyhow::Error::msg(format!("IMAP login failed: {}", e))
+            })?;
 
         ::zeroclaw_log::record!(
             DEBUG,
@@ -394,7 +406,17 @@ impl EmailChannel {
             Ok(Err(e)) => {
                 // Try to clean up IDLE state
                 let _ = idle.done().await;
-                Err(anyhow!("IDLE error: {}", e))
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "idle_wait",
+                            "error": format!("{}", e),
+                        })),
+                    "email: IDLE error"
+                );
+                Err(anyhow::Error::msg(format!("IDLE error: {}", e)))
             }
             Err(_) => {
                 // Timeout - RFC 2177 recommends restarting IDLE every 29 minutes

@@ -17,7 +17,7 @@
 //! The channel automatically calls `users.watch` to register the subscription
 //! and renews it before the 7-day expiry.
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use reqwest::Client;
@@ -211,7 +211,13 @@ impl GmailPushChannel {
     pub async fn register_watch(&self) -> Result<WatchResponse> {
         let token = self.config.oauth_token.clone();
         if token.is_empty() {
-            return Err(anyhow!("Gmail OAuth token is not configured"));
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "Gmail OAuth token is not configured"
+            );
+            anyhow::bail!("Gmail OAuth token is not configured");
         }
 
         let body = serde_json::json!({
@@ -230,11 +236,21 @@ impl GmailPushChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "watch_registration",
+                        "status": status.as_u16(),
+                        "body": text,
+                    })),
+                "gmail_push: watch registration failed"
+            );
+            return Err(anyhow::Error::msg(format!(
                 "Gmail watch registration failed ({}): {}",
-                status,
-                text
-            ));
+                status, text
+            )));
         }
 
         let watch: WatchResponse = resp.json().await?;
@@ -269,7 +285,13 @@ impl GmailPushChannel {
     ) -> Result<Vec<String>> {
         let token = self.config.oauth_token.clone();
         if token.is_empty() {
-            return Err(anyhow!("Gmail OAuth token is not configured"));
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "Gmail OAuth token is not configured"
+            );
+            anyhow::bail!("Gmail OAuth token is not configured");
         }
 
         let mut message_ids = Vec::new();
@@ -289,7 +311,21 @@ impl GmailPushChannel {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(anyhow!("Gmail history fetch failed ({}): {}", status, text));
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "history_fetch",
+                            "status": status.as_u16(),
+                            "body": text,
+                        })),
+                    "gmail_push: history fetch failed"
+                );
+                return Err(anyhow::Error::msg(format!(
+                    "Gmail history fetch failed ({}): {}",
+                    status, text
+                )));
             }
 
             let history_resp: HistoryResponse = resp.json().await?;
@@ -329,7 +365,21 @@ impl GmailPushChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("Gmail message fetch failed ({}): {}", status, text));
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "message_fetch",
+                        "status": status.as_u16(),
+                        "body": text,
+                    })),
+                "gmail_push: message fetch failed"
+            );
+            return Err(anyhow::Error::msg(format!(
+                "Gmail message fetch failed ({}): {}",
+                status, text
+            )));
         }
 
         Ok(resp.json().await?)
@@ -534,7 +584,13 @@ impl Channel for GmailPushChannel {
         // Send via Gmail API (drafts.send or messages.send)
         let token = self.config.oauth_token.clone();
         if token.is_empty() {
-            return Err(anyhow!("Gmail OAuth token is not configured for sending"));
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "Gmail OAuth token is not configured for sending"
+            );
+            anyhow::bail!("Gmail OAuth token is not configured for sending");
         }
 
         let subject = message.subject.as_deref().unwrap_or("ZeroClaw Message");
@@ -564,7 +620,21 @@ impl Channel for GmailPushChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("Gmail send failed ({}): {}", status, text));
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "send",
+                        "status": status.as_u16(),
+                        "body": text,
+                    })),
+                "gmail_push: send failed"
+            );
+            return Err(anyhow::Error::msg(format!(
+                "Gmail send failed ({}): {}",
+                status, text
+            )));
         }
 
         ::zeroclaw_log::record!(
@@ -648,11 +718,26 @@ impl Channel for GmailPushChannel {
 
 /// Parse and decode the Gmail notification from a Pub/Sub message.
 pub fn parse_notification(msg: &PubSubMessage) -> Result<GmailNotification> {
-    let decoded = BASE64
-        .decode(&msg.data)
-        .map_err(|e| anyhow!("Invalid base64 in Pub/Sub message: {e}"))?;
-    let notification: GmailNotification = serde_json::from_slice(&decoded)
-        .map_err(|e| anyhow!("Invalid JSON in Gmail notification: {e}"))?;
+    let decoded = BASE64.decode(&msg.data).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+            "Invalid base64 in Pub/Sub message"
+        );
+        anyhow::Error::msg(format!("Invalid base64 in Pub/Sub message: {e}"))
+    })?;
+    let notification: GmailNotification = serde_json::from_slice(&decoded).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+            "Invalid JSON in Gmail notification"
+        );
+        anyhow::Error::msg(format!("Invalid JSON in Gmail notification: {e}"))
+    })?;
     Ok(notification)
 }
 

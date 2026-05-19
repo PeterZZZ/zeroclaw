@@ -154,8 +154,16 @@ fn build_responses_url(base_or_endpoint: &str) -> anyhow::Result<String> {
         anyhow::bail!("OpenAI Codex endpoint override cannot be empty");
     }
 
-    let mut parsed = reqwest::Url::parse(candidate)
-        .map_err(|_| anyhow::anyhow!("OpenAI Codex endpoint override must be a valid URL"))?;
+    let mut parsed = reqwest::Url::parse(candidate).map_err(|_| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"candidate": candidate})),
+            "openai_codex: endpoint override is not a valid URL"
+        );
+        anyhow::Error::msg("OpenAI Codex endpoint override must be a valid URL")
+    })?;
 
     match parsed.scheme() {
         "http" | "https" => {}
@@ -850,10 +858,21 @@ fn process_sse_chunk(
             continue;
         }
         let event = serde_json::from_str::<Value>(line).map_err(|err| {
-            anyhow::anyhow!(
-                "OpenAI Codex SSE data parse failed: {err}. Payload: {}",
-                super::sanitize_api_error(line)
-            )
+            let sanitized = super::sanitize_api_error(line);
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "sse_parse",
+                        "payload": &sanitized,
+                        "error": format!("{}", err),
+                    })),
+                "openai_codex: SSE data parse failed"
+            );
+            anyhow::Error::msg(format!(
+                "OpenAI Codex SSE data parse failed: {err}. Payload: {sanitized}"
+            ))
         })?;
         emitted.extend(process_responses_stream_event(event, state)?);
     }
@@ -968,9 +987,19 @@ fn append_utf8_stream_chunk(
             }
 
             if err.error_len().is_some() {
-                return Err(anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "utf8_decode",
+                            "error": format!("{}", err),
+                        })),
+                    "openai_codex: response contained invalid UTF-8"
+                );
+                return Err(anyhow::Error::msg(format!(
                     "OpenAI Codex response contained invalid UTF-8: {err}"
-                ));
+                )));
             }
 
             // `error_len == None` means we have a valid prefix and an incomplete
@@ -986,25 +1015,47 @@ fn parse_responses_body(body: &str) -> anyhow::Result<ResponsesTurnResult> {
     if looks_like_sse {
         let result = parse_sse_turn(body)?;
         return ensure_nonempty_responses_turn(result, || {
-            anyhow::anyhow!(
-                "No response from OpenAI Codex stream payload: {}",
-                super::sanitize_api_error(body)
-            )
+            let sanitized = super::sanitize_api_error(body);
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"payload": &sanitized})),
+                "openai_codex: empty SSE stream payload"
+            );
+            anyhow::Error::msg(format!(
+                "No response from OpenAI Codex stream payload: {sanitized}"
+            ))
         });
     }
 
     let parsed: ResponsesResponse = serde_json::from_str(body).map_err(|err| {
-        anyhow::anyhow!(
-            "OpenAI Codex JSON parse failed: {err}. Payload: {}",
-            super::sanitize_api_error(body)
-        )
+        let sanitized = super::sanitize_api_error(body);
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "payload": &sanitized,
+                    "error": format!("{}", err),
+                })),
+            "openai_codex: JSON parse failed"
+        );
+        anyhow::Error::msg(format!(
+            "OpenAI Codex JSON parse failed: {err}. Payload: {sanitized}"
+        ))
     })?;
     let result = responses_turn_from_response(&parsed);
     ensure_nonempty_responses_turn(result, || {
-        anyhow::anyhow!(
-            "No response from OpenAI Codex: {}",
-            super::sanitize_api_error(body)
-        )
+        let sanitized = super::sanitize_api_error(body);
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"payload": &sanitized})),
+            "openai_codex: empty response"
+        );
+        anyhow::Error::msg(format!("No response from OpenAI Codex: {sanitized}"))
     })
 }
 
@@ -1020,17 +1071,35 @@ async fn decode_responses_body(response: reqwest::Response) -> anyhow::Result<Re
     let mut stream = response.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk
-            .map_err(|err| anyhow::anyhow!("error reading OpenAI Codex response stream: {err}"))?;
+        let bytes = chunk.map_err(|err| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "stream_read",
+                        "error": format!("{}", err),
+                    })),
+                "openai_codex: error reading response stream"
+            );
+            anyhow::Error::msg(format!("error reading OpenAI Codex response stream: {err}"))
+        })?;
         append_utf8_stream_chunk(&mut body, &mut pending_utf8, &bytes)?;
     }
 
     if !pending_utf8.is_empty() {
         let err = std::str::from_utf8(&pending_utf8)
             .expect_err("pending bytes should be invalid UTF-8 at end of stream");
-        return Err(anyhow::anyhow!(
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
+            "openai_codex: response ended with incomplete UTF-8"
+        );
+        return Err(anyhow::Error::msg(format!(
             "OpenAI Codex response ended with incomplete UTF-8: {err}"
-        ));
+        )));
     }
 
     parse_responses_body(&body)
@@ -1092,7 +1161,7 @@ impl OpenAiCodexModelProvider {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     "failed to load OpenAI Codex profile; continuing with custom endpoint API key mode"
                 );
                 None
@@ -1110,7 +1179,7 @@ impl OpenAiCodexModelProvider {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     "failed to refresh OpenAI token; continuing with custom endpoint API key mode"
                 );
                 None
@@ -1127,8 +1196,15 @@ impl OpenAiCodexModelProvider {
             oauth_access_token
         } else {
             Some(oauth_access_token.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "OpenAI Codex auth profile not found. Run `zeroclaw auth login --provider openai-codex`."
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing": "oauth_access_token"})),
+                    "openai_codex: auth profile not found"
+                );
+                anyhow::Error::msg(
+                    "OpenAI Codex auth profile not found. Run `zeroclaw auth login --provider openai-codex`.",
                 )
             })?)
         };
@@ -1136,8 +1212,15 @@ impl OpenAiCodexModelProvider {
             account_id
         } else {
             Some(account_id.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "OpenAI Codex account id not found in auth profile/token. Run `zeroclaw auth login --provider openai-codex` again."
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing": "account_id"})),
+                    "openai_codex: account_id not found in profile/token"
+                );
+                anyhow::Error::msg(
+                    "OpenAI Codex account id not found in auth profile/token. Run `zeroclaw auth login --provider openai-codex` again.",
                 )
             })?)
         };
@@ -1200,7 +1283,7 @@ impl OpenAiCodexModelProvider {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": stream_err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", stream_err)})),
                     "OpenAI Codex streaming response decode failed, retrying without streaming"
                 );
 
@@ -1224,9 +1307,19 @@ impl OpenAiCodexModelProvider {
                 decode_responses_body(non_streaming_response)
                     .await
                     .map_err(|fallback_err| {
-                        anyhow::anyhow!(
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                .with_attrs(::serde_json::json!({
+                                    "stream_err": format!("{}", stream_err),
+                                    "fallback_err": format!("{}", fallback_err),
+                                })),
+                            "openai_codex: stream + non-stream fallback both failed"
+                        );
+                        anyhow::Error::msg(format!(
                             "OpenAI Codex streaming response decode failed ({stream_err}); non-streaming retry failed ({fallback_err})"
-                        )
+                        ))
                     })
             }
         }

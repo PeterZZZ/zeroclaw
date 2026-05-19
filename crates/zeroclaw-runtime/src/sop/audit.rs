@@ -104,7 +104,7 @@ impl SopAuditLogger {
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "run_id": run_id})
+                                ::serde_json::json!({"error": format!("{}", e), "run_id": run_id})
                             ),
                         "SOP audit: failed to parse run "
                     );

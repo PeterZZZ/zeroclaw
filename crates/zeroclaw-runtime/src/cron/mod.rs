@@ -1,5 +1,5 @@
 use crate::security::SecurityPolicy;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use zeroclaw_config::schema::Config;
 
 mod schedule;
@@ -48,7 +48,16 @@ pub fn validate_shell_command_with_security(
     security
         .validate_command_execution(command, approved)
         .map(|_| ())
-        .map_err(|reason| anyhow!("blocked by security policy: {reason}"))
+        .map_err(|reason| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"reason": reason.to_string()})),
+                "cron shell command rejected by security policy"
+            );
+            anyhow::Error::msg(format!("blocked by security policy: {reason}"))
+        })
 }
 
 pub fn validate_delivery_config(delivery: Option<&DeliveryConfig>) -> Result<()> {

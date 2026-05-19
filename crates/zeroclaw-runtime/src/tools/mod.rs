@@ -489,7 +489,7 @@ pub fn all_tools_with_runtime(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "discord_search: failed to open discord.db"
                 );
             }
@@ -981,7 +981,7 @@ pub fn all_tools_with_runtime(
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "microsoft365: failed to initialize tool"
                     );
                 }
@@ -1017,7 +1017,7 @@ pub fn all_tools_with_runtime(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "knowledge graph disabled due to init error"
                 );
             }
@@ -1130,7 +1130,7 @@ pub fn all_tools_with_runtime(
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Failed to load WASM plugins"
                     );
                 }

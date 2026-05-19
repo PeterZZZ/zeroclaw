@@ -1680,7 +1680,7 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                 const KINDS: &[crate::config::PropKind] = &[#(#prop_kind_tokens),*];
                 const IS_OPTION: &[bool] = &[#(#prop_is_option_flags),*];
                 let idx = KNOWN.iter().position(|&n| n == name)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown property '{}'", name))?;
+                    .ok_or_else(|| ::anyhow::Error::msg(::std::format!("Unknown property '{}'", name)))?;
                 crate::config::serde_set_prop(self, Self::configurable_prefix(), name, value_str, KINDS[idx], IS_OPTION[idx])
             }
 

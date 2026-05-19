@@ -619,7 +619,7 @@ impl TtsManager {
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "dotted": dotted})
+                                ::serde_json::json!({"error": format!("{}", e), "dotted": dotted})
                             ),
                         "Skipping TTS provider"
                     );
@@ -695,11 +695,21 @@ impl TtsManager {
         }
 
         let tts = self.tts_providers.get(provider_alias).ok_or_else(|| {
-            anyhow::anyhow!(
+            let available = self.available_providers().join(", ");
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "tts_provider": provider_alias,
+                        "available": available,
+                    })),
+                "tts: provider not configured"
+            );
+            anyhow::Error::msg(format!(
                 "TTS model_provider '{}' not configured (available: {})",
-                provider_alias,
-                self.available_providers().join(", ")
-            )
+                provider_alias, available
+            ))
         })?;
 
         use ::zeroclaw_log::Instrument;

@@ -48,7 +48,7 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "cannot resolve plugin tools dir"
             );
             return Vec::new();
@@ -103,7 +103,7 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "cannot read tools dir"
             );
             return Vec::new();
@@ -118,7 +118,7 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "skipping unreadable dir entry"
                 );
                 continue;
@@ -170,11 +170,33 @@ pub fn scan_plugin_dir() -> Vec<LoadedPlugin> {
 ///
 /// Returns `Err` on any validation failure so the caller can log and continue.
 fn load_one_plugin(plugin_dir: &Path, manifest_path: &Path) -> Result<LoadedPlugin> {
-    let raw = fs::read_to_string(manifest_path)
-        .map_err(|e| anyhow::anyhow!("cannot read tool.toml: {}", e))?;
+    let raw = fs::read_to_string(manifest_path).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "manifest_path": manifest_path.display().to_string(),
+                    "error": format!("{}", e),
+                })),
+            "hardware plugin manifest unreadable"
+        );
+        anyhow::Error::msg(format!("cannot read tool.toml: {e}"))
+    })?;
 
-    let manifest: ToolManifest = toml::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("TOML parse error in tool.toml: {}", e))?;
+    let manifest: ToolManifest = toml::from_str(&raw).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "manifest_path": manifest_path.display().to_string(),
+                    "error": format!("{}", e),
+                })),
+            "hardware plugin manifest failed to parse"
+        );
+        anyhow::Error::msg(format!("TOML parse error in tool.toml: {e}"))
+    })?;
 
     // Validate required fields — fail fast with a descriptive error.
     if manifest.tool.name.trim().is_empty() {
@@ -189,11 +211,20 @@ fn load_one_plugin(plugin_dir: &Path, manifest_path: &Path) -> Result<LoadedPlug
 
     // Validate binary path: must exist, be a regular file, and reside within plugin_dir.
     let canonical_plugin_dir = plugin_dir.canonicalize().map_err(|e| {
-        anyhow::anyhow!(
-            "cannot canonicalize plugin dir {}: {}",
-            plugin_dir.display().to_string(),
-            e
-        )
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "plugin_dir": plugin_dir.display().to_string(),
+                    "error": format!("{}", e),
+                })),
+            "cannot canonicalize plugin dir"
+        );
+        anyhow::Error::msg(format!(
+            "cannot canonicalize plugin dir {}: {e}",
+            plugin_dir.display()
+        ))
     })?;
     let raw_binary_path = plugin_dir.join(&manifest.exec.binary);
     if !raw_binary_path.exists() {
@@ -203,11 +234,20 @@ fn load_one_plugin(plugin_dir: &Path, manifest_path: &Path) -> Result<LoadedPlug
         );
     }
     let binary_path = raw_binary_path.canonicalize().map_err(|e| {
-        anyhow::anyhow!(
-            "cannot canonicalize binary path {}: {}",
-            raw_binary_path.display().to_string(),
-            e
-        )
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "binary_path": raw_binary_path.display().to_string(),
+                    "error": format!("{}", e),
+                })),
+            "cannot canonicalize plugin binary path"
+        );
+        anyhow::Error::msg(format!(
+            "cannot canonicalize binary path {}: {e}",
+            raw_binary_path.display()
+        ))
     })?;
     if !binary_path.starts_with(&canonical_plugin_dir) {
         anyhow::bail!(
@@ -237,8 +277,15 @@ fn load_one_plugin(plugin_dir: &Path, manifest_path: &Path) -> Result<LoadedPlug
 /// Return the path `~/.zeroclaw/tools/` using the `directories` crate.
 pub fn plugin_tools_dir() -> Result<PathBuf> {
     use directories::BaseDirs;
-    let base = BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("cannot determine the user home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+            "cannot determine the user home directory"
+        );
+        anyhow::Error::msg("cannot determine the user home directory")
+    })?;
     Ok(base.home_dir().join(".zeroclaw").join("tools"))
 }
 

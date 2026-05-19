@@ -231,7 +231,15 @@ end tell"#
         // The database is at ~/Library/Messages/chat.db
         let db_path = UserDirs::new()
             .map(|u| u.home_dir().join("Library/Messages/chat.db"))
-            .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "Cannot find home directory"
+                );
+                anyhow::Error::msg("Cannot find home directory")
+            })?;
 
         if !db_path.exists() {
             anyhow::bail!(
@@ -297,7 +305,16 @@ end tell"#
                 },
             )
             .await
-            .map_err(|e| anyhow::anyhow!("iMessage poll worker join error: {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "iMessage poll worker join error"
+                );
+                anyhow::Error::msg(format!("iMessage poll worker join error: {e}"))
+            })?;
             conn = returned_conn;
 
             match poll_result {
@@ -341,7 +358,7 @@ end tell"#
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "iMessage poll error"
                     );
                 }

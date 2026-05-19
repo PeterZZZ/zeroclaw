@@ -155,11 +155,21 @@ impl Channel for DingTalkChannel {
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let webhooks = self.session_webhooks.read().await;
         let webhook_url = webhooks.get(&message.recipient).ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "recipient": message.recipient,
+                        "reason": "no_session_webhook",
+                    })),
+                "dingtalk: no session webhook for recipient"
+            );
+            anyhow::Error::msg(format!(
                 "No session webhook found for chat {}. \
                  The user must send a message first to establish a session.",
                 message.recipient
-            )
+            ))
         })?;
 
         let title = message.subject.as_deref().unwrap_or("ZeroClaw");
@@ -225,7 +235,7 @@ impl Channel for DingTalkChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "WebSocket error"
                     );
                     break;
@@ -267,7 +277,7 @@ impl Channel for DingTalkChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "failed to send pong"
                         );
                         break;

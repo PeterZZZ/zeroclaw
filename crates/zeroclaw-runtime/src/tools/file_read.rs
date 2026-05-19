@@ -84,10 +84,17 @@ impl Tool for FileReadTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
+        let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "path"})),
+                "tool argument validation failed"
+            );
+
+            anyhow::Error::msg("Missing 'path' parameter")
+        })?;
 
         // Cross-cutting rate limiting and path-allowlist checks live in the
         // RateLimitedTool + PathGuardedTool wrappers at registration time
@@ -223,9 +230,19 @@ impl Tool for FileReadTool {
             }
             Err(_) => {
                 // Not valid UTF-8 — read raw bytes and try to extract text
-                let bytes = tokio::fs::read(&resolved_path)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to read file: {e}"))?;
+                let bytes = tokio::fs::read(&resolved_path).await.map_err(|e| {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "path": resolved_path.display().to_string(),
+                                "error": format!("{}", e),
+                            })),
+                        "file_read: raw byte fallback read failed"
+                    );
+                    anyhow::Error::msg(format!("Failed to read file: {e}"))
+                })?;
 
                 if let Some(text) = try_extract_pdf_text(&bytes) {
                     return Ok(ToolResult {

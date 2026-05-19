@@ -214,7 +214,7 @@ impl Channel for CapturingChannel {
             attachments: vec![],
         })
         .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))
+        .map_err(|e| anyhow::Error::msg(e.to_string()))
     }
 }
 

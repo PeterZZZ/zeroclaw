@@ -258,7 +258,14 @@ impl DeviceRegistry {
             entry.capabilities = capabilities;
             Ok(())
         } else {
-            Err(anyhow::anyhow!("unknown device alias: {}", alias))
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"device_alias": alias})),
+                "device registry attach refused: unknown alias"
+            );
+            Err(anyhow::Error::msg(format!("unknown device alias: {alias}")))
         }
     }
 
@@ -573,10 +580,16 @@ impl DeviceRegistry {
     pub async fn reconnect(&mut self, alias: &str, new_port: Option<&str>) -> anyhow::Result<()> {
         use super::serial::{DEFAULT_BAUD, HardwareSerialTransport};
 
-        let entry = self
-            .devices
-            .get_mut(alias)
-            .ok_or_else(|| anyhow::anyhow!("unknown device alias: {alias}"))?;
+        let entry = self.devices.get_mut(alias).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"device_alias": alias})),
+                "device registry reconnect refused: unknown alias"
+            );
+            anyhow::Error::msg(format!("unknown device alias: {alias}"))
+        })?;
 
         // Determine the port path — prefer the caller's override.
         let port_path = match new_port {
@@ -587,11 +600,16 @@ impl DeviceRegistry {
                 entry.device = Arc::new(updated);
                 p.to_string()
             }
-            None => entry
-                .device
-                .device_path
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("device {alias} has no port path"))?,
+            None => entry.device.device_path.clone().ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"device_alias": alias})),
+                    "device registry reconnect refused: no recorded port path"
+                );
+                anyhow::Error::msg(format!("device {alias} has no port path"))
+            })?,
         };
 
         // Drop the stale transport.

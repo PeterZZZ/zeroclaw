@@ -7,7 +7,7 @@
 
 use std::io::{self, Stdout};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -463,7 +463,7 @@ impl OnboardUi for RatatuiUi {
         current: Option<usize>,
     ) -> Result<Answer<usize>> {
         if items.is_empty() {
-            return Err(anyhow!("no items to choose from"));
+            return Err(anyhow::Error::msg("no items to choose from"));
         }
         let mut filter = String::new();
         let mut cursor = current.unwrap_or(0).min(items.len() - 1);

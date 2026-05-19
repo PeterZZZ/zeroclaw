@@ -135,7 +135,16 @@ impl SopEngine {
 
         let sop = self
             .get_sop(sop_name)
-            .ok_or_else(|| anyhow::anyhow!("SOP not found: {sop_name}"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop_name": sop_name})),
+                    "SOP engine: sop not found"
+                );
+                anyhow::Error::msg(format!("SOP not found: {sop_name}"))
+            })?
             .clone();
 
         if !self.can_start(sop_name) {
@@ -198,16 +207,32 @@ impl SopEngine {
     /// Report the result of the current step and advance the run.
     /// Returns the next action to take.
     pub fn advance_step(&mut self, run_id: &str, result: SopStepResult) -> Result<SopRunAction> {
-        let run = self
-            .active_runs
-            .get_mut(run_id)
-            .ok_or_else(|| anyhow::anyhow!("Active run not found: {run_id}"))?;
+        let run = self.active_runs.get_mut(run_id).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"run_id": run_id})),
+                "SOP engine: active run not found"
+            );
+            anyhow::Error::msg(format!("Active run not found: {run_id}"))
+        })?;
 
         let sop = self
             .sops
             .iter()
             .find(|s| s.name == run.sop_name)
-            .ok_or_else(|| anyhow::anyhow!("SOP '{}' no longer loaded", run.sop_name))?
+            .ok_or_else(|| {
+                let sop_name = run.sop_name.clone();
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop_name": sop_name})),
+                    "SOP engine: sop no longer loaded (definition removed mid-run)"
+                );
+                anyhow::Error::msg(format!("SOP '{}' no longer loaded", run.sop_name))
+            })?
             .clone();
 
         // Record step result
@@ -279,10 +304,16 @@ impl SopEngine {
 
     /// Approve a step that is waiting for approval, transitioning back to Running.
     pub fn approve_step(&mut self, run_id: &str) -> Result<SopRunAction> {
-        let run = self
-            .active_runs
-            .get_mut(run_id)
-            .ok_or_else(|| anyhow::anyhow!("Active run not found: {run_id}"))?;
+        let run = self.active_runs.get_mut(run_id).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"run_id": run_id})),
+                "SOP engine: active run not found"
+            );
+            anyhow::Error::msg(format!("Active run not found: {run_id}"))
+        })?;
 
         if run.status != SopRunStatus::WaitingApproval {
             bail!(
@@ -298,7 +329,17 @@ impl SopEngine {
             .sops
             .iter()
             .find(|s| s.name == run.sop_name)
-            .ok_or_else(|| anyhow::anyhow!("SOP '{}' no longer loaded", run.sop_name))?
+            .ok_or_else(|| {
+                let sop_name = run.sop_name.clone();
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop_name": sop_name})),
+                    "SOP engine: sop no longer loaded (definition removed mid-run)"
+                );
+                anyhow::Error::msg(format!("SOP '{}' no longer loaded", run.sop_name))
+            })?
             .clone();
 
         let step_idx = (run.current_step - 1) as usize;
@@ -336,7 +377,16 @@ impl SopEngine {
     ) -> Result<SopRunAction> {
         let sop = self
             .get_sop(sop_name)
-            .ok_or_else(|| anyhow::anyhow!("SOP not found: {sop_name}"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop_name": sop_name})),
+                    "SOP engine: sop not found"
+                );
+                anyhow::Error::msg(format!("SOP not found: {sop_name}"))
+            })?
             .clone();
 
         if sop.execution_mode != SopExecutionMode::Deterministic {
@@ -404,16 +454,32 @@ impl SopEngine {
         run_id: &str,
         step_output: serde_json::Value,
     ) -> Result<SopRunAction> {
-        let run = self
-            .active_runs
-            .get_mut(run_id)
-            .ok_or_else(|| anyhow::anyhow!("Active run not found: {run_id}"))?;
+        let run = self.active_runs.get_mut(run_id).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"run_id": run_id})),
+                "SOP engine: active run not found"
+            );
+            anyhow::Error::msg(format!("Active run not found: {run_id}"))
+        })?;
 
         let sop = self
             .sops
             .iter()
             .find(|s| s.name == run.sop_name)
-            .ok_or_else(|| anyhow::anyhow!("SOP '{}' no longer loaded", run.sop_name))?
+            .ok_or_else(|| {
+                let sop_name = run.sop_name.clone();
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop_name": sop_name})),
+                    "SOP engine: sop no longer loaded (definition removed mid-run)"
+                );
+                anyhow::Error::msg(format!("SOP '{}' no longer loaded", run.sop_name))
+            })?
             .clone();
 
         // Record step result
@@ -462,10 +528,17 @@ impl SopEngine {
         &mut self,
         state: DeterministicRunState,
     ) -> Result<SopRunAction> {
-        let run = self
-            .active_runs
-            .get_mut(&state.run_id)
-            .ok_or_else(|| anyhow::anyhow!("Active run not found: {}", state.run_id))?;
+        let run = self.active_runs.get_mut(&state.run_id).ok_or_else(|| {
+            let run_id = state.run_id.clone();
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"run_id": run_id})),
+                "SOP engine: active run not found"
+            );
+            anyhow::Error::msg(format!("Active run not found: {}", state.run_id))
+        })?;
 
         if run.status != SopRunStatus::PausedCheckpoint {
             bail!(
@@ -479,7 +552,17 @@ impl SopEngine {
             .sops
             .iter()
             .find(|s| s.name == run.sop_name)
-            .ok_or_else(|| anyhow::anyhow!("SOP '{}' no longer loaded", run.sop_name))?
+            .ok_or_else(|| {
+                let sop_name = run.sop_name.clone();
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop_name": sop_name})),
+                    "SOP engine: sop no longer loaded (definition removed mid-run)"
+                );
+                anyhow::Error::msg(format!("SOP '{}' no longer loaded", run.sop_name))
+            })?
             .clone();
 
         run.status = SopRunStatus::Running;
@@ -563,10 +646,16 @@ impl SopEngine {
 
     /// Persist the current deterministic run state to a JSON file.
     fn persist_deterministic_state(&self, run_id: &str, sop: &Sop) -> Result<PathBuf> {
-        let run = self
-            .active_runs
-            .get(run_id)
-            .ok_or_else(|| anyhow::anyhow!("Run not found: {run_id}"))?;
+        let run = self.active_runs.get(run_id).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"run_id": run_id})),
+                "SOP engine: run not found in history"
+            );
+            anyhow::Error::msg(format!("Run not found: {run_id}"))
+        })?;
 
         let mut step_outputs = HashMap::new();
         for result in &run.step_results {
@@ -655,7 +744,7 @@ impl SopEngine {
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "run_id": run_id})
+                                ::serde_json::json!({"error": format!("{}", e), "run_id": run_id})
                             ),
                         "SOP run : auto-approve failed"
                     ),

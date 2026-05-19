@@ -639,8 +639,19 @@ fn info_via_probe(chip: &str) -> anyhow::Result<()> {
     use probe_rs::{Session, SessionConfig};
 
     println!("Connecting to {} via USB (ST-Link)...", chip);
-    let session = Session::auto_attach(chip, SessionConfig::default())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let session = Session::auto_attach(chip, SessionConfig::default()).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "chip": chip,
+                    "error": format!("{}", e),
+                })),
+            "probe-rs auto_attach failed (info CLI path)"
+        );
+        anyhow::Error::msg(e.to_string())
+    })?;
 
     let target = session.target();
     println!();

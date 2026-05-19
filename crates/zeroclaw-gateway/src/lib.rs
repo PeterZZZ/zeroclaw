@@ -613,7 +613,7 @@ pub async fn run_gateway(
         let security = match SecurityPolicy::for_agent(&config, agent_alias) {
             Ok(s) => Arc::new(s),
             Err(e) => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "error": e.to_string(), "agent_alias": agent_alias})), "Gateway: agent SecurityPolicy failed to build; booting with empty tools registry. Fix [agents.] via /admin/reload or /onboard.");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "error": format!("{}", e), "agent_alias": agent_alias})), "Gateway: agent SecurityPolicy failed to build; booting with empty tools registry. Fix [agents.] via /admin/reload or /onboard.");
                 return None;
             }
         };
@@ -735,7 +735,7 @@ pub async fn run_gateway(
                     ERROR,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                         .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "MCP registry failed to initialize"
                 );
             }
@@ -953,7 +953,7 @@ pub async fn run_gateway(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Session persistence disabled"
                 );
                 None
@@ -1563,7 +1563,7 @@ pub async fn run_gateway(
                         let tls_stream = match tls_acceptor.accept(tcp_stream).await {
                             Ok(s) => s,
                             Err(e) => {
-                                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": e.to_string(), "remote_addr": remote_addr})), "TLS handshake failed from");
+                                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": format!("{}", e), "remote_addr": remote_addr})), "TLS handshake failed from");
                                 return;
                             }
                         };
@@ -1580,7 +1580,7 @@ pub async fn run_gateway(
                         .serve_connection(io, hyper_svc)
                         .await
                         {
-                            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": e.to_string(), "remote_addr": remote_addr})), "connection error from");
+                            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": format!("{}", e), "remote_addr": remote_addr})), "connection error from");
                         }
                     });
                 }
@@ -1751,7 +1751,7 @@ async fn handle_pair(
                     ERROR,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                         .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     "pairing succeeded but token persistence failed"
                 );
                 let body = serde_json::json!({
@@ -1835,10 +1835,16 @@ struct GatewayChatOutcome {
 /// request-time so `/onboard` stays reachable.
 fn needs_onboarding_for(model: &str) -> Option<anyhow::Error> {
     if model.trim().is_empty() {
-        Some(anyhow::anyhow!(
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+            "gateway dispatch refused: no model configured (browser onboarding incomplete)"
+        );
+        Some(anyhow::Error::msg(
             "needs_onboarding: gateway has no model configured. Complete \
              browser onboarding at /onboard, or set [model_providers.<name>] \
-             model = \"...\" before sending messages."
+             model = \"...\" before sending messages.",
         ))
     } else {
         None
@@ -1910,8 +1916,14 @@ async fn run_gateway_chat_with_tools(
                     .map(|(alias, _)| alias)
             })
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "webhook chat requires at least one configured [agents.<alias>] entry"
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "webhook chat rejected: no configured [agents.<alias>] entry"
+                );
+                anyhow::Error::msg(
+                    "webhook chat requires at least one configured [agents.<alias>] entry",
                 )
             })?
             .clone();
@@ -2068,7 +2080,7 @@ async fn handle_webhook(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "webhook JSON parse error"
             );
             let err = serde_json::json!({
@@ -2425,7 +2437,7 @@ async fn handle_whatsapp_message(
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Failed to send WhatsApp reply"
                     );
                 }
@@ -2446,7 +2458,7 @@ async fn handle_whatsapp_message(
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                             .with_attrs(
-                                ::serde_json::json!({"channel": "whatsapp", "error": e.to_string()})
+                                ::serde_json::json!({"channel": "whatsapp", "error": format!("{}", e)})
                             ),
                         "LLM error"
                     );
@@ -2567,7 +2579,7 @@ async fn handle_linq_webhook(
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Failed to send Linq reply"
                     );
                 }
@@ -2588,7 +2600,7 @@ async fn handle_linq_webhook(
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                             .with_attrs(
-                                ::serde_json::json!({"channel": "linq", "error": e.to_string()})
+                                ::serde_json::json!({"channel": "linq", "error": format!("{}", e)})
                             ),
                         "LLM error"
                     );
@@ -2704,7 +2716,7 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Failed to send WATI reply"
                     );
                 }
@@ -2725,7 +2737,7 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                             .with_attrs(
-                                ::serde_json::json!({"channel": "wati", "error": e.to_string()})
+                                ::serde_json::json!({"channel": "wati", "error": format!("{}", e)})
                             ),
                         "LLM error"
                     );
@@ -2851,7 +2863,7 @@ async fn handle_nextcloud_talk_webhook(
                                 ::zeroclaw_log::Action::Fail
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Failed to send Nextcloud Talk reply"
                         );
                     }
@@ -2870,7 +2882,7 @@ async fn handle_nextcloud_talk_webhook(
                         );
                         needs_onboarding_channel_reply()
                     } else {
-                        ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"channel": "nextcloud_talk", "error": e.to_string()})), "LLM error");
+                        ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"channel": "nextcloud_talk", "error": format!("{}", e)})), "LLM error");
                         "Sorry, I couldn't process your message right now.".to_string()
                     };
                     let _ = nextcloud_talk
@@ -2934,25 +2946,26 @@ async fn handle_gmail_push_webhook(
     }
 
     let body_str = String::from_utf8_lossy(&body);
-    let envelope: zeroclaw_channels::gmail_push::PubSubEnvelope =
-        match serde_json::from_str(&body_str) {
-            Ok(e) => e,
-            Err(e) => {
-                ::zeroclaw_log::record!(
-                    WARN,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "channel": "gmail_push"})
-                        ),
-                    "webhook: invalid payload"
-                );
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid Pub/Sub envelope"})),
-                );
-            }
-        };
+    let envelope: zeroclaw_channels::gmail_push::PubSubEnvelope = match serde_json::from_str(
+        &body_str,
+    ) {
+        Ok(e) => e,
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                    .with_attrs(
+                        ::serde_json::json!({"error": format!("{}", e), "channel": "gmail_push"})
+                    ),
+                "webhook: invalid payload"
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid Pub/Sub envelope"})),
+            );
+        }
+    };
 
     // Process the notification asynchronously (non-blocking for the webhook response)
     let channel = Arc::clone(gmail_push);
@@ -2963,7 +2976,7 @@ async fn handle_gmail_push_webhook(
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                     .with_attrs(
-                        ::serde_json::json!({"channel": "gmail_push", "error": e.to_string()})
+                        ::serde_json::json!({"channel": "gmail_push", "error": format!("{}", e)})
                     ),
                 "push notification processing failed"
             );
@@ -5148,12 +5161,12 @@ mod tests {
 
     #[test]
     fn is_needs_onboarding_err_ignores_unrelated_errors() {
-        let err = anyhow::anyhow!("upstream timeout: provider returned 504");
+        let err = anyhow::Error::msg("upstream timeout: provider returned 504");
         assert!(
             !is_needs_onboarding_err(&err),
             "unrelated errors must not be misclassified as needs_onboarding"
         );
-        let err = anyhow::anyhow!("invalid api key");
+        let err = anyhow::Error::msg("invalid api key");
         assert!(!is_needs_onboarding_err(&err));
     }
 
@@ -5162,7 +5175,8 @@ mod tests {
         // Defends the contract that the substring marker is the
         // detection key — not the exact string. Wrappers (e.g.
         // anyhow::Error::context) must not break the check.
-        let err = anyhow::anyhow!("provider call failed").context("needs_onboarding: empty model");
+        let err =
+            anyhow::Error::msg("provider call failed").context("needs_onboarding: empty model");
         assert!(is_needs_onboarding_err(&err));
     }
 

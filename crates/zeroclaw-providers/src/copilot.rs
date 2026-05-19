@@ -417,11 +417,15 @@ impl CopilotModelProvider {
             output_tokens: u.completion_tokens,
             cached_input_tokens: None,
         });
-        let choice = api_response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No response from GitHub Copilot"))?;
+        let choice = api_response.choices.into_iter().next().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "copilot: empty choices in response"
+            );
+            anyhow::Error::msg("No response from GitHub Copilot")
+        })?;
 
         let tool_calls = choice
             .message
@@ -659,14 +663,14 @@ async fn write_file_secure(path: &Path, content: &str) {
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
             "Failed to write secure file"
         ),
         Err(err) => ::zeroclaw_log::record!(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
             "Failed to spawn blocking write"
         ),
     }

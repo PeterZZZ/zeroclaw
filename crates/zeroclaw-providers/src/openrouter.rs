@@ -408,10 +408,20 @@ impl OpenRouterModelProvider {
         response: reqwest::Response,
     ) -> anyhow::Result<String> {
         response.text().await.map_err(|error| {
-            let sanitized = super::sanitize_api_error(&error.to_string());
-            anyhow::anyhow!(
+            let sanitized = super::sanitize_api_error(&format!("{}", error));
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "model_provider": provider_name,
+                        "body": &sanitized,
+                    })),
+                "openrouter: transport error reading response body"
+            );
+            anyhow::Error::msg(format!(
                 "{provider_name} transport error while reading response body: {sanitized}"
-            )
+            ))
         })
     }
 
@@ -422,9 +432,21 @@ impl OpenRouterModelProvider {
     ) -> anyhow::Result<T> {
         serde_json::from_str::<T>(body).map_err(|error| {
             let snippet = Self::compact_sanitized_body_snippet(body);
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "model_provider": provider_name,
+                        "kind": kind,
+                        "body": &snippet,
+                        "error": format!("{}", error),
+                    })),
+                "openrouter: unexpected response payload"
+            );
+            anyhow::Error::msg(format!(
                 "{provider_name} API returned an unexpected {kind} payload: {error}; body={snippet}"
-            )
+            ))
         })
     }
 
@@ -434,9 +456,18 @@ impl OpenRouterModelProvider {
         let Some(extra) = &self.extra_body else {
             return Ok(serde_json::to_value(request)?);
         };
-        let overrides = extra
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("provider_extra must be a JSON object, got: {extra}"))?;
+        let overrides = extra.as_object().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"provider_extra": extra})),
+                "openrouter: provider_extra must be a JSON object"
+            );
+            anyhow::Error::msg(format!(
+                "provider_extra must be a JSON object, got: {extra}"
+            ))
+        })?;
         let mut value = serde_json::to_value(request)?;
         if let Some(base) = value.as_object_mut() {
             for (k, v) in overrides {
@@ -516,8 +547,18 @@ impl ModelProvider for OpenRouterModelProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
-        let credential = self.credential.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."))?;
+        let credential = self.credential.as_ref().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openrouter: API key not configured"
+            );
+            anyhow::Error::msg(
+                "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var.",
+            )
+        })?;
 
         let temperature = temperature.unwrap_or(self.default_temperature());
 
@@ -569,7 +610,15 @@ impl ModelProvider for OpenRouterModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenRouter"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openrouter: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenRouter")
+            })
     }
 
     async fn chat_with_history(
@@ -578,8 +627,18 @@ impl ModelProvider for OpenRouterModelProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
-        let credential = self.credential.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."))?;
+        let credential = self.credential.as_ref().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openrouter: API key not configured"
+            );
+            anyhow::Error::msg(
+                "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var.",
+            )
+        })?;
 
         let temperature = temperature.unwrap_or(self.default_temperature());
 
@@ -625,7 +684,15 @@ impl ModelProvider for OpenRouterModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenRouter"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openrouter: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenRouter")
+            })
     }
 
     async fn chat(
@@ -635,9 +702,16 @@ impl ModelProvider for OpenRouterModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-            "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."
-        )
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openrouter: API key not configured"
+            );
+            anyhow::Error::msg(
+                "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var.",
+            )
         })?;
 
         let temperature = temperature.unwrap_or(self.default_temperature());
@@ -688,7 +762,15 @@ impl ModelProvider for OpenRouterModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenRouter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openrouter: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenRouter")
+            })?;
         let mut result = Self::parse_native_response(message);
         result.usage = usage;
         Ok(result)
@@ -817,8 +899,15 @@ impl ModelProvider for OpenRouterModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "openrouter: API key not configured"
+            );
+            anyhow::Error::msg(
+                "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var.",
             )
         })?;
 
@@ -901,7 +990,15 @@ impl ModelProvider for OpenRouterModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenRouter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "openrouter: empty choices in response"
+                );
+                anyhow::Error::msg("No response from OpenRouter")
+            })?;
         let mut result = Self::parse_native_response(message);
         result.usage = usage;
         Ok(result)

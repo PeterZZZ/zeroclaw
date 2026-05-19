@@ -159,10 +159,16 @@ impl Tool for LinkedInTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing required 'action' parameter"))?;
+        let action = args.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "action"})),
+                "linkedin: missing action parameter"
+            );
+            anyhow::Error::msg("Missing required 'action' parameter")
+        })?;
 
         // Write actions require autonomy check
         if Self::is_write_action(action) && !self.security.can_act() {
@@ -284,7 +290,7 @@ impl Tool for LinkedInTool {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "Image generation failed, posting without image"
                             );
                         }

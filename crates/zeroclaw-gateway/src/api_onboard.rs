@@ -117,7 +117,7 @@ pub async fn handle_catalog_models(
             match zeroclaw_providers::catalog::list_models_for_family(&q.model_provider).await {
                 Ok(ms) => (ms, true),
                 Err(e) => {
-                    ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": q.model_provider, "error": e.to_string()})), "model catalog fetch failed");
+                    ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": q.model_provider, "error": format!("{}", e)})), "model catalog fetch failed");
                     (Vec::new(), false)
                 }
             }
@@ -986,7 +986,7 @@ pub async fn handle_section_select(
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"path": enabled_path, "error": e.to_string()})
+                                ::serde_json::json!({"path": enabled_path, "error": format!("{}", e)})
                             ),
                         "failed to default-enable newly created channel; operator must toggle manually"
                     );

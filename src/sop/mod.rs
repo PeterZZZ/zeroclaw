@@ -75,10 +75,16 @@ pub fn handle_command(command: crate::SopCommands, config: &crate::config::Confi
             Ok(())
         }
         crate::SopCommands::Show { name } => {
-            let sop = sops
-                .iter()
-                .find(|s| s.name == name)
-                .ok_or_else(|| anyhow::anyhow!("SOP not found: {name}"))?;
+            let sop = sops.iter().find(|s| s.name == name).ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"sop": name})),
+                    "sop show: name not found in loaded SOPs"
+                );
+                anyhow::Error::msg(format!("SOP not found: {name}"))
+            })?;
 
             println!(
                 "{} v{}",

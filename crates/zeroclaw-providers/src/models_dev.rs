@@ -56,7 +56,16 @@ pub(crate) fn parse_catalog(bytes: &[u8]) -> Result<Catalog> {
 /// Pure — separated from the live fetch so it can be unit-tested.
 pub(crate) fn filter_models(catalog: &Catalog, provider_key: &str) -> Result<Vec<String>> {
     let entry = catalog.get(provider_key).ok_or_else(|| {
-        anyhow::anyhow!("model_provider {provider_key:?} is not in the models.dev catalog")
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"model_provider": provider_key})),
+            "models_dev: provider not in catalog"
+        );
+        anyhow::Error::msg(format!(
+            "model_provider {provider_key:?} is not in the models.dev catalog"
+        ))
     })?;
     let mut ids: Vec<String> = entry.models.values().map(|m| m.id.clone()).collect();
     ids.sort();

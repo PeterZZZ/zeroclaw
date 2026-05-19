@@ -131,34 +131,85 @@ impl KiloCliModelProvider {
         cmd.stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|err| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "binary": self.binary_path.display().to_string(),
+                        "phase": "spawn",
+                        "error": format!("{}", err),
+                    })),
+                "kilocli: failed to spawn binary"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to spawn KiloCLI binary at {}: {err}. \
                  Ensure `kilo` is installed and in PATH, or set KILO_CLI_PATH.",
                 self.binary_path.display()
-            )
+            ))
         })?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|err| anyhow::anyhow!("Failed to write prompt to KiloCLI stdin: {err}"))?;
-            stdin
-                .shutdown()
-                .await
-                .map_err(|err| anyhow::anyhow!("Failed to finalize KiloCLI stdin stream: {err}"))?;
+            stdin.write_all(message.as_bytes()).await.map_err(|err| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "stdin_write",
+                            "error": format!("{}", err),
+                        })),
+                    "kilocli: failed to write prompt to stdin"
+                );
+                anyhow::Error::msg(format!("Failed to write prompt to KiloCLI stdin: {err}"))
+            })?;
+            stdin.shutdown().await.map_err(|err| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "stdin_shutdown",
+                            "error": format!("{}", err),
+                        })),
+                    "kilocli: failed to finalize stdin stream"
+                );
+                anyhow::Error::msg(format!("Failed to finalize KiloCLI stdin stream: {err}"))
+            })?;
         }
 
         let output = timeout(KILO_CLI_REQUEST_TIMEOUT, child.wait_with_output())
             .await
             .map_err(|_| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Timeout)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "binary": self.binary_path.display().to_string(),
+                            "timeout": format!("{:?}", KILO_CLI_REQUEST_TIMEOUT),
+                        })),
+                    "kilocli: request timed out"
+                );
+                anyhow::Error::msg(format!(
                     "KiloCLI request timed out after {:?} (binary: {})",
                     KILO_CLI_REQUEST_TIMEOUT,
                     self.binary_path.display()
-                )
+                ))
             })?
-            .map_err(|err| anyhow::anyhow!("KiloCLI process failed: {err}"))?;
+            .map_err(|err| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "process_wait",
+                            "error": format!("{}", err),
+                        })),
+                    "kilocli: process wait failed"
+                );
+                anyhow::Error::msg(format!("KiloCLI process failed: {err}"))
+            })?;
 
         if !output.status.success() {
             let code = output.status.code().unwrap_or(-1);
@@ -174,8 +225,19 @@ impl KiloCliModelProvider {
             );
         }
 
-        let text = String::from_utf8(output.stdout)
-            .map_err(|err| anyhow::anyhow!("KiloCLI produced non-UTF-8 output: {err}"))?;
+        let text = String::from_utf8(output.stdout).map_err(|err| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "utf8_decode",
+                        "error": format!("{}", err),
+                    })),
+                "kilocli: non-UTF-8 stdout"
+            );
+            anyhow::Error::msg(format!("KiloCLI produced non-UTF-8 output: {err}"))
+        })?;
 
         Ok(text.trim().to_string())
     }

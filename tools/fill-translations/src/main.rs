@@ -76,17 +76,27 @@ fn read_model_provider_config(provider_name: &str) -> anyhow::Result<ProviderCon
     let raw = candidates
         .iter()
         .find_map(|p| std::fs::read_to_string(p).ok())
-        .ok_or_else(|| anyhow::anyhow!("config.toml not found (tried ~/.zeroclaw/config.toml)"))?;
+        .ok_or_else(|| {
+            anyhow::Error::msg("config.toml not found (tried ~/.zeroclaw/config.toml)")
+        })?;
     let table: toml::Table = raw.parse()?;
     let model_provider = table
         .get("providers")
         .and_then(|v| v.get("models"))
         .and_then(|v| v.get(provider_name))
         .ok_or_else(|| {
-            anyhow::anyhow!("[providers.models.{provider_name}] not found in config.toml")
+            anyhow::Error::msg(format!(
+                "[providers.models.{provider_name}] not found in config.toml"
+            ))
         })?;
-    let model = model_provider.get("model").and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("No model set for model_provider '{provider_name}' — add `model = \"...\"` to [providers.models.{provider_name}]"))?
+    let model = model_provider
+        .get("model")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow::Error::msg(format!(
+                "No model set for model_provider '{provider_name}': add `model = \"...\"` to [providers.models.{provider_name}]"
+            ))
+        })?
         .to_string();
     Ok(ProviderConfig {
         base_url: model_provider
@@ -430,18 +440,18 @@ async fn fetch_ollama_content(
         .await
         .map_err(|e| fail(e.into(), String::new()))?;
     if !status.is_success() {
-        return Err(fail(anyhow::anyhow!("HTTP {status}"), raw));
+        return Err(fail(anyhow::Error::msg(format!("HTTP {status}")), raw));
     }
     let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
         fail(
-            anyhow::anyhow!("response body JSON parse: {e}"),
+            anyhow::Error::msg(format!("response body JSON parse: {e}")),
             raw.clone(),
         )
     })?;
     parsed["message"]["content"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| fail(anyhow::anyhow!("no message.content"), raw))
+        .ok_or_else(|| fail(anyhow::Error::msg("no message.content"), raw))
 }
 
 #[tokio::main]

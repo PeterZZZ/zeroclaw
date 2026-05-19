@@ -69,9 +69,17 @@ pub async fn handle_command(cmd: crate::PeripheralCommands, config: &Config) -> 
         crate::PeripheralCommands::Flash { port } => {
             let port_str = arduino_flash::resolve_port(config, port.as_deref())
                 .or_else(|| port.clone())
-                .ok_or_else(|| anyhow::anyhow!(
-                    "No port specified. Use --port /dev/cu.usbmodem* or add arduino-uno to config.toml"
-                ))?;
+                .ok_or_else(|| {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                        "peripheral flash refused: no port resolved (no --port flag and no arduino-uno in config)"
+                    );
+                    anyhow::Error::msg(
+                        "No port specified. Use --port /dev/cu.usbmodem* or add arduino-uno to config.toml"
+                    )
+                })?;
             arduino_flash::flash_arduino_firmware(&port_str)?;
         }
         #[cfg(not(feature = "hardware"))]

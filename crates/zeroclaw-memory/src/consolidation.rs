@@ -125,7 +125,7 @@ pub async fn consolidate_turn(
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "conflict check skipped"
             );
         }

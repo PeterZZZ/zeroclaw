@@ -82,10 +82,18 @@ impl Tunnel for OpenVpnTunnel {
             .spawn()?;
 
         // Wait for "Initialization Sequence Completed" in stderr
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to capture openvpn stderr"))?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(
+                        ::serde_json::json!({"tunnel_provider": "openvpn", "stream": "stderr"})
+                    ),
+                "tunnel process: failed to capture child stream"
+            );
+            anyhow::Error::msg("Failed to capture openvpn stderr")
+        })?;
 
         let mut reader = tokio::io::BufReader::new(stderr).lines();
         let deadline = tokio::time::Instant::now()

@@ -387,7 +387,16 @@ async fn prompt_field(
         .prop_fields()
         .into_iter()
         .find(|f| f.name == name)
-        .ok_or_else(|| anyhow::anyhow!("unknown config field: {name}"))?;
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"name": name})),
+                "onboard: unknown config field"
+            );
+            anyhow::Error::msg(format!("unknown config field: {name}"))
+        })?;
 
     let short = name.rsplit('.').next().unwrap_or(name);
     let current = field.display_value;
@@ -1198,13 +1207,13 @@ async fn prompt_model(cfg: &mut Config, ui: &mut dyn OnboardUi, prefix: &str) ->
             match handle.list_models().await {
                 Ok(models) => Some(models),
                 Err(e) => {
-                    ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": model_provider, "error": e.to_string()})), "models.dev catalog fetch failed");
+                    ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": model_provider, "error": format!("{}", e)})), "models.dev catalog fetch failed");
                     None
                 }
             }
         }
         Err(e) => {
-            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": model_provider, "error": e.to_string()})), "model_provider construction failed for model-list probe");
+            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": model_provider, "error": format!("{}", e)})), "model_provider construction failed for model-list probe");
             None
         }
     };
@@ -1216,7 +1225,7 @@ async fn prompt_model(cfg: &mut Config, ui: &mut dyn OnboardUi, prefix: &str) ->
                 match discover_openai_compat_models(base_url, api_key).await {
                     Ok(models) => Some(models),
                     Err(e) => {
-                        ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": model_provider, "base_url": base_url, "error": e.to_string()})), "OpenAI-compatible model discovery failed");
+                        ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"model_provider": model_provider, "base_url": base_url, "error": format!("{}", e)})), "OpenAI-compatible model discovery failed");
                         None
                     }
                 }

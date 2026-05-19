@@ -674,7 +674,7 @@ impl OllamaModelProvider {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"model": model, "error": first_err.to_string()})
+                            ::serde_json::json!({"model": model, "error": format!("{}", first_err)})
                         ),
                     "Ollama request failed with think=true; retrying without reasoning \
                      (model may not support it)"

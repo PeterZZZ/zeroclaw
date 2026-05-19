@@ -62,21 +62,21 @@ async fn gemini_warmup_refreshes_expired_oauth_token() -> Result<()> {
     let profiles = data
         .get_mut("profiles")
         .and_then(|p| p.as_object_mut())
-        .ok_or_else(|| anyhow::anyhow!("No profiles object in auth-profiles.json"))?;
+        .ok_or_else(|| anyhow::Error::msg("No profiles object in auth-profiles.json"))?;
 
     let gemini_profile_key = profiles
         .keys()
         .find(|k| k.starts_with("gemini:"))
         .ok_or_else(|| {
-            anyhow::anyhow!(
-                "No Gemini OAuth profile found. Run: zeroclaw auth login --model-provider gemini"
+            anyhow::Error::msg(
+                "No Gemini OAuth profile found. Run: zeroclaw auth login --model-provider gemini",
             )
         })?
         .clone();
 
     let gemini_profile = profiles
         .get_mut(&gemini_profile_key)
-        .ok_or_else(|| anyhow::anyhow!("Gemini profile not found"))?;
+        .ok_or_else(|| anyhow::Error::msg("Gemini profile not found"))?;
 
     println!("Found Gemini profile: {}", gemini_profile_key);
 
@@ -160,7 +160,7 @@ async fn gemini_warmup_refreshes_expired_oauth_token() -> Result<()> {
         .and_then(|p| p.as_object())
         .and_then(|p| p.get(&gemini_profile_key))
         .and_then(|p| p.as_object())
-        .ok_or_else(|| anyhow::anyhow!("Failed to read updated profile"))?;
+        .ok_or_else(|| anyhow::Error::msg("Failed to read updated profile"))?;
 
     let new_expires_at = updated_profile.get("expires_at").and_then(|v| v.as_str());
     println!("New expires_at: {:?}", new_expires_at);

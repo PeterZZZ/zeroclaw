@@ -557,7 +557,7 @@ impl TelegramChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "TTS disabled"
                 ),
             }
@@ -815,7 +815,7 @@ impl TelegramChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to register Telegram bot commands"
                 );
             }
@@ -897,7 +897,7 @@ impl TelegramChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "TTS voice reply failed"
                         );
                     }
@@ -963,7 +963,7 @@ impl TelegramChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "TTS voice reply failed"
                         );
                     }
@@ -1076,7 +1076,7 @@ impl TelegramChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to fetch bot username"
                 );
                 None
@@ -1560,7 +1560,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Failed to create telegram_files directory"
             );
             return None;
@@ -1574,7 +1574,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to get attachment file path"
                 );
                 return None;
@@ -1588,7 +1588,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to download attachment"
                 );
                 return None;
@@ -1611,7 +1611,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 &format!("Failed to save attachment to {}", local_path.display())
             );
             return None;
@@ -1732,7 +1732,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to get voice file path"
                 );
                 return None;
@@ -1752,7 +1752,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to download voice file"
                 );
                 return None;
@@ -1766,7 +1766,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Voice transcription failed"
                 );
                 return None;
@@ -2387,7 +2387,9 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"url": target, "error": e.to_string()})),
+                        .with_attrs(
+                            ::serde_json::json!({"url": target, "error": format!("{}", e)})
+                        ),
                     "Telegram send media by URL failed; falling back to text link"
                 );
                 let kind_label = match attachment.kind {
@@ -3020,7 +3022,7 @@ impl Channel for TelegramChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "message_id": message_id})
+                            ::serde_json::json!({"error": format!("{}", e), "message_id": message_id})
                         ),
                     "Invalid Telegram message_id ''"
                 );
@@ -3048,7 +3050,7 @@ impl Channel for TelegramChannel {
         } else {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
-            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": err.to_string(), "status": status.to_string()})), "editMessageText failed");
+            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": format!("{}", err), "status": status.to_string()})), "editMessageText failed");
         }
 
         Ok(())
@@ -3081,7 +3083,7 @@ impl Channel for TelegramChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "message_id": message_id})
+                            ::serde_json::json!({"error": format!("{}", e), "message_id": message_id})
                         ),
                     "Invalid Telegram message_id ''"
                 );
@@ -3249,7 +3251,7 @@ impl Channel for TelegramChannel {
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "message_id": message_id})
+                            ::serde_json::json!({"error": format!("{}", e), "message_id": message_id})
                         ),
                     "Invalid Telegram draft message_id ''"
                 );
@@ -3351,7 +3353,7 @@ impl Channel for TelegramChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "startup probe error; retrying in 5s"
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -3450,7 +3452,7 @@ impl Channel for TelegramChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "poll error"
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -3465,7 +3467,7 @@ impl Channel for TelegramChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "parse error"
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -3593,7 +3595,7 @@ Ensure only one `zeroclaw` process is using this bot token."
                                         ::zeroclaw_log::Action::Note
                                     )
                                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "answerCallbackQuery failed"
                                 );
                             }
@@ -3657,7 +3659,7 @@ Ensure only one `zeroclaw` process is using this bot token."
                 ::zeroclaw_log::record!(
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "health check failed"
                 );
                 false

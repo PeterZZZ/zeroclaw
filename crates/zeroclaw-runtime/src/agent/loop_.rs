@@ -639,8 +639,16 @@ async fn consume_provider_streaming_response(
             break;
         };
 
-        let event =
-            event_result.map_err(|err| anyhow::anyhow!("model_provider stream error: {err}"))?;
+        let event = event_result.map_err(|err| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
+                "model_provider stream emitted an error event"
+            );
+            anyhow::Error::msg(format!("model_provider stream error: {err}"))
+        })?;
         match event {
             StreamEvent::Final => break,
             StreamEvent::Usage(usage) => {
@@ -1049,7 +1057,22 @@ pub async fn run_tool_call_loop(
             if let Some(ref vp) = multimodal_config.vision_model_provider {
                 let vp_instance =
                     zeroclaw_providers::create_model_provider(vp, None).map_err(|e| {
-                        anyhow::anyhow!("failed to create vision model_provider '{vp}': {e}")
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Fail
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "vision_provider": vp,
+                                "error": format!("{}", e),
+                            })),
+                            "vision model_provider construction failed"
+                        );
+                        anyhow::Error::msg(format!(
+                            "failed to create vision model_provider '{vp}': {e}"
+                        ))
                     })?;
                 if !vp_instance.supports_vision() {
                     return Err(ProviderCapabilityError {
@@ -1139,12 +1162,23 @@ pub async fn run_tool_call_loop(
             period,
         }) = check_tool_loop_budget()
         {
-            return Err(anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "current_usd": current_usd,
+                        "limit_usd": limit_usd,
+                        "period": format!("{period:?}"),
+                    })),
+                "tool-call loop budget exceeded"
+            );
+            anyhow::bail!(
                 "Budget exceeded: ${:.4} of ${:.2} {:?} limit. Cannot make further API calls until the budget resets.",
                 current_usd,
                 limit_usd,
                 period
-            ));
+            );
         }
 
         // Unified path via ModelProvider::chat so provider-specific native tool logic
@@ -1705,7 +1739,7 @@ pub async fn run_tool_call_loop(
                                         ::zeroclaw_log::Action::Note
                                     )
                                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "Channel approval request failed"
                                 );
                                 None
@@ -2198,7 +2232,7 @@ pub async fn run_tool_call_loop(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Final summary LLM call failed, bailing"
             );
             anyhow::bail!("Agent exceeded maximum tool iterations ({max_iterations})")
@@ -2575,7 +2609,7 @@ pub async fn run(
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "MCP registry failed to initialize"
                     );
                 }
@@ -2588,11 +2622,18 @@ pub async fn run(
             .as_deref()
             .or(agent_provider_type)
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"agent_alias": agent_alias})),
+                    "agent loop refused: agent.model_provider unresolved and no --provider override"
+                );
+                anyhow::Error::msg(format!(
                     "agents.{agent_alias}.model_provider does not resolve and no provider override \
-                 was passed on the CLI. Either set `[agents.{agent_alias}] model_provider` or \
-                 pass --provider."
-                )
+                     was passed on the CLI. Either set `[agents.{agent_alias}] model_provider` or \
+                     pass --provider."
+                ))
             })?
             .to_string();
 
@@ -3107,7 +3148,7 @@ pub async fn run(
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Skill creation failed"
                         ),
                     }
@@ -3502,7 +3543,7 @@ pub async fn run(
                                         );
                                     }
                                     Err(compress_err) => {
-                                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": compress_err.to_string()})), "Compression failed during recovery");
+                                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", compress_err)})), "Compression failed during recovery");
                                     }
                                 }
                             }
@@ -3559,7 +3600,7 @@ pub async fn run(
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "Context compression failed, falling back to history trim"
                             );
                             trim_history(&mut history, agent.max_history_messages / 2);
@@ -3815,7 +3856,7 @@ pub async fn process_message(
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "MCP registry failed to initialize"
                     );
                 }
@@ -4800,7 +4841,7 @@ mod tests {
                 .expect("responses lock should be valid");
             responses
                 .pop_front()
-                .ok_or_else(|| anyhow::anyhow!("scripted model_provider exhausted responses"))
+                .ok_or_else(|| anyhow::Error::msg("scripted model_provider exhausted responses"))
         }
     }
     impl ::zeroclaw_api::attribution::Attributable for ScriptedModelProvider {

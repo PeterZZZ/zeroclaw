@@ -235,7 +235,7 @@ impl Channel for WebhookChannel {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "invalid JSON payload"
                     );
                     return StatusCode::BAD_REQUEST;
@@ -294,9 +294,16 @@ impl Channel for WebhookChannel {
         );
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| anyhow::anyhow!("Webhook server error: {e}"))?;
+        axum::serve(listener, app).await.map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "Webhook server error"
+            );
+            anyhow::Error::msg(format!("Webhook server error: {e}"))
+        })?;
 
         Ok(())
     }

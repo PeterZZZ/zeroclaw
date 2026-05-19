@@ -166,7 +166,7 @@ impl SkillForge {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "GitHub scout failed, continuing with other sources"
                             );
                         }
@@ -214,7 +214,7 @@ impl SkillForge {
                                 auto_integrated += 1;
                             }
                             Err(e) => {
-                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"skill": res.candidate.name.as_str(), "error": e.to_string()})), "Integration failed for candidate, continuing");
+                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"skill": res.candidate.name.as_str(), "error": format!("{}", e)})), "Integration failed for candidate, continuing");
                             }
                         }
                     } else {

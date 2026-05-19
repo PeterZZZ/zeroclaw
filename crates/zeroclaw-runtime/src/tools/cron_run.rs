@@ -138,7 +138,7 @@ impl Tool for CronRunTool {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"job_id": job.id, "error": e.to_string()})
+                            ::serde_json::json!({"job_id": job.id, "error": format!("{}", e)})
                         ),
                     "cron_run delivery failed (best_effort)"
                 );
@@ -148,7 +148,7 @@ impl Tool for CronRunTool {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"job_id": job.id, "error": e.to_string()})
+                            ::serde_json::json!({"job_id": job.id, "error": format!("{}", e)})
                         ),
                     "cron_run delivery failed"
                 );

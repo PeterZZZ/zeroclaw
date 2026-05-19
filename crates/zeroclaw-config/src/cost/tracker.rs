@@ -2,7 +2,7 @@ use super::types::{
     AgentCostStats, BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod,
 };
 use crate::schema::CostConfig;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashMap;
@@ -59,9 +59,14 @@ impl CostTracker {
         }
 
         if !estimated_cost_usd.is_finite() || estimated_cost_usd < 0.0 {
-            return Err(anyhow!(
-                "Estimated cost must be a finite, non-negative value"
-            ));
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"estimated_cost_usd": estimated_cost_usd})),
+                "cost budget check rejected: estimated cost is not finite or is negative"
+            );
+            anyhow::bail!("Estimated cost must be a finite, non-negative value");
         }
 
         let mut storage = self.lock_storage();
@@ -129,9 +134,14 @@ impl CostTracker {
         }
 
         if !usage.cost_usd.is_finite() || usage.cost_usd < 0.0 {
-            return Err(anyhow!(
-                "Token usage cost must be a finite, non-negative value"
-            ));
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"cost_usd": usage.cost_usd})),
+                "token usage record rejected: cost is not finite or is negative"
+            );
+            anyhow::bail!("Token usage cost must be a finite, non-negative value");
         }
 
         let effective_alias = if self.config.track_per_agent {
@@ -313,7 +323,7 @@ impl CostTracker {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Failed to initialize global cost tracker"
                         );
                         None

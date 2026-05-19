@@ -203,7 +203,15 @@ impl ModelProvider for GlmModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from GLM"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "glm: empty choices in response"
+                );
+                anyhow::Error::msg("No response from GLM")
+            })
     }
 
     async fn chat_with_history(
@@ -251,7 +259,15 @@ impl ModelProvider for GlmModelProvider {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from GLM"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "glm: empty choices in response"
+                );
+                anyhow::Error::msg("No response from GLM")
+            })
     }
 
     async fn warmup(&self) -> anyhow::Result<()> {

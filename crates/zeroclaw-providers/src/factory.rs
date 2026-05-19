@@ -25,7 +25,7 @@
 use crate::ModelProviderRuntimeOptions;
 use crate::compatible::{AuthStyle, OpenAiCompatibleModelProvider};
 use crate::traits::ModelProvider;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 /// Per-family construction trait. Implemented (directly or via the
 /// `CompatFamilySpec` blanket) by every typed `<Family>ModelProviderConfig`.
@@ -189,12 +189,21 @@ pub fn dispatch_family_factory(
                         cfg.create_provider(alias, key, api_url, opts)
                     }
                 )+
-                _ => Err(anyhow!(
-                    "Unknown model_provider family: {family}. After the V2 to typed-family migration, \
-                     only canonical family names are valid. Run `zeroclaw onboard` to reconfigure, \
-                     or set `[model_providers.custom.<alias>] uri = \"https://your-api.com\"` for \
-                     OpenAI-compatible custom endpoints."
-                )),
+                _ => {
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"family": family})),
+                        "factory: unknown model_provider family"
+                    );
+                    Err(anyhow::Error::msg(format!(
+                        "Unknown model_provider family: {family}. After the V2 to typed-family migration, \
+                         only canonical family names are valid. Run `zeroclaw onboard` to reconfigure, \
+                         or set `[model_providers.custom.<alias>] uri = \"https://your-api.com\"` for \
+                         OpenAI-compatible custom endpoints."
+                    )))
+                },
             }
         }
     }
@@ -759,15 +768,37 @@ impl FamilyProviderFactory for AzureModelProviderConfig {
         // under `[model_providers.azure.<alias>]` or via the schema-mirror
         // env grammar — env-var fallback eradicated.
         let resource = self.resource.as_deref().ok_or_else(|| {
-            anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "family": "azure",
+                        "alias": alias,
+                        "missing": "resource",
+                    })),
+                "factory: azure provider missing resource"
+            );
+            anyhow::Error::msg(
                 "Azure model_provider requires `resource`: set \
-                 `[model_providers.azure.<alias>] resource = \"...\"` in config.toml."
+                 `[model_providers.azure.<alias>] resource = \"...\"` in config.toml.",
             )
         })?;
         let deployment = self.deployment.as_deref().ok_or_else(|| {
-            anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "family": "azure",
+                        "alias": alias,
+                        "missing": "deployment",
+                    })),
+                "factory: azure provider missing deployment"
+            );
+            anyhow::Error::msg(
                 "Azure model_provider requires `deployment`: set \
-                 `[model_providers.azure.<alias>] deployment = \"...\"` in config.toml."
+                 `[model_providers.azure.<alias>] deployment = \"...\"` in config.toml.",
             )
         })?;
         let api_version = self.api_version.as_deref();
@@ -1051,9 +1082,20 @@ impl FamilyProviderFactory for CustomModelProviderConfig {
         opts: &ModelProviderRuntimeOptions,
     ) -> Result<Box<dyn ModelProvider>> {
         let base_url = api_url.ok_or_else(|| {
-            anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "family": "custom",
+                        "alias": alias,
+                        "missing": "uri",
+                    })),
+                "factory: custom provider missing uri"
+            );
+            anyhow::Error::msg(
                 "Custom model_provider requires `uri`: set \
-                 `[model_providers.custom.<alias>] uri = \"https://your-api.com\"` in config.toml."
+                 `[model_providers.custom.<alias>] uri = \"https://your-api.com\"` in config.toml.",
             )
         })?;
         let mut p = OpenAiCompatibleModelProvider::new_with_vision(

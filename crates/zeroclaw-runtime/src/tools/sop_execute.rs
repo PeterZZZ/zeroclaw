@@ -55,10 +55,17 @@ impl Tool for SopExecuteTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let sop_name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'name' parameter"))?;
+        let sop_name = args.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "name"})),
+                "tool argument validation failed"
+            );
+
+            anyhow::Error::msg("Missing 'name' parameter")
+        })?;
 
         let payload = args
             .get("payload")
@@ -74,10 +81,17 @@ impl Tool for SopExecuteTool {
 
         // Lock engine, start run, snapshot run for audit, then drop lock
         let (action, run_snapshot) = {
-            let mut engine = self
-                .engine
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Engine lock poisoned: {e}"))?;
+            let mut engine = self.engine.lock().map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "SOP engine lock poisoned"
+                );
+
+                anyhow::Error::msg(format!("Engine lock poisoned: {e}"))
+            })?;
 
             match engine.start_run(sop_name, event) {
                 Ok(action) => {
@@ -98,7 +112,7 @@ impl Tool for SopExecuteTool {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "SOP audit log_run_start failed"
             );
         }

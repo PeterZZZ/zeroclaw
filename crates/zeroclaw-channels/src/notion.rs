@@ -82,9 +82,16 @@ impl NotionChannel {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "Authorization",
-            format!("Bearer {}", self.api_key)
-                .parse()
-                .map_err(|e| anyhow::anyhow!("Invalid Notion API key header value: {e}"))?,
+            format!("Bearer {}", self.api_key).parse().map_err(|e| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "Invalid Notion API key header value"
+                );
+                anyhow::Error::msg(format!("Invalid Notion API key header value: {e}"))
+            })?,
         );
         headers.insert("Notion-Version", NOTION_VERSION.parse().unwrap());
         headers.insert("Content-Type", "application/json".parse().unwrap());
@@ -111,10 +118,22 @@ impl NotionChannel {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {
-                        return resp
-                            .json()
-                            .await
-                            .map_err(|e| anyhow::anyhow!("Failed to parse response: {e}"));
+                        return resp.json().await.map_err(|e| {
+                            ::zeroclaw_log::record!(
+                                ERROR,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Fail
+                                )
+                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                .with_attrs(::serde_json::json!({
+                                    "phase": "response_parse",
+                                    "error": format!("{}", e),
+                                })),
+                                "notion: failed to parse response JSON"
+                            );
+                            anyhow::Error::msg(format!("Failed to parse response: {e}"))
+                        });
                     }
                     let status_code = status.as_u16();
                     // Only retry on 429 (rate limit) or 5xx (server errors)
@@ -122,12 +141,45 @@ impl NotionChannel {
                         let body_text = resp.text().await.unwrap_or_default();
                         let truncated =
                             crate::util::truncate_with_ellipsis(&body_text, MAX_ERROR_BODY_CHARS);
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Fail
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "status": status_code,
+                                "body": truncated,
+                            })),
+                            "notion: API client error (no retry)"
+                        );
                         bail!("API error {status_code}: {truncated}");
                     }
-                    last_err = Some(anyhow::anyhow!("API error: {status_code}"));
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "status": status_code,
+                                "phase": "retryable_status",
+                            })),
+                        "notion: API returned retryable status"
+                    );
+                    last_err = Some(anyhow::Error::msg(format!("API error: {status_code}")));
                 }
                 Err(e) => {
-                    last_err = Some(anyhow::anyhow!("HTTP request failed: {e}"));
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "phase": "transport",
+                                "error": format!("{}", e),
+                            })),
+                        "notion: HTTP request failed"
+                    );
+                    last_err = Some(anyhow::Error::msg(format!("HTTP request failed: {e}")));
                 }
             }
             let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt);
@@ -144,7 +196,15 @@ impl NotionChannel {
             );
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("API call failed after retries")))
+        Err(last_err.unwrap_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "notion: API call exhausted retries"
+            );
+            anyhow::Error::msg("API call failed after retries")
+        }))
     }
 
     /// Query the database schema and detect whether Status uses "select" or "status" type.
@@ -264,7 +324,7 @@ impl NotionChannel {
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "short_id": short_id})
+                                ::serde_json::json!({"error": format!("{}", e), "short_id": short_id})
                             ),
                         "Could not reset stale task"
                     );
@@ -339,7 +399,7 @@ impl Channel for NotionChannel {
                 ERROR,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "stale task recovery failed"
             );
         }
@@ -399,7 +459,7 @@ impl Channel for NotionChannel {
                                     ::zeroclaw_log::Action::Fail
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "failed to set running status"
                             );
                             self.release_task(&page_id).await;
@@ -444,7 +504,7 @@ impl Channel for NotionChannel {
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "poll error"
                     );
                 }

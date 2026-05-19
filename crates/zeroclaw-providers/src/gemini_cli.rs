@@ -142,32 +142,85 @@ impl GeminiCliModelProvider {
         cmd.stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|err| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "binary": self.binary_path.display().to_string(),
+                        "phase": "spawn",
+                        "error": format!("{}", err),
+                    })),
+                "gemini_cli: failed to spawn binary"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to spawn Gemini CLI binary at {}: {err}. \
                  Ensure `gemini` is installed and in PATH, or set GEMINI_CLI_PATH.",
                 self.binary_path.display()
-            )
+            ))
         })?;
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(message.as_bytes()).await.map_err(|err| {
-                anyhow::anyhow!("Failed to write prompt to Gemini CLI stdin: {err}")
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "stdin_write",
+                            "error": format!("{}", err),
+                        })),
+                    "gemini_cli: failed to write prompt to stdin"
+                );
+                anyhow::Error::msg(format!("Failed to write prompt to Gemini CLI stdin: {err}"))
             })?;
             stdin.shutdown().await.map_err(|err| {
-                anyhow::anyhow!("Failed to finalize Gemini CLI stdin stream: {err}")
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "stdin_shutdown",
+                            "error": format!("{}", err),
+                        })),
+                    "gemini_cli: failed to finalize stdin stream"
+                );
+                anyhow::Error::msg(format!("Failed to finalize Gemini CLI stdin stream: {err}"))
             })?;
         }
 
         let output = timeout(GEMINI_CLI_REQUEST_TIMEOUT, child.wait_with_output())
             .await
             .map_err(|_| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Timeout)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "binary": self.binary_path.display().to_string(),
+                            "timeout": format!("{:?}", GEMINI_CLI_REQUEST_TIMEOUT),
+                        })),
+                    "gemini_cli: request timed out"
+                );
+                anyhow::Error::msg(format!(
                     "Gemini CLI request timed out after {:?} (binary: {})",
                     GEMINI_CLI_REQUEST_TIMEOUT,
                     self.binary_path.display()
-                )
+                ))
             })?
-            .map_err(|err| anyhow::anyhow!("Gemini CLI process failed: {err}"))?;
+            .map_err(|err| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "phase": "process_wait",
+                            "error": format!("{}", err),
+                        })),
+                    "gemini_cli: process wait failed"
+                );
+                anyhow::Error::msg(format!("Gemini CLI process failed: {err}"))
+            })?;
 
         if !output.status.success() {
             let code = output.status.code().unwrap_or(-1);
@@ -183,8 +236,19 @@ impl GeminiCliModelProvider {
             );
         }
 
-        let text = String::from_utf8(output.stdout)
-            .map_err(|err| anyhow::anyhow!("Gemini CLI produced non-UTF-8 output: {err}"))?;
+        let text = String::from_utf8(output.stdout).map_err(|err| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "utf8_decode",
+                        "error": format!("{}", err),
+                    })),
+                "gemini_cli: non-UTF-8 stdout"
+            );
+            anyhow::Error::msg(format!("Gemini CLI produced non-UTF-8 output: {err}"))
+        })?;
 
         Ok(text.trim().to_string())
     }

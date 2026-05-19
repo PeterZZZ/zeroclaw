@@ -145,7 +145,7 @@ impl Channel for MatrixTestChannel {
             attachments: vec![],
         })
         .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))
+        .map_err(|e| anyhow::Error::msg(e.to_string()))
     }
 
     async fn health_check(&self) -> bool {

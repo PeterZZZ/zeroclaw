@@ -150,7 +150,18 @@ impl SubAgentSpawn {
             child_policy
                 .ensure_no_escalation_beyond(&self.parent_policy)
                 .map_err(|violation| {
-                    anyhow::anyhow!("subagent policy override escalates beyond parent: {violation}")
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "violation": violation.to_string(),
+                            })),
+                        "subagent build refused: policy override escalates beyond parent"
+                    );
+                    anyhow::Error::msg(format!(
+                        "subagent policy override escalates beyond parent: {violation}"
+                    ))
                 })?;
             // Share the parent's action/cost tracker. `PerSenderTracker`
             // is `Clone` (deep-copy of buckets) but the SubAgent must

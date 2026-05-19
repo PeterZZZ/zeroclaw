@@ -23,18 +23,38 @@ impl ModelRoutingConfigTool {
 
     fn load_config_without_env(&self) -> anyhow::Result<Config> {
         let contents = fs::read_to_string(&self.config.config_path).map_err(|error| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": self.config.config_path.display().to_string(),
+                        "error": format!("{}", error),
+                    })),
+                "model_routing_config: failed to read config file"
+            );
+            anyhow::Error::msg(format!(
                 "Failed to read config file {}: {error}",
                 self.config.config_path.display()
-            )
+            ))
         })?;
 
         let mut parsed =
             zeroclaw_config::migration::migrate_to_current(&contents).map_err(|error| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "path": self.config.config_path.display().to_string(),
+                            "error": format!("{}", error),
+                        })),
+                    "model_routing_config: failed to parse config file"
+                );
+                anyhow::Error::msg(format!(
                     "Failed to parse config file {}: {error}",
                     self.config.config_path.display()
-                )
+                ))
             })?;
         parsed.config_path = self.config.config_path.clone();
         parsed.data_dir = self.config.data_dir.clone();
@@ -74,9 +94,16 @@ impl ModelRoutingConfigTool {
         if let Some(array) = raw.as_array() {
             let mut out = Vec::new();
             for item in array {
-                let value = item
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("'{field}' array must only contain strings"))?;
+                let value = item.as_str().ok_or_else(|| {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"field": field})),
+                        "model_routing_config: array element must be a string"
+                    );
+                    anyhow::Error::msg(format!("'{field}' array must only contain strings"))
+                })?;
                 let trimmed = value.trim();
                 if !trimmed.is_empty() {
                     out.push(trimmed.to_string());
@@ -92,7 +119,16 @@ impl ModelRoutingConfigTool {
         let value = args
             .get(field)
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Missing '{field}'"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": field})),
+                    "model_routing_config: missing required string param"
+                );
+                anyhow::Error::msg(format!("Missing '{field}'"))
+            })?
             .trim();
 
         if value.is_empty() {
@@ -113,7 +149,16 @@ impl ModelRoutingConfigTool {
 
         let value = raw
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("'{field}' must be a string or null"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"field": field})),
+                    "model_routing_config: field must be string or null"
+                );
+                anyhow::Error::msg(format!("'{field}' must be a string or null"))
+            })?
             .trim()
             .to_string();
 
@@ -134,9 +179,16 @@ impl ModelRoutingConfigTool {
             return Ok(MaybeSet::Null);
         }
 
-        let value = raw
-            .as_f64()
-            .ok_or_else(|| anyhow::anyhow!("'{field}' must be a number or null"))?;
+        let value = raw.as_f64().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field})),
+                "model_routing_config: field must be number or null"
+            );
+            anyhow::Error::msg(format!("'{field}' must be a number or null"))
+        })?;
         Ok(MaybeSet::Set(value))
     }
 
@@ -149,11 +201,26 @@ impl ModelRoutingConfigTool {
             return Ok(MaybeSet::Null);
         }
 
-        let raw_value = raw
-            .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("'{field}' must be a non-negative integer or null"))?;
-        let value = usize::try_from(raw_value)
-            .map_err(|_| anyhow::anyhow!("'{field}' is too large for this platform"))?;
+        let raw_value = raw.as_u64().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field})),
+                "model_routing_config: usize field must be non-negative integer or null"
+            );
+            anyhow::Error::msg(format!("'{field}' must be a non-negative integer or null"))
+        })?;
+        let value = usize::try_from(raw_value).map_err(|_| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field, "raw_value": raw_value})),
+                "model_routing_config: usize value too large"
+            );
+            anyhow::Error::msg(format!("'{field}' is too large for this platform"))
+        })?;
         Ok(MaybeSet::Set(value))
     }
 
@@ -166,11 +233,26 @@ impl ModelRoutingConfigTool {
             return Ok(MaybeSet::Null);
         }
 
-        let raw_value = raw
-            .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("'{field}' must be a non-negative integer or null"))?;
-        let value =
-            u32::try_from(raw_value).map_err(|_| anyhow::anyhow!("'{field}' must fit in u32"))?;
+        let raw_value = raw.as_u64().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field})),
+                "model_routing_config: u32 field must be non-negative integer or null"
+            );
+            anyhow::Error::msg(format!("'{field}' must be a non-negative integer or null"))
+        })?;
+        let value = u32::try_from(raw_value).map_err(|_| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field, "raw_value": raw_value})),
+                "model_routing_config: u32 value too large"
+            );
+            anyhow::Error::msg(format!("'{field}' must fit in u32"))
+        })?;
         Ok(MaybeSet::Set(value))
     }
 
@@ -183,11 +265,26 @@ impl ModelRoutingConfigTool {
             return Ok(MaybeSet::Null);
         }
 
-        let raw_value = raw
-            .as_i64()
-            .ok_or_else(|| anyhow::anyhow!("'{field}' must be an integer or null"))?;
-        let value =
-            i32::try_from(raw_value).map_err(|_| anyhow::anyhow!("'{field}' must fit in i32"))?;
+        let raw_value = raw.as_i64().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field})),
+                "model_routing_config: i32 field must be integer or null"
+            );
+            anyhow::Error::msg(format!("'{field}' must be an integer or null"))
+        })?;
+        let value = i32::try_from(raw_value).map_err(|_| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field, "raw_value": raw_value})),
+                "model_routing_config: i32 value out of range"
+            );
+            anyhow::Error::msg(format!("'{field}' must fit in i32"))
+        })?;
         Ok(MaybeSet::Set(value))
     }
 
@@ -196,9 +293,16 @@ impl ModelRoutingConfigTool {
             return Ok(None);
         };
 
-        let value = raw
-            .as_bool()
-            .ok_or_else(|| anyhow::anyhow!("'{field}' must be a boolean"))?;
+        let value = raw.as_bool().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": field})),
+                "model_routing_config: field must be boolean"
+            );
+            anyhow::Error::msg(format!("'{field}' must be a boolean"))
+        })?;
         Ok(Some(value))
     }
 
@@ -413,9 +517,19 @@ impl ModelRoutingConfigTool {
             .models
             .ensure(&type_k, &alias_k)
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "unknown model_provider type `{type_k}` — no typed slot in ModelProviders"
-                )
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "model_provider_type": &type_k,
+                            "alias": &alias_k,
+                        })),
+                    "model_routing_config: unknown model_provider type"
+                );
+                anyhow::Error::msg(format!(
+                    "unknown model_provider type `{type_k}`. no typed slot in ModelProviders"
+                ))
             })?;
 
         match model_update {
@@ -735,9 +849,19 @@ impl ModelRoutingConfigTool {
                 cfg.providers.models
                     .ensure(&model_provider_family, &name)
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "unknown model_provider type `{model_provider_family}` — no typed slot in ModelProviders"
-                        )
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                .with_attrs(::serde_json::json!({
+                                    "model_provider_family": &model_provider_family,
+                                    "name": &name,
+                                })),
+                            "model_routing_config: unknown model_provider family"
+                        );
+                        anyhow::Error::msg(format!(
+                            "unknown model_provider type `{model_provider_family}`. no typed slot in ModelProviders"
+                        ))
                     })?;
             provider_entry.model = Some(model.clone());
             match api_key_update {

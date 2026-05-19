@@ -82,7 +82,7 @@ pub async fn dispatch_sop_event(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "SOP dispatch: engine lock poisoned during match phase"
             );
             return vec![];
@@ -121,7 +121,7 @@ pub async fn dispatch_sop_event(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "SOP dispatch: engine lock poisoned during start phase"
                 );
                 return vec![];
@@ -156,7 +156,7 @@ pub async fn dispatch_sop_event(
                     ::zeroclaw_log::record!(
                         INFO,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         &format!("SOP dispatch: skipped '{}'", sop_name)
                     );
                     results.push(DispatchResult::Skipped {
@@ -185,7 +185,7 @@ pub async fn dispatch_sop_event(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 &format!("SOP dispatch: audit log failed for run {}", run.run_id)
             );
         }
@@ -331,7 +331,7 @@ impl SopCronCache {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "SopCronCache: engine lock poisoned"
                 );
                 return Self { schedules };

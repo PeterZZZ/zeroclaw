@@ -20,7 +20,7 @@ mod tests {
 
     #[test]
     fn display_chain_walks_context() {
-        let leaf: anyhow::Result<()> = Err(anyhow::anyhow!("connection refused"));
+        let leaf: anyhow::Result<()> = Err(anyhow::Error::msg("connection refused"));
         let err = leaf
             .context("failed to dial provider")
             .context("processing turn")

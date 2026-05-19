@@ -137,7 +137,7 @@ pub async fn run(target_version: Option<&str>) -> Result<()> {
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "Swap failed, rolling back"
         );
         if let Err(rollback_err) = rollback_binary(&backup_path, &current_exe).await {
@@ -169,7 +169,7 @@ pub async fn run(target_version: Option<&str>) -> Result<()> {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Smoke test failed, rolling back"
             );
             rollback_binary(&backup_path, &current_exe)

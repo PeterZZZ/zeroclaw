@@ -99,7 +99,7 @@ impl EscalateToHumanTool {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string(), "name": name})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e), "name": name})),
                     "escalate_to_human: alert to channel '' failed"
                 );
             }
@@ -169,7 +169,16 @@ impl Tool for EscalateToHumanTool {
             .and_then(|v| v.as_str())
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'summary' parameter"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "summary"})),
+                    "escalate: missing summary parameter"
+                );
+                anyhow::Error::msg("Missing 'summary' parameter")
+            })?
             .to_string();
 
         let context = args
@@ -219,7 +228,14 @@ impl Tool for EscalateToHumanTool {
                 });
             }
             let (name, ch) = channels.iter().next().ok_or_else(|| {
-                anyhow::anyhow!("No channels available. Configure at least one channel.")
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"missing": "channels"})),
+                    "escalate: no channels configured"
+                );
+                anyhow::Error::msg("No channels available. Configure at least one channel.")
             })?;
             (name.clone(), ch.clone())
         };

@@ -64,9 +64,16 @@ impl SecretStore {
         let cipher = ChaCha20Poly1305::new(key);
 
         let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let ciphertext = cipher
-            .encrypt(&nonce, plaintext.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Encryption failed: {e}"))?;
+        let ciphertext = cipher.encrypt(&nonce, plaintext.as_bytes()).map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "ChaCha20-Poly1305 encryption failed"
+            );
+            anyhow::Error::msg(format!("Encryption failed: {e}"))
+        })?;
 
         // Prepend nonce to ciphertext for storage
         let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
@@ -149,7 +156,9 @@ impl SecretStore {
                 ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"key_path": self.key_path.display().to_string()})), "enc2: decryption failed. `.secret_key` is missing or does not match the key used to encrypt this value. \
                      Common cause: volume wipe, container migration, or backup-restore where `.secret_key` was not preserved alongside `config.toml`. \
                      Restore the original `.secret_key` from backup, or re-encrypt the affected secrets via `zeroclaw onboard`.");
-                anyhow::anyhow!("enc2: decryption failed (wrong `.secret_key` or tampered ciphertext)")
+                anyhow::Error::msg(
+                    "enc2: decryption failed (wrong `.secret_key` or tampered ciphertext)"
+                )
             })?;
 
         String::from_utf8(plaintext_bytes)
@@ -249,7 +258,7 @@ impl SecretStore {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Could not take ownership of key file"
                         );
                     }
@@ -293,7 +302,7 @@ impl SecretStore {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Could not set key file permissions"
                         );
                     }
@@ -365,7 +374,7 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
         .step_by(2)
         .map(|i| {
             u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|e| anyhow::anyhow!("Invalid hex at position {i}: {e}"))
+                .map_err(|e| anyhow::Error::msg(format!("Invalid hex at position {i}: {e}")))
         })
         .collect()
 }

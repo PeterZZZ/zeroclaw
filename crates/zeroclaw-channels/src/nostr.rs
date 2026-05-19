@@ -240,7 +240,9 @@ impl Channel for NostrChannel {
                                             ::zeroclaw_log::Action::Note
                                         )
                                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                        .with_attrs(
+                                            ::serde_json::json!({"error": format!("{}", e)})
+                                        ),
                                         "Failed to decrypt NIP-04 message"
                                     );
                                     None
@@ -291,7 +293,9 @@ impl Channel for NostrChannel {
                                             ::zeroclaw_log::Action::Note
                                         )
                                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                        .with_attrs(
+                                            ::serde_json::json!({"error": format!("{}", e)})
+                                        ),
                                         "Failed to unwrap NIP-17 gift wrap"
                                     );
                                     None

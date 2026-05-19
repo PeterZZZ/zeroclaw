@@ -1,4 +1,4 @@
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
@@ -228,14 +228,29 @@ impl DiscordChannel {
                 .header("Authorization", format!("Bot {}", self.bot_token))
                 .send()
                 .await
-                .map_err(|e| anyhow!("request failed: {e}"))?;
+                .map_err(|e| {
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                        "request failed"
+                    );
+                    anyhow::Error::msg(format!("request failed: {e}"))
+                })?;
             if !resp.status().is_success() {
                 anyhow::bail!("non-success status {}", resp.status());
             }
-            let body: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| anyhow!("body parse failed: {e}"))?;
+            let body: serde_json::Value = resp.json().await.map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "body parse failed"
+                );
+                anyhow::Error::msg(format!("body parse failed: {e}"))
+            })?;
             Ok::<bool, anyhow::Error>(
                 body.get("type")
                     .and_then(serde_json::Value::as_u64)
@@ -250,7 +265,7 @@ impl DiscordChannel {
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_attrs(
-                            ::serde_json::json!({"channel_id": channel_id, "error": e.to_string()})
+                            ::serde_json::json!({"channel_id": channel_id, "error": format!("{}", e)})
                         ),
                     "channel lookup failed"
                 );
@@ -287,7 +302,9 @@ impl DiscordChannel {
                 ::zeroclaw_log::record!(
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_attrs(::serde_json::json!({"emoji": emoji, "error": e.to_string()})),
+                        .with_attrs(
+                            ::serde_json::json!({"emoji": emoji, "error": format!("{}", e)})
+                        ),
                     "failed to add failure reaction to outgoing message"
                 );
             }
@@ -361,7 +378,7 @@ async fn process_attachments(
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"name": name, "error": e.to_string()})
+                                ::serde_json::json!({"name": name, "error": format!("{}", e)})
                             ),
                         "attachment fetch error"
                     );
@@ -405,7 +422,7 @@ async fn process_attachments(
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"name": name, "error": e.to_string()})
+                                ::serde_json::json!({"name": name, "error": format!("{}", e)})
                             ),
                         "voice transcription failed"
                     );
@@ -425,7 +442,7 @@ async fn process_attachments(
             Some(dir) => match save_attachment_bytes_to_workspace(dir, name, &bytes).await {
                 Ok(local_path) => local_path.display().to_string(),
                 Err(e) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"name": name, "kind": marker_kind, "error": e.to_string()})), "attachment save failed, falling back to url");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"name": name, "kind": marker_kind, "error": format!("{}", e)})), "attachment save failed, falling back to url");
                     url.to_string()
                 }
             },
@@ -462,7 +479,7 @@ async fn download_attachment_bytes(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"name": name, "error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"name": name, "error": format!("{}", e)})),
                     "failed to read attachment bytes"
                 );
                 None
@@ -485,7 +502,7 @@ async fn download_attachment_bytes(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"name": name, "error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"name": name, "error": format!("{}", e)})),
                 "attachment fetch error"
             );
             None
@@ -698,27 +715,64 @@ fn validate_marker_target(
     }
     if target.contains("://") {
         let scheme = target.split("://").next().unwrap_or("?");
-        return Err(DiscordMarkerError::Refused(anyhow!(
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "scheme": scheme,
+                    "target": target,
+                })),
+            "discord: marker target uses disallowed scheme"
+        );
+        return Err(DiscordMarkerError::Refused(anyhow::Error::msg(format!(
             "marker target uses disallowed scheme {scheme:?}; only http/https and absolute workspace paths are accepted"
-        )));
+        ))));
     }
     if target.starts_with("data:") || target.starts_with("file:") {
-        return Err(DiscordMarkerError::Refused(anyhow!(
-            "marker target uses disallowed scheme; only http/https and absolute workspace paths are accepted"
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"target": target})),
+            "discord: marker target uses disallowed data: or file: scheme"
+        );
+        return Err(DiscordMarkerError::Refused(anyhow::Error::msg(
+            "marker target uses disallowed scheme; only http/https and absolute workspace paths are accepted",
         )));
     }
 
     let target_path = Path::new(target);
     if !target_path.is_absolute() {
-        return Err(DiscordMarkerError::Refused(anyhow!(
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "target": target,
+                    "reason": "not_absolute",
+                })),
+            "discord: marker target is not absolute"
+        );
+        return Err(DiscordMarkerError::Refused(anyhow::Error::msg(format!(
             "marker target {target} is not an absolute path; the agent must emit absolute paths inside workspace_dir"
-        )));
+        ))));
     }
 
     let workspace = workspace_dir.ok_or_else(|| {
-        DiscordMarkerError::Refused(anyhow!(
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "target": target,
+                    "reason": "no_workspace_dir",
+                })),
+            "discord: marker target is local path but channel has no workspace_dir"
+        );
+        DiscordMarkerError::Refused(anyhow::Error::msg(format!(
             "marker target {target} is a local path but the channel was started without a workspace_dir, refusing for safety"
-        ))
+        )))
     })?;
     let workspace_canon = std::fs::canonicalize(workspace)
         .with_context(|| format!("canonicalize workspace {}", workspace.display()))
@@ -726,9 +780,19 @@ fn validate_marker_target(
     let target_canon = match std::fs::canonicalize(target_path) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(DiscordMarkerError::NotFound(anyhow!(
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "target": target,
+                        "reason": "not_found",
+                    })),
+                "discord: marker target not found on disk"
+            );
+            return Err(DiscordMarkerError::NotFound(anyhow::Error::msg(format!(
                 "marker target {target} not found on disk"
-            )));
+            ))));
         }
         Err(e) => {
             return Err(DiscordMarkerError::Refused(
@@ -738,11 +802,23 @@ fn validate_marker_target(
     };
 
     if !target_canon.starts_with(&workspace_canon) {
-        return Err(DiscordMarkerError::Refused(anyhow!(
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "target": target,
+                    "target_canon": target_canon.display().to_string(),
+                    "workspace_canon": workspace_canon.display().to_string(),
+                    "reason": "outside_workspace",
+                })),
+            "discord: marker target escapes workspace_dir"
+        );
+        return Err(DiscordMarkerError::Refused(anyhow::Error::msg(format!(
             "marker target {target} resolves to {} which is outside workspace_dir {}; refusing",
             target_canon.display(),
             workspace_canon.display(),
-        )));
+        ))));
     }
     Ok(DiscordMarkerTarget::Local(target_canon))
 }
@@ -768,7 +844,7 @@ fn classify_outgoing_attachments(
                     DiscordMarkerFailure::Refused => "trust boundary",
                     DiscordMarkerFailure::NotFound => "not found",
                 };
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"kind": attachment.kind.marker_name(), "target": attachment.target, "reason": kind_label, "error": e.to_string()})), "dropping unresolved outbound attachment marker");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"kind": attachment.kind.marker_name(), "target": attachment.target, "reason": kind_label, "error": format!("{}", e)})), "dropping unresolved outbound attachment marker");
                 failures.push((attachment.target.clone(), e.kind()));
             }
         }
@@ -884,10 +960,21 @@ async fn send_discord_message_with_files(
 
     for (idx, path) in files.iter().enumerate() {
         let bytes = tokio::fs::read(path).await.map_err(|error| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "path": path.display().to_string(),
+                        "phase": "attachment_read",
+                        "error": format!("{}", error),
+                    })),
+                "discord: failed to read attachment"
+            );
+            anyhow::Error::msg(format!(
                 "Discord attachment read failed for '{}': {error}",
                 path.display()
-            )
+            ))
         })?;
         let filename = path
             .file_name()
@@ -924,7 +1011,16 @@ async fn extract_message_id(resp: reqwest::Response) -> anyhow::Result<String> {
     body.get("id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("Discord send response missing 'id' field"))
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"field": "id"})),
+                "discord: send response missing id field"
+            );
+            anyhow::Error::msg("Discord send response missing 'id' field")
+        })
 }
 
 /// Edit an existing Discord message via PATCH.
@@ -1418,7 +1514,16 @@ impl Channel for DiscordChannel {
         let (mut write, mut read) = ws_stream.split();
 
         // Read Hello (opcode 10)
-        let hello = read.next().await.ok_or(anyhow::anyhow!("No hello"))??;
+        let hello = read.next().await.ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"phase": "gateway_hello"})),
+                "discord: gateway closed before Hello"
+            );
+            anyhow::Error::msg("No hello")
+        })??;
         let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
         let heartbeat_interval = hello_data
             .get("d")
@@ -1523,7 +1628,7 @@ impl Channel for DiscordChannel {
                         }
                         Some(Ok(Message::Close(_))) | None => break,
                         Some(Err(e)) => {
-                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": e.to_string()})), "websocket read error, reconnecting");
+                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "websocket read error, reconnecting");
                             break;
                         }
                         _ => continue,
@@ -1674,7 +1779,7 @@ impl Channel for DiscordChannel {
                                 )
                                 .await
                             {
-                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": e.to_string()})), "archive store failed");
+                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "archive store failed");
                             }
                         }
                     }
@@ -1970,7 +2075,7 @@ impl Channel for DiscordChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "draft update failed"
                         );
                     }
@@ -2047,7 +2152,7 @@ impl Channel for DiscordChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "multi-message paragraph send failed"
                         );
                     }
@@ -2095,7 +2200,7 @@ impl Channel for DiscordChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "multi-message final flush failed"
                         );
                     }
@@ -2218,7 +2323,7 @@ impl Channel for DiscordChannel {
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "cancel_draft delete failed"
             );
         }

@@ -25,7 +25,7 @@
 //! [`prop_fields`]: crate::schema::Config::prop_fields
 
 use crate::schema::Config;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -75,9 +75,14 @@ pub fn apply_env_overrides(config: &mut Config) -> Result<AppliedOverrides> {
         let path = resolve_path(&tail, config)
             .with_context(|| format!("{env_name} did not resolve to a schema path"))?;
         if NON_OVERRIDABLE_PATHS.contains(path.as_str()) {
-            return Err(anyhow!(
-                "{env_name} → {path}: this field is not overridable via env vars",
-            ));
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"env_var": env_name, "path": path})),
+                "env override rejected: field is not overridable"
+            );
+            anyhow::bail!("{env_name} -> {path}: this field is not overridable via env vars");
         }
         // Snapshot the pre-override raw value via TOML serde walk. Bypasses
         // `Config::get_prop`'s unconditional secret mask: secret fields on
@@ -131,18 +136,38 @@ fn resolve_path(tail: &str, config: &mut Config) -> Result<String> {
             continue;
         };
         let mut parts = rest.splitn(2, SEP);
-        let alias = parts
-            .next()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("missing alias after `{}`", section.path))?;
+        let alias = parts.next().filter(|s| !s.is_empty()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"section": section.path, "tail": tail})),
+                "env override path missing alias segment"
+            );
+            anyhow::Error::msg(format!("missing alias after `{}`", section.path))
+        })?;
         let inner = parts.next().unwrap_or("");
         // Propagate the alias-validator's specific error so operators see
         // *why* their alias was rejected (leading underscore, uppercase, …)
         // instead of the generic "Unknown property" that would surface from
         // a downstream `set_prop` against a non-existent map key.
-        config
-            .create_map_key(section.path, alias)
-            .map_err(|e| anyhow!("invalid alias `{alias}` for `{}`: {e}", section.path))?;
+        config.create_map_key(section.path, alias).map_err(|e| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "section": section.path,
+                        "alias": alias,
+                        "error": format!("{}", e),
+                    })),
+                "env override alias rejected by validator"
+            );
+            anyhow::Error::msg(format!(
+                "invalid alias `{alias}` for `{}`: {e}",
+                section.path
+            ))
+        })?;
         let path = if inner.is_empty() {
             format!("{}.{}", section.path, alias)
         } else {
@@ -165,7 +190,16 @@ fn resolve_path(tail: &str, config: &mut Config) -> Result<String> {
         .into_iter()
         .find(|f| f.name.replace('.', SEP).replace('-', "_") == tail)
         .map(|f| f.name)
-        .ok_or_else(|| anyhow!("no schema field has env-form `{tail}`"))
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"tail": tail})),
+                "env override path does not match any schema field"
+            );
+            anyhow::Error::msg(format!("no schema field has env-form `{tail}`"))
+        })
 }
 
 /// Read the raw string value at a dotted (kebab-cased) prop path from a
@@ -209,7 +243,7 @@ pub fn mask_env_overrides_for_save(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"path": path, "error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"path": path, "error": format!("{}", err)})),
                 "Save-mask reset failed; field retains default"
             );
         }

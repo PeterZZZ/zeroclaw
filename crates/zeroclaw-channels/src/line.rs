@@ -259,7 +259,7 @@ async fn handle_webhook(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "invalid JSON payload"
             );
             return StatusCode::BAD_REQUEST;
@@ -330,7 +330,7 @@ async fn handle_webhook(
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "msg_id": msg_id})
+                                ::serde_json::json!({"error": format!("{}", e), "msg_id": msg_id})
                             ),
                             "audio download failed for"
                         );
@@ -360,7 +360,7 @@ async fn handle_webhook(
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(
-                                ::serde_json::json!({"error": e.to_string(), "msg_id": msg_id})
+                                ::serde_json::json!({"error": format!("{}", e), "msg_id": msg_id})
                             ),
                             "transcription failed for"
                         );
@@ -924,9 +924,19 @@ impl LineChannel {
         });
 
         let app = build_webhook_router(state);
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| anyhow::anyhow!("webhook server error: {e}"))
+        axum::serve(listener, app).await.map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "phase": "webhook_server",
+                        "error": format!("{}", e),
+                    })),
+                "line: webhook server error"
+            );
+            anyhow::Error::msg(format!("webhook server error: {e}"))
+        })
     }
 }
 

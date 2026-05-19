@@ -37,7 +37,7 @@ impl LandlockSandbox {
                 ::zeroclaw_log::record!(
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Landlock not available"
                 );
                 Err(std::io::Error::new(
@@ -130,7 +130,7 @@ impl LandlockSandbox {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to apply Landlock restrictions"
                 );
                 Err(std::io::Error::other(e.to_string()))

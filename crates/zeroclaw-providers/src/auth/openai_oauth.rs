@@ -243,15 +243,27 @@ pub async fn receive_loopback_code(expected_state: &str, timeout: Duration) -> R
         .context("Failed to read callback request")?;
 
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let first_line = request
-        .lines()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Malformed callback request"))?;
+    let first_line = request.lines().next().ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"oauth_provider": "openai"})),
+            "openai_oauth: malformed callback request"
+        );
+        anyhow::Error::msg("Malformed callback request")
+    })?;
 
-    let path = first_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("Callback request missing path"))?;
+    let path = first_line.split_whitespace().nth(1).ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"oauth_provider": "openai"})),
+            "openai_oauth: callback request missing path"
+        );
+        anyhow::Error::msg("Callback request missing path")
+    })?;
 
     let code = parse_code_from_redirect(path, Some(expected_state))?;
 

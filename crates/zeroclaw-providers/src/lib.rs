@@ -307,7 +307,20 @@ pub(crate) fn refresh_qwen_oauth_access_token(
             ("client_id", client_id),
         ])
         .send()
-        .map_err(|error| anyhow::anyhow!("OAuth refresh request failed: {error}"))?;
+        .map_err(|error| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "qwen",
+                        "phase": "refresh_request",
+                        "error": format!("{}", error),
+                    })),
+                "qwen: OAuth refresh request failed"
+            );
+            anyhow::Error::msg(format!("OAuth refresh request failed: {error}"))
+        })?;
 
     let status = response.status();
     let body = response
@@ -326,7 +339,19 @@ pub(crate) fn refresh_qwen_oauth_access_token(
         anyhow::bail!("OAuth refresh failed (HTTP {status}): {detail}");
     }
 
-    let payload = parsed.ok_or_else(|| anyhow::anyhow!("OAuth refresh response is not JSON"))?;
+    let payload = parsed.ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "oauth_provider": "qwen",
+                    "phase": "refresh_parse",
+                })),
+            "qwen: OAuth refresh response is not JSON"
+        );
+        anyhow::Error::msg("OAuth refresh response is not JSON")
+    })?;
 
     if let Some(error_code) = payload
         .error
@@ -342,7 +367,19 @@ pub(crate) fn refresh_qwen_oauth_access_token(
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("OAuth refresh response missing access_token"))?
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "qwen",
+                        "field": "access_token",
+                    })),
+                "qwen: OAuth refresh response missing access_token"
+            );
+            anyhow::Error::msg("OAuth refresh response missing access_token")
+        })?
         .to_string();
 
     let expiry_date = payload.expires_in.and_then(|seconds| {
@@ -423,7 +460,20 @@ pub(crate) fn refresh_minimax_oauth_access_token(
             ("client_id", client_id),
         ])
         .send()
-        .map_err(|error| anyhow::anyhow!("MiniMax OAuth refresh request failed: {error}"))?;
+        .map_err(|error| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "minimax",
+                        "phase": "refresh_request",
+                        "error": format!("{}", error),
+                    })),
+                "minimax: OAuth refresh request failed"
+            );
+            anyhow::Error::msg(format!("MiniMax OAuth refresh request failed: {error}"))
+        })?;
 
     let status = response.status();
     let body = response
@@ -506,7 +556,7 @@ fn resolve_qwen_oauth_context(credential_override: Option<&str>) -> QwenOauthPro
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": error.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", error)})),
                     "OAuth refresh failed"
                 );
             }
@@ -815,7 +865,20 @@ pub async fn api_error(model_provider: &str, response: reqwest::Response) -> any
         .await
         .unwrap_or_else(|_| "<failed to read model_provider error body>".to_string());
     let sanitized = sanitize_api_error(&body);
-    anyhow::anyhow!("{model_provider} API error ({status}): {sanitized}")
+    ::zeroclaw_log::record!(
+        ERROR,
+        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+            .with_attrs(::serde_json::json!({
+                "model_provider": model_provider,
+                "status": status.as_u16(),
+                "body": sanitized,
+            })),
+        "providers: API error"
+    );
+    anyhow::Error::msg(format!(
+        "{model_provider} API error ({status}): {sanitized}"
+    ))
 }
 
 /// Resolve API key for a model_provider from config and environment variables.
@@ -1346,7 +1409,7 @@ pub fn create_routed_model_provider_with_options(
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"model_provider": name.as_str(), "error": e.to_string()})
+                            ::serde_json::json!({"model_provider": name.as_str(), "error": format!("{}", e)})
                         ),
                     "Ignoring routed model_provider that failed to initialize"
                 );

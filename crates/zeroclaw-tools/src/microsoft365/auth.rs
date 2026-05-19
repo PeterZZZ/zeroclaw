@@ -118,7 +118,7 @@ impl TokenCache {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "ms365: refresh token failed, re-authenticating"
                         );
                     }
@@ -356,7 +356,7 @@ impl TokenCache {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "ms365: failed to persist token cache"
             );
         }

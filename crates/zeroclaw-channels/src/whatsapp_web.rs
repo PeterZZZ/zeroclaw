@@ -29,7 +29,7 @@
 //! The Cloud API channel is used when `phone_number_id` is set.
 
 use super::whatsapp_storage::RusqliteStore;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -223,7 +223,7 @@ impl WhatsAppWebChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "TTS disabled"
                 ),
             }
@@ -387,8 +387,16 @@ impl WhatsAppWebChannel {
             anyhow::bail!("QR payload is empty");
         }
 
-        let qr = qrcode::QrCode::new(payload.as_bytes())
-            .map_err(|err| anyhow!("Failed to encode WhatsApp Web QR payload: {err}"))?;
+        let qr = qrcode::QrCode::new(payload.as_bytes()).map_err(|err| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
+                "Failed to encode WhatsApp Web QR payload"
+            );
+            anyhow::Error::msg(format!("Failed to encode WhatsApp Web QR payload: {err}"))
+        })?;
 
         Ok(qr
             .render::<qrcode::render::unicode::Dense1x2>()
@@ -409,9 +417,19 @@ impl WhatsAppWebChannel {
         }
 
         if trimmed.contains('@') {
-            return trimmed
-                .parse::<wa_rs_binary::jid::Jid>()
-                .map_err(|e| anyhow!("Invalid WhatsApp JID `{trimmed}`: {e}"));
+            return trimmed.parse::<wa_rs_binary::jid::Jid>().map_err(|e| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "trimmed": trimmed,
+                            "error": format!("{}", e),
+                        })),
+                    "whatsapp_web: invalid JID"
+                );
+                anyhow::Error::msg(format!("Invalid WhatsApp JID `{trimmed}`: {e}"))
+            });
         }
 
         let digits: String = trimmed.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -502,7 +520,7 @@ impl WhatsAppWebChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "failed to download voice note"
                 );
                 return None;
@@ -550,7 +568,7 @@ impl WhatsAppWebChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "voice transcription failed"
                 );
                 None
@@ -582,7 +600,16 @@ impl WhatsAppWebChannel {
         let upload = client
             .upload(audio_bytes, MediaType::Audio)
             .await
-            .map_err(|e| anyhow!("Failed to upload TTS audio: {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "Failed to upload TTS audio"
+                );
+                anyhow::Error::msg(format!("Failed to upload TTS audio: {e}"))
+            })?;
 
         ::zeroclaw_log::record!(
             INFO,
@@ -616,7 +643,16 @@ impl WhatsAppWebChannel {
 
         Box::pin(client.send_message(to.clone(), voice_msg))
             .await
-            .map_err(|e| anyhow!("Failed to send voice note: {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "Failed to send voice note"
+                );
+                anyhow::Error::msg(format!("Failed to send voice note: {e}"))
+            })?;
         ::zeroclaw_log::record!(
             INFO,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
@@ -853,7 +889,7 @@ impl Channel for WhatsAppWebChannel {
                                         ::zeroclaw_log::Action::Note
                                     )
                                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "TTS voice reply failed"
                                 );
                             }
@@ -1232,7 +1268,7 @@ impl Channel for WhatsAppWebChannel {
                                     })
                                     .await
                                 {
-                                    ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": e.to_string()})), "failed to send message to channel");
+                                    ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "failed to send message to channel");
                                 }
                             }
                             Event::Connected(_) => {
@@ -1446,11 +1482,16 @@ impl Channel for WhatsAppWebChannel {
         }
 
         let to = self.recipient_to_jid(recipient)?;
-        client
-            .chatstate()
-            .send_composing(&to)
-            .await
-            .map_err(|e| anyhow!("Failed to send typing state (composing): {e}"))?;
+        client.chatstate().send_composing(&to).await.map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "Failed to send typing state (composing)"
+            );
+            anyhow::Error::msg(format!("Failed to send typing state (composing): {e}"))
+        })?;
 
         ::zeroclaw_log::record!(
             DEBUG,
@@ -1480,11 +1521,16 @@ impl Channel for WhatsAppWebChannel {
         }
 
         let to = self.recipient_to_jid(recipient)?;
-        client
-            .chatstate()
-            .send_paused(&to)
-            .await
-            .map_err(|e| anyhow!("Failed to send typing state (paused): {e}"))?;
+        client.chatstate().send_paused(&to).await.map_err(|e| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "Failed to send typing state (paused)"
+            );
+            anyhow::Error::msg(format!("Failed to send typing state (paused): {e}"))
+        })?;
 
         ::zeroclaw_log::record!(
             DEBUG,

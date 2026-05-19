@@ -205,10 +205,20 @@ impl LucidMemory {
         cmd.args(args);
 
         let output = timeout(timeout_window, cmd.output()).await.map_err(|_| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Timeout)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "command": lucid_cmd,
+                        "timeout_ms": timeout_window.as_millis() as u64,
+                    })),
+                "lucid command timed out"
+            );
+            anyhow::Error::msg(format!(
                 "lucid command timed out after {}ms",
                 timeout_window.as_millis()
-            )
+            ))
         })??;
 
         if !output.status.success() {
@@ -253,7 +263,7 @@ impl LucidMemory {
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_attrs(
-                        ::serde_json::json!({"command": self.lucid_cmd, "error": error.to_string()})
+                        ::serde_json::json!({"command": self.lucid_cmd, "error": format!("{}", error)})
                     ),
                 "Lucid store sync failed; sqlite remains authoritative"
             );
@@ -298,11 +308,33 @@ impl Memory for LucidMemory {
         let since_dt = since
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid 'since' date (expected RFC 3339): {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(
+                            ::serde_json::json!({"field": "since", "error": format!("{}", e)})
+                        ),
+                    "recall window bound rejected"
+                );
+                anyhow::Error::msg(format!("invalid 'since' date (expected RFC 3339): {e}"))
+            })?;
         let until_dt = until
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid 'until' date (expected RFC 3339): {e}"))?;
+            .map_err(|e| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(
+                            ::serde_json::json!({"field": "until", "error": format!("{}", e)})
+                        ),
+                    "recall window bound rejected"
+                );
+                anyhow::Error::msg(format!("invalid 'until' date (expected RFC 3339): {e}"))
+            })?;
         if let (Some(s), Some(u)) = (&since_dt, &until_dt)
             && s >= u
         {
@@ -356,7 +388,7 @@ impl Memory for LucidMemory {
             }
             Err(error) => {
                 self.mark_failure_now();
-                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"command": self.lucid_cmd, "error": error.to_string()})), "Lucid context unavailable; using local sqlite results");
+                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"command": self.lucid_cmd, "error": format!("{}", error)})), "Lucid context unavailable; using local sqlite results");
                 Ok(local_results)
             }
         }

@@ -621,7 +621,7 @@ pub async fn handle_prop_put(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "failed to apply PUT comment to config.toml"
             );
         }
@@ -1359,7 +1359,7 @@ pub async fn handle_patch(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "failed to apply PATCH op comments to config.toml"
         );
     }
@@ -1761,7 +1761,7 @@ mod tests {
 
     #[test]
     fn map_prop_error_classifies_unknown_property() {
-        let err = anyhow::anyhow!("Unknown property 'foo.bar'");
+        let err = anyhow::Error::msg("Unknown property 'foo.bar'");
         let api_err = map_prop_error(err, "foo.bar");
         assert_eq!(api_err.code, ConfigApiCode::PathNotFound);
     }
@@ -1770,14 +1770,14 @@ mod tests {
     fn map_prop_error_classifies_type_mismatch() {
         // The classifier (config::api_error::classify_validation_message) now
         // matches "type mismatch" → ValueTypeMismatch; was ValidationFailed.
-        let err = anyhow::anyhow!("type mismatch: expected u64");
+        let err = anyhow::Error::msg("type mismatch: expected u64");
         let api_err = map_prop_error(err, "scheduler.max_concurrent");
         assert_eq!(api_err.code, ConfigApiCode::ValueTypeMismatch);
     }
 
     #[test]
     fn map_prop_error_falls_back_to_validation_on_unknown_message() {
-        let err = anyhow::anyhow!("some completely unrecognized validator message");
+        let err = anyhow::Error::msg("some completely unrecognized validator message");
         let api_err = map_prop_error(err, "scheduler.max_concurrent");
         assert_eq!(api_err.code, ConfigApiCode::ValidationFailed);
     }

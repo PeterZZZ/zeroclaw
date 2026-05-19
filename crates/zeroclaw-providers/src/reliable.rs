@@ -1410,48 +1410,54 @@ mod tests {
 
     #[test]
     fn non_retryable_detects_common_patterns() {
-        assert!(is_non_retryable(&anyhow::anyhow!("400 Bad Request")));
-        assert!(is_non_retryable(&anyhow::anyhow!("401 Unauthorized")));
-        assert!(is_non_retryable(&anyhow::anyhow!("403 Forbidden")));
-        assert!(is_non_retryable(&anyhow::anyhow!("404 Not Found")));
-        assert!(is_non_retryable(&anyhow::anyhow!(
+        assert!(is_non_retryable(&anyhow::Error::msg("400 Bad Request")));
+        assert!(is_non_retryable(&anyhow::Error::msg("401 Unauthorized")));
+        assert!(is_non_retryable(&anyhow::Error::msg("403 Forbidden")));
+        assert!(is_non_retryable(&anyhow::Error::msg("404 Not Found")));
+        assert!(is_non_retryable(&anyhow::Error::msg(
             "invalid api key provided"
         )));
-        assert!(is_non_retryable(&anyhow::anyhow!("authentication failed")));
-        assert!(is_non_retryable(&anyhow::anyhow!(
+        assert!(is_non_retryable(&anyhow::Error::msg(
+            "authentication failed"
+        )));
+        assert!(is_non_retryable(&anyhow::Error::msg(
             "model glm-4.7 not found"
         )));
-        assert!(is_non_retryable(&anyhow::anyhow!(
+        assert!(is_non_retryable(&anyhow::Error::msg(
             "unsupported model: glm-4.7"
         )));
-        assert!(!is_non_retryable(&anyhow::anyhow!("429 Too Many Requests")));
-        assert!(!is_non_retryable(&anyhow::anyhow!("408 Request Timeout")));
-        assert!(!is_non_retryable(&anyhow::anyhow!(
+        assert!(!is_non_retryable(&anyhow::Error::msg(
+            "429 Too Many Requests"
+        )));
+        assert!(!is_non_retryable(&anyhow::Error::msg(
+            "408 Request Timeout"
+        )));
+        assert!(!is_non_retryable(&anyhow::Error::msg(
             "500 Internal Server Error"
         )));
-        assert!(!is_non_retryable(&anyhow::anyhow!("502 Bad Gateway")));
-        assert!(!is_non_retryable(&anyhow::anyhow!("timeout")));
-        assert!(!is_non_retryable(&anyhow::anyhow!("connection reset")));
-        assert!(!is_non_retryable(&anyhow::anyhow!(
+        assert!(!is_non_retryable(&anyhow::Error::msg("502 Bad Gateway")));
+        assert!(!is_non_retryable(&anyhow::Error::msg("timeout")));
+        assert!(!is_non_retryable(&anyhow::Error::msg("connection reset")));
+        assert!(!is_non_retryable(&anyhow::Error::msg(
             "model overloaded, try again later"
         )));
         // Context window errors are now recoverable (not non-retryable)
-        assert!(!is_non_retryable(&anyhow::anyhow!(
+        assert!(!is_non_retryable(&anyhow::Error::msg(
             "OpenAI Codex stream error: Your input exceeds the context window of this model."
         )));
     }
 
     #[test]
     fn auth_error_detects_common_patterns() {
-        assert!(is_auth_error(&anyhow::anyhow!("401 Unauthorized")));
-        assert!(is_auth_error(&anyhow::anyhow!("403 Forbidden")));
-        assert!(is_auth_error(&anyhow::anyhow!("invalid api key")));
-        assert!(is_auth_error(&anyhow::anyhow!("authentication failed")));
-        assert!(is_auth_error(&anyhow::anyhow!("token expired")));
-        assert!(!is_auth_error(&anyhow::anyhow!("400 Bad Request")));
-        assert!(!is_auth_error(&anyhow::anyhow!("429 Too Many Requests")));
-        assert!(!is_auth_error(&anyhow::anyhow!("timeout")));
-        assert!(!is_auth_error(&anyhow::anyhow!("connection reset")));
+        assert!(is_auth_error(&anyhow::Error::msg("401 Unauthorized")));
+        assert!(is_auth_error(&anyhow::Error::msg("403 Forbidden")));
+        assert!(is_auth_error(&anyhow::Error::msg("invalid api key")));
+        assert!(is_auth_error(&anyhow::Error::msg("authentication failed")));
+        assert!(is_auth_error(&anyhow::Error::msg("token expired")));
+        assert!(!is_auth_error(&anyhow::Error::msg("400 Bad Request")));
+        assert!(!is_auth_error(&anyhow::Error::msg("429 Too Many Requests")));
+        assert!(!is_auth_error(&anyhow::Error::msg("timeout")));
+        assert!(!is_auth_error(&anyhow::Error::msg("connection reset")));
     }
 
     #[tokio::test]
@@ -1768,39 +1774,40 @@ mod tests {
 
     #[test]
     fn parse_retry_after_integer() {
-        let err = anyhow::anyhow!("429 Too Many Requests, Retry-After: 5");
+        let err = anyhow::Error::msg("429 Too Many Requests, Retry-After: 5");
         assert_eq!(parse_retry_after_ms(&err), Some(5000));
     }
 
     #[test]
     fn parse_retry_after_float() {
-        let err = anyhow::anyhow!("Rate limited. retry_after: 2.5 seconds");
+        let err = anyhow::Error::msg("Rate limited. retry_after: 2.5 seconds");
         assert_eq!(parse_retry_after_ms(&err), Some(2500));
     }
 
     #[test]
     fn parse_retry_after_missing() {
-        let err = anyhow::anyhow!("500 Internal Server Error");
+        let err = anyhow::Error::msg("500 Internal Server Error");
         assert_eq!(parse_retry_after_ms(&err), None);
     }
 
     #[test]
     fn rate_limited_detection() {
-        assert!(is_rate_limited(&anyhow::anyhow!("429 Too Many Requests")));
-        assert!(is_rate_limited(&anyhow::anyhow!(
+        assert!(is_rate_limited(&anyhow::Error::msg(
+            "429 Too Many Requests"
+        )));
+        assert!(is_rate_limited(&anyhow::Error::msg(
             "HTTP 429 rate limit exceeded"
         )));
-        assert!(!is_rate_limited(&anyhow::anyhow!("401 Unauthorized")));
-        assert!(!is_rate_limited(&anyhow::anyhow!(
+        assert!(!is_rate_limited(&anyhow::Error::msg("401 Unauthorized")));
+        assert!(!is_rate_limited(&anyhow::Error::msg(
             "500 Internal Server Error"
         )));
     }
 
     #[test]
     fn non_retryable_rate_limit_detects_plan_restricted_model() {
-        let err = anyhow::anyhow!(
-            "{}",
-            "API error (429 Too Many Requests): {\"code\":1311,\"message\":\"the current account plan does not include glm-5\"}"
+        let err = anyhow::Error::msg(
+            "API error (429 Too Many Requests): {\"code\":1311,\"message\":\"the current account plan does not include glm-5\"}",
         );
         assert!(
             is_non_retryable_rate_limit(&err),
@@ -1810,9 +1817,8 @@ mod tests {
 
     #[test]
     fn non_retryable_rate_limit_detects_insufficient_balance() {
-        let err = anyhow::anyhow!(
-            "{}",
-            "API error (429 Too Many Requests): {\"code\":1113,\"message\":\"insufficient balance\"}"
+        let err = anyhow::Error::msg(
+            "API error (429 Too Many Requests): {\"code\":1113,\"message\":\"insufficient balance\"}",
         );
         assert!(
             is_non_retryable_rate_limit(&err),
@@ -1822,7 +1828,7 @@ mod tests {
 
     #[test]
     fn non_retryable_rate_limit_does_not_flag_generic_429() {
-        let err = anyhow::anyhow!("429 Too Many Requests: rate limit exceeded");
+        let err = anyhow::Error::msg("429 Too Many Requests: rate limit exceeded");
         assert!(
             !is_non_retryable_rate_limit(&err),
             "generic rate-limit 429 should remain retryable"
@@ -1832,21 +1838,21 @@ mod tests {
     #[test]
     fn compute_backoff_uses_retry_after() {
         let model_provider = ReliableModelProvider::new("test", vec![], 0, 500);
-        let err = anyhow::anyhow!("429 Retry-After: 3");
+        let err = anyhow::Error::msg("429 Retry-After: 3");
         assert_eq!(model_provider.compute_backoff(500, &err), 3_000);
     }
 
     #[test]
     fn compute_backoff_caps_at_30s() {
         let model_provider = ReliableModelProvider::new("test", vec![], 0, 500);
-        let err = anyhow::anyhow!("429 Retry-After: 120");
+        let err = anyhow::Error::msg("429 Retry-After: 120");
         assert_eq!(model_provider.compute_backoff(500, &err), 30_000);
     }
 
     #[test]
     fn compute_backoff_falls_back_to_base() {
         let model_provider = ReliableModelProvider::new("test", vec![], 0, 500);
-        let err = anyhow::anyhow!("500 Server Error");
+        let err = anyhow::Error::msg("500 Server Error");
         assert_eq!(model_provider.compute_backoff(500, &err), 500);
     }
 
@@ -1854,7 +1860,7 @@ mod tests {
 
     #[test]
     fn non_retryable_detects_401() {
-        let err = anyhow::anyhow!("API error (401 Unauthorized): invalid api key");
+        let err = anyhow::Error::msg("API error (401 Unauthorized): invalid api key");
         assert!(
             is_non_retryable(&err),
             "401 errors must be detected as non-retryable"
@@ -1863,7 +1869,7 @@ mod tests {
 
     #[test]
     fn non_retryable_detects_403() {
-        let err = anyhow::anyhow!("API error (403 Forbidden): access denied");
+        let err = anyhow::Error::msg("API error (403 Forbidden): access denied");
         assert!(
             is_non_retryable(&err),
             "403 errors must be detected as non-retryable"
@@ -1872,7 +1878,7 @@ mod tests {
 
     #[test]
     fn non_retryable_detects_404() {
-        let err = anyhow::anyhow!("API error (404 Not Found): model not found");
+        let err = anyhow::Error::msg("API error (404 Not Found): model not found");
         assert!(
             is_non_retryable(&err),
             "404 errors must be detected as non-retryable"
@@ -1881,7 +1887,7 @@ mod tests {
 
     #[test]
     fn non_retryable_does_not_flag_429() {
-        let err = anyhow::anyhow!("429 Too Many Requests");
+        let err = anyhow::Error::msg("429 Too Many Requests");
         assert!(
             !is_non_retryable(&err),
             "429 must NOT be treated as non-retryable (it is retryable with backoff)"
@@ -1890,7 +1896,7 @@ mod tests {
 
     #[test]
     fn non_retryable_does_not_flag_408() {
-        let err = anyhow::anyhow!("408 Request Timeout");
+        let err = anyhow::Error::msg("408 Request Timeout");
         assert!(
             !is_non_retryable(&err),
             "408 must NOT be treated as non-retryable (it is retryable)"
@@ -1899,7 +1905,7 @@ mod tests {
 
     #[test]
     fn non_retryable_does_not_flag_500() {
-        let err = anyhow::anyhow!("500 Internal Server Error");
+        let err = anyhow::Error::msg("500 Internal Server Error");
         assert!(
             !is_non_retryable(&err),
             "500 must NOT be treated as non-retryable (server errors are retryable)"
@@ -1908,7 +1914,7 @@ mod tests {
 
     #[test]
     fn non_retryable_does_not_flag_502() {
-        let err = anyhow::anyhow!("502 Bad Gateway");
+        let err = anyhow::Error::msg("502 Bad Gateway");
         assert!(
             !is_non_retryable(&err),
             "502 must NOT be treated as non-retryable"
@@ -1919,7 +1925,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_zero() {
-        let err = anyhow::anyhow!("429 Too Many Requests, Retry-After: 0");
+        let err = anyhow::Error::msg("429 Too Many Requests, Retry-After: 0");
         assert_eq!(
             parse_retry_after_ms(&err),
             Some(0),
@@ -1929,7 +1935,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_with_underscore_separator() {
-        let err = anyhow::anyhow!("rate limited, retry_after: 10");
+        let err = anyhow::Error::msg("rate limited, retry_after: 10");
         assert_eq!(
             parse_retry_after_ms(&err),
             Some(10_000),
@@ -1939,7 +1945,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_space_separator() {
-        let err = anyhow::anyhow!("Retry-After 7");
+        let err = anyhow::Error::msg("Retry-After 7");
         assert_eq!(
             parse_retry_after_ms(&err),
             Some(7000),
@@ -1949,7 +1955,7 @@ mod tests {
 
     #[test]
     fn rate_limited_false_for_generic_error() {
-        let err = anyhow::anyhow!("Connection refused");
+        let err = anyhow::Error::msg("Connection refused");
         assert!(
             !is_rate_limited(&err),
             "generic errors must not be flagged as rate-limited"
@@ -2390,21 +2396,23 @@ mod tests {
     #[test]
     fn context_window_error_is_not_non_retryable() {
         // Context window errors should be recoverable via truncation
-        assert!(!is_non_retryable(&anyhow::anyhow!(
+        assert!(!is_non_retryable(&anyhow::Error::msg(
             "exceeds the context window"
         )));
-        assert!(!is_non_retryable(&anyhow::anyhow!(
+        assert!(!is_non_retryable(&anyhow::Error::msg(
             "maximum context length exceeded"
         )));
-        assert!(!is_non_retryable(&anyhow::anyhow!(
+        assert!(!is_non_retryable(&anyhow::Error::msg(
             "too many tokens in the request"
         )));
-        assert!(!is_non_retryable(&anyhow::anyhow!("token limit exceeded")));
+        assert!(!is_non_retryable(&anyhow::Error::msg(
+            "token limit exceeded"
+        )));
     }
 
     #[test]
     fn is_context_window_exceeded_detects_llamacpp() {
-        assert!(is_context_window_exceeded(&anyhow::anyhow!(
+        assert!(is_context_window_exceeded(&anyhow::Error::msg(
             "request (8968 tokens) exceeds the available context size (8448 tokens), try increasing it"
         )));
     }
@@ -2574,34 +2582,34 @@ mod tests {
     #[test]
     fn tool_schema_error_detects_groq_validation_failure() {
         let msg = r#"Groq API error (400 Bad Request): {"error":{"message":"tool call validation failed: attempted to call tool 'memory_recall' which was not in request"}}"#;
-        let err = anyhow::anyhow!("{}", msg);
+        let err = anyhow::Error::msg(msg.to_string());
         assert!(is_tool_schema_error(&err));
     }
 
     #[test]
     fn tool_schema_error_detects_not_in_request() {
-        let err = anyhow::anyhow!("tool 'search' was not in request");
+        let err = anyhow::Error::msg("tool 'search' was not in request");
         assert!(is_tool_schema_error(&err));
     }
 
     #[test]
     fn tool_schema_error_detects_not_found_in_tool_list() {
-        let err = anyhow::anyhow!("function 'foo' not found in tool list");
+        let err = anyhow::Error::msg("function 'foo' not found in tool list");
         assert!(is_tool_schema_error(&err));
     }
 
     #[test]
     fn tool_schema_error_detects_invalid_tool_call() {
-        let err = anyhow::anyhow!("invalid_tool_call: no matching function");
+        let err = anyhow::Error::msg("invalid_tool_call: no matching function");
         assert!(is_tool_schema_error(&err));
     }
 
     #[test]
     fn tool_schema_error_ignores_unrelated_errors() {
-        let err = anyhow::anyhow!("invalid api key");
+        let err = anyhow::Error::msg("invalid api key");
         assert!(!is_tool_schema_error(&err));
 
-        let err = anyhow::anyhow!("model not found");
+        let err = anyhow::Error::msg("model not found");
         assert!(!is_tool_schema_error(&err));
     }
 
@@ -2609,14 +2617,14 @@ mod tests {
     fn non_retryable_returns_false_for_tool_schema_400() {
         // A 400 error with tool schema validation text should NOT be non-retryable.
         let msg = "400 Bad Request: tool call validation failed: attempted to call tool 'x' which was not in request";
-        let err = anyhow::anyhow!("{}", msg);
+        let err = anyhow::Error::msg(msg.to_string());
         assert!(!is_non_retryable(&err));
     }
 
     #[test]
     fn non_retryable_returns_true_for_other_400_errors() {
         // A regular 400 error (e.g. invalid API key) should still be non-retryable.
-        let err = anyhow::anyhow!("400 Bad Request: invalid api key provided");
+        let err = anyhow::Error::msg("400 Bad Request: invalid api key provided");
         assert!(is_non_retryable(&err));
     }
 

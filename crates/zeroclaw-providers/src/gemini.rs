@@ -373,7 +373,20 @@ fn refresh_gemini_cli_token(
         .header("Accept", "application/json")
         .form(&form)
         .send()
-        .map_err(|error| anyhow::anyhow!("Gemini CLI OAuth refresh request failed: {error}"))?;
+        .map_err(|error| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "gemini_cli",
+                        "phase": "refresh_request",
+                        "error": format!("{}", error),
+                    })),
+                "gemini: CLI OAuth refresh request failed"
+            );
+            anyhow::Error::msg(format!("Gemini CLI OAuth refresh request failed: {error}"))
+        })?;
 
     let status = response.status();
     let body = response
@@ -390,13 +403,33 @@ fn refresh_gemini_cli_token(
         expires_in: Option<i64>,
     }
 
-    let parsed: TokenResponse = serde_json::from_str(&body)
-        .map_err(|_| anyhow::anyhow!("Gemini CLI OAuth refresh response is not valid JSON"))?;
+    let parsed: TokenResponse = serde_json::from_str(&body).map_err(|_| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"oauth_provider": "gemini_cli"})),
+            "gemini: CLI OAuth refresh response is not valid JSON"
+        );
+        anyhow::Error::msg("Gemini CLI OAuth refresh response is not valid JSON")
+    })?;
 
     let access_token = parsed
         .access_token
         .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Gemini CLI OAuth refresh response missing access_token"))?;
+        .ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "oauth_provider": "gemini_cli",
+                        "missing": "access_token",
+                    })),
+                "gemini: CLI OAuth refresh missing access_token"
+            );
+            anyhow::Error::msg("Gemini CLI OAuth refresh response missing access_token")
+        })?;
 
     let expiry_millis = parsed.expires_in.and_then(|secs| {
         let now_millis = std::time::SystemTime::now()
@@ -473,7 +506,20 @@ async fn refresh_gemini_cli_token_async(
         )
     })
     .await
-    .map_err(|e| anyhow::anyhow!("Token refresh task panicked: {e}"))?
+    .map_err(|e| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "oauth_provider": "gemini_cli",
+                    "phase": "task_join",
+                    "error": format!("{}", e),
+                })),
+            "gemini: token refresh task panicked"
+        );
+        anyhow::Error::msg(format!("Token refresh task panicked: {e}"))
+    })?
 }
 
 impl GeminiModelProvider {
@@ -912,7 +958,18 @@ impl GeminiModelProvider {
             .cloudaicompanion_project
             .filter(|p| !p.trim().is_empty())
             .or(project_seed)
-            .ok_or_else(|| anyhow::anyhow!("loadCodeAssist response missing project context"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "missing": "cloudaicompanionProject",
+                        })),
+                    "gemini: loadCodeAssist missing project context"
+                );
+                anyhow::Error::msg("loadCodeAssist response missing project context")
+            })?;
 
         // Cache for future calls
         {
@@ -1053,13 +1110,20 @@ impl GeminiModelProvider {
         temperature: f64,
     ) -> anyhow::Result<(String, Option<TokenUsage>)> {
         let auth = self.auth.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "auth"})),
+                "gemini: no auth configured"
+            );
+            anyhow::Error::msg(
                 "Gemini API key not found. Options:\n\
                  1. Set GEMINI_API_KEY env var\n\
                  2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
                  3. Run `zeroclaw auth login --model-provider gemini`\n\
                  4. Get an API key from https://aistudio.google.com/app/apikey\n\
-                 5. Run `zeroclaw onboard` to configure"
+                 5. Run `zeroclaw onboard` to configure",
             )
         })?;
 
@@ -1076,10 +1140,16 @@ impl GeminiModelProvider {
                 (Some(token), Some(proj))
             }
             GeminiAuth::ManagedOAuth => {
-                let auth_service = self
-                    .auth_service
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("ManagedOAuth requires auth_service"))?;
+                let auth_service = self.auth_service.as_ref().ok_or_else(|| {
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"missing": "auth_service"})),
+                        "gemini: ManagedOAuth requires auth_service"
+                    );
+                    anyhow::Error::msg("ManagedOAuth requires auth_service")
+                })?;
                 let token = auth_service
                     .get_valid_gemini_access_token(
                         self.auth_profile_override.as_deref(),
@@ -1088,8 +1158,15 @@ impl GeminiModelProvider {
                     )
                     .await?
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Gemini auth profile not found. Run `zeroclaw auth login --model-provider gemini`."
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                .with_attrs(::serde_json::json!({"oauth_provider": "gemini"})),
+                            "gemini: auth profile not found"
+                        );
+                        anyhow::Error::msg(
+                            "Gemini auth profile not found. Run `zeroclaw auth login --model-provider gemini`.",
                         )
                     })?;
                 let proj = self.resolve_oauth_project(&token).await?;
@@ -1158,7 +1235,21 @@ impl GeminiModelProvider {
                                     self.oauth_client_secret.as_deref().unwrap_or(""),
                                 )
                                 .await?
-                                .ok_or_else(|| anyhow::anyhow!("Gemini auth profile not found"))?;
+                                .ok_or_else(|| {
+                                    ::zeroclaw_log::record!(
+                                        ERROR,
+                                        ::zeroclaw_log::Event::new(
+                                            module_path!(),
+                                            ::zeroclaw_log::Action::Reject
+                                        )
+                                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                        .with_attrs(
+                                            ::serde_json::json!({"oauth_provider": "gemini"})
+                                        ),
+                                        "gemini: auth profile not found"
+                                    );
+                                    anyhow::Error::msg("Gemini auth profile not found")
+                                })?;
                             let proj = self.resolve_oauth_project(&token).await?;
                             (token, proj)
                         }
@@ -1260,7 +1351,15 @@ impl GeminiModelProvider {
             .and_then(|c| c.into_iter().next())
             .and_then(|c| c.content)
             .and_then(|c| c.effective_text())
-            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "gemini: empty response text"
+                );
+                anyhow::Error::msg("No response from Gemini")
+            })?;
 
         Ok((text, usage))
     }
@@ -1359,10 +1458,19 @@ impl ModelProvider for GeminiModelProvider {
                 GeminiAuth::ManagedOAuth => {
                     // For ManagedOAuth, verify and refresh the token if needed.
                     // This ensures fallback works even if tokens expired during daemon uptime.
-                    let auth_service = self
-                        .auth_service
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("ManagedOAuth requires auth_service"))?;
+                    let auth_service = self.auth_service.as_ref().ok_or_else(|| {
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Reject
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"missing": "auth_service"})),
+                            "gemini: ManagedOAuth requires auth_service"
+                        );
+                        anyhow::Error::msg("ManagedOAuth requires auth_service")
+                    })?;
 
                     let _token = auth_service
                         .get_valid_gemini_access_token(
@@ -1372,8 +1480,15 @@ impl ModelProvider for GeminiModelProvider {
                         )
                         .await?
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Gemini auth profile not found or expired. Run: zeroclaw auth login --model-provider gemini"
+                            ::zeroclaw_log::record!(
+                                ERROR,
+                                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                    .with_attrs(::serde_json::json!({"oauth_provider": "gemini"})),
+                                "gemini: auth profile not found or expired"
+                            );
+                            anyhow::Error::msg(
+                                "Gemini auth profile not found or expired. Run: zeroclaw auth login --model-provider gemini",
                             )
                         })?;
 

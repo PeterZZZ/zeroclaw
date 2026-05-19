@@ -344,7 +344,7 @@ impl SlackChannel {
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                 "chat.delete failed"
             );
         }
@@ -506,7 +506,18 @@ impl SlackChannel {
             .get("ts")
             .and_then(|v| v.as_str())
             .map(String::from)
-            .ok_or_else(|| anyhow::anyhow!("chat.postMessage response missing 'ts'"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(
+                            ::serde_json::json!({"field": "ts", "api": "chat.postMessage"})
+                        ),
+                    "slack: chat.postMessage response missing ts"
+                );
+                anyhow::Error::msg("chat.postMessage response missing 'ts'")
+            })
     }
 
     /// Update an existing Slack message in-place using `chat.update`.
@@ -764,7 +775,7 @@ impl SlackChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": err.to_string(), "user_id": user_id})
+                            ::serde_json::json!({"error": format!("{}", err), "user_id": user_id})
                         ),
                     "users.info request failed for"
                 );
@@ -795,7 +806,7 @@ impl SlackChannel {
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                     .with_attrs(
-                        ::serde_json::json!({"error": err.to_string(), "user_id": user_id})
+                        ::serde_json::json!({"error": format!("{}", err), "user_id": user_id})
                     ),
                 "users.info returned error for"
             );
@@ -1371,7 +1382,7 @@ impl SlackChannel {
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": err.to_string(), "file_id": file_id})
+                            ::serde_json::json!({"error": format!("{}", err), "file_id": file_id})
                         ),
                     "files.info request failed for"
                 );
@@ -1401,7 +1412,7 @@ impl SlackChannel {
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                     .with_attrs(
-                        ::serde_json::json!({"error": err.to_string(), "file_id": file_id})
+                        ::serde_json::json!({"error": format!("{}", err), "file_id": file_id})
                     ),
                 "files.info returned error for"
             );
@@ -1523,7 +1534,7 @@ impl SlackChannel {
             Ok(url) => url,
             Err(err) => {
                 let redacted_raw = Self::redact_raw_slack_url(raw_url);
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": err.to_string(), "redacted_raw": redacted_raw})), "file URL parse failed for");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", err), "redacted_raw": redacted_raw})), "file URL parse failed for");
                 return None;
             }
         };
@@ -1803,7 +1814,7 @@ impl SlackChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     &format!("image body read failed for {}", redacted_url)
                 );
                 return None;
@@ -2141,8 +2152,16 @@ impl SlackChannel {
         workspace: &Path,
         file_name: &str,
     ) -> anyhow::Result<PathBuf> {
-        let safe_name = Self::sanitize_attachment_filename(file_name)
-            .ok_or_else(|| anyhow::anyhow!("invalid attachment filename: {file_name}"))?;
+        let safe_name = Self::sanitize_attachment_filename(file_name).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"file_name": file_name})),
+                "invalid attachment filename"
+            );
+            anyhow::Error::msg(format!("invalid attachment filename: {file_name}"))
+        })?;
 
         tokio::fs::create_dir_all(workspace).await?;
         let workspace_root = tokio::fs::canonicalize(workspace)
@@ -2429,7 +2448,7 @@ impl SlackChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     &format!("voice file read failed for {}", redacted_url)
                 );
                 return None;
@@ -2478,7 +2497,7 @@ impl SlackChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     &format!("voice transcription failed for {}", file_name)
                 );
                 Some(Self::format_attachment_summary(file))
@@ -2533,7 +2552,7 @@ impl SlackChannel {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     &format!("snippet body read failed for {}", redacted_url)
                 );
                 return None;
@@ -2832,9 +2851,15 @@ impl SlackChannel {
     }
 
     async fn open_socket_mode_url(&self) -> anyhow::Result<String> {
-        let app_token = self
-            .configured_app_token()
-            .ok_or_else(|| anyhow::anyhow!("Slack Socket Mode requires app_token"))?;
+        let app_token = self.configured_app_token().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "Slack Socket Mode requires app_token"
+            );
+            anyhow::Error::msg("Slack Socket Mode requires app_token")
+        })?;
 
         let resp = self
             .http_client()
@@ -2867,7 +2892,18 @@ impl SlackChannel {
             .get("url")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("Slack apps.connections.open did not return url"))
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(
+                            ::serde_json::json!({"field": "url", "api": "apps.connections.open"})
+                        ),
+                    "slack: apps.connections.open did not return url"
+                );
+                anyhow::Error::msg("Slack apps.connections.open did not return url")
+            })
     }
 
     async fn listen_socket_mode(
@@ -2952,7 +2988,7 @@ impl SlackChannel {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "Socket Mode: pong send failed"
                             );
                             break;
@@ -2980,7 +3016,7 @@ impl SlackChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Socket Mode: websocket read failed"
                         );
                         break;
@@ -2997,7 +3033,7 @@ impl SlackChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Socket Mode: invalid JSON payload"
                         );
                         continue;
@@ -3014,7 +3050,7 @@ impl SlackChannel {
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Socket Mode: ack send failed"
                         );
                         break;
@@ -3387,7 +3423,7 @@ impl SlackChannel {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": e.to_string(), "channel_id": channel_id})), "poll error for channel");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", e), "channel_id": channel_id})), "poll error for channel");
                     return None;
                 }
             };
@@ -3465,7 +3501,7 @@ impl SlackChannel {
                     .get("error")
                     .and_then(|e| e.as_str())
                     .unwrap_or("unknown");
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": err.to_string(), "channel_id": channel_id})), "history error for channel");
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"error": format!("{}", err), "channel_id": channel_id})), "history error for channel");
                 return None;
             }
 
@@ -3943,7 +3979,7 @@ impl Channel for SlackChannel {
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                             "chat.update (draft) failed"
                         );
                     }
@@ -3952,7 +3988,7 @@ impl Channel for SlackChannel {
                     ::zeroclaw_log::record!(
                         DEBUG,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "chat.update (draft) HTTP error"
                     );
                 }
@@ -4051,7 +4087,7 @@ impl Channel for SlackChannel {
         ::zeroclaw_log::record!(
             DEBUG,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
             "chat.update (finalize) failed; falling back to delete+send"
         );
 
@@ -4240,7 +4276,7 @@ impl Channel for SlackChannel {
                                     ::zeroclaw_log::Action::Note
                                 )
                                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "channel discovery failed"
                             );
                         }
@@ -4515,10 +4551,16 @@ impl Channel for SlackChannel {
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
         let thread_ts = {
-            let map = self
-                .active_assistant_thread
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let map = self.active_assistant_thread.lock().map_err(|e| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "lock poisoned"
+                );
+                anyhow::Error::msg(format!("lock poisoned: {e}"))
+            })?;
             match map.get(recipient) {
                 Some(ts) => ts.clone(),
                 None => return Ok(()),

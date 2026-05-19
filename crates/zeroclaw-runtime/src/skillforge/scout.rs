@@ -181,7 +181,7 @@ impl Scout for GitHubScout {
             let resp = match self.client.get(&url).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"query": query.as_str(), "error": e.to_string()})), "GitHub API request failed, skipping query");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"query": query.as_str(), "error": format!("{}", e)})), "GitHub API request failed, skipping query");
                     continue;
                 }
             };
@@ -194,7 +194,7 @@ impl Scout for GitHubScout {
             let body: serde_json::Value = match resp.json().await {
                 Ok(v) => v,
                 Err(e) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"query": query.as_str(), "error": e.to_string()})), "Failed to parse GitHub response, skipping query");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"query": query.as_str(), "error": format!("{}", e)})), "Failed to parse GitHub response, skipping query");
                     continue;
                 }
             };

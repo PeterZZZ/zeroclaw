@@ -67,7 +67,7 @@ fn browse_error_response(err: BrowseError) -> Response {
     };
     (
         status,
-        Json(serde_json::json!({ "error": err.to_string() })),
+        Json(serde_json::json!({ "error": format!("{}", err) })),
     )
         .into_response()
 }

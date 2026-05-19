@@ -102,7 +102,16 @@ impl Tool for ContentSearchTool {
         let pattern = args
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' parameter"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "pattern"})),
+                    "content_search: missing pattern parameter"
+                );
+                anyhow::Error::msg("Missing 'pattern' parameter")
+            })?;
 
         if pattern.is_empty() {
             return Ok(ToolResult {

@@ -968,11 +968,21 @@ fn runtime_defaults_from_config(
         .and_then(|e| e.model.clone())
         .or_else(|| resolved_default_model(config).ok())
         .ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "model_provider": model_provider,
+                        "reason": "no_model_configured",
+                    })),
+                "orchestrator: model_provider has no resolvable model"
+            );
+            anyhow::Error::msg(format!(
                 "no model configured: model_provider '{model_provider}' does not resolve to a \
                  ModelProviderConfig with a `model` field, and providers.models has no \
                  fallback entry."
-            )
+            ))
         })?;
     Ok(ChannelRuntimeDefaults {
         default_model_provider,
@@ -1265,7 +1275,7 @@ fn append_sender_turn(ctx: &ChannelRuntimeContext, sender_key: &str, turn: ChatM
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "Failed to persist session turn"
         );
     }
@@ -1410,7 +1420,7 @@ fn rollback_orphan_user_turn(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "Failed to rollback session store entry"
         );
     }
@@ -1933,7 +1943,7 @@ async fn handle_runtime_command_if_needed(
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(
-                            ::serde_json::json!({"error": e.to_string(), "sender_key": sender_key})
+                            ::serde_json::json!({"error": format!("{}", e), "sender_key": sender_key})
                         ),
                     "Failed to delete persisted session for"
                 );
@@ -2721,7 +2731,7 @@ fn spawn_supervised_listener_with_health_interval(
                                 ::zeroclaw_log::Action::Fail
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "channel listener error; restarting"
                         );
                         zeroclaw_runtime::health::mark_component_error(&component, e.to_string());
@@ -2755,7 +2765,7 @@ fn log_worker_join_result(result: Result<(), tokio::task::JoinError>) {
             ERROR,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                 .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                .with_attrs(::serde_json::json!({"error": error.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", error)})),
             "Channel message worker crashed"
         );
     }
@@ -2777,7 +2787,7 @@ fn spawn_scoped_typing_task(
                 () = stop_signal.cancelled() => break,
                 _ = interval.tick() => {
                     if let Err(e) = channel.start_typing(&recipient).await {
-                        ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": e.to_string()})), "failed to start typing");
+                        ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "failed to start typing");
                     }
                 }
             }
@@ -2787,7 +2797,7 @@ fn spawn_scoped_typing_task(
             ::zeroclaw_log::record!(
                 DEBUG,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "failed to stop typing"
             );
         }
@@ -2943,7 +2953,7 @@ async fn process_channel_message_body(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
             "Failed to apply runtime config update"
         );
     }
@@ -3222,7 +3232,7 @@ async fn process_channel_message_body(
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Context compression failed, proceeding without"
                 );
             }
@@ -3358,7 +3368,7 @@ async fn process_channel_message_body(
                     ::zeroclaw_log::record!(
                         DEBUG,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         &format!("Failed to send draft on {}", channel.name())
                     );
                     None
@@ -3399,7 +3409,7 @@ async fn process_channel_message_body(
                                         module_path!(),
                                         ::zeroclaw_log::Action::Note
                                     )
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "Draft progress update failed"
                                 );
                             }
@@ -3417,7 +3427,7 @@ async fn process_channel_message_body(
                                         module_path!(),
                                         ::zeroclaw_log::Action::Note
                                     )
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                     "Draft update failed"
                                 );
                             }
@@ -3442,7 +3452,7 @@ async fn process_channel_message_body(
         ::zeroclaw_log::record!(
             DEBUG,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "Failed to add reaction"
         );
     }
@@ -3745,7 +3755,7 @@ async fn process_channel_message_body(
                 ::zeroclaw_log::record!(
                     DEBUG,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                     &format!("Failed to cancel draft on {}", channel.name())
                 );
             }
@@ -3906,7 +3916,7 @@ async fn process_channel_message_body(
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Memory consolidation skipped"
                         );
                     }
@@ -3965,7 +3975,7 @@ async fn process_channel_message_body(
                                 ::zeroclaw_log::Action::Note
                             )
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "Failed to finalize draft; sending as new message"
                         );
                         let _ = channel
@@ -3987,7 +3997,7 @@ async fn process_channel_message_body(
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "failed to reply"
                     );
                 }
@@ -4007,7 +4017,7 @@ async fn process_channel_message_body(
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "failed to send tool receipts block"
                     );
                 }
@@ -4045,7 +4055,7 @@ async fn process_channel_message_body(
                     ::zeroclaw_log::record!(
                         DEBUG,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_attrs(::serde_json::json!({"error": err.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", err)})),
                         &format!("Failed to cancel draft on {}", channel.name())
                     );
                 }
@@ -5365,7 +5375,7 @@ fn collect_configured_channels(
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "discord: archive enabled but failed to open discord.db"
                     );
                 }
@@ -5506,7 +5516,7 @@ fn collect_configured_channels(
                     ERROR,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                         .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Matrix channel construction failed"
                 );
             }
@@ -6390,7 +6400,7 @@ pub async fn start_channels(
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Session persistence disabled"
                     );
                     None
@@ -6457,7 +6467,7 @@ pub async fn start_channels(
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                     .with_attrs(
-                        ::serde_json::json!({"error": e.to_string(), "agent": agent_alias})
+                        ::serde_json::json!({"error": format!("{}", e), "agent": agent_alias})
                     ),
                 "ModelProvider warmup failed (non-fatal)"
             );
@@ -6471,12 +6481,22 @@ pub async fn start_channels(
                 resolved_default_model(&config).ok()
             })
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({
+                            "agent": agent_alias,
+                            "reason": "no_model_configured",
+                        })),
+                    "orchestrator: agent has no resolvable model"
+                );
+                anyhow::Error::msg(format!(
                     "no model configured: agents.{agent_alias}.model_provider does not resolve to a \
                      ModelProviderConfig with a `model` field, and providers.models is empty. \
                      Configure `[model_providers.<type>.<alias>] model = \"...\"` and reference it \
                      from `agents.{agent_alias}.model_provider`."
-                )
+                ))
             })?;
         let temperature: Option<f64> = agent_provider_entry.and_then(|e| e.temperature);
         let mem: Arc<dyn Memory> = zeroclaw_memory::create_memory_for_agent(
@@ -6618,7 +6638,7 @@ pub async fn start_channels(
                     }
                 }
                 Err(e) => {
-                    ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"agent_alias": agent_alias, "error": e.to_string()})), "MCP registry failed to initialize");
+                    ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"agent_alias": agent_alias, "error": format!("{}", e)})), "MCP registry failed to initialize");
                 }
             }
         }
@@ -7139,7 +7159,7 @@ pub async fn start_channels(
                     ::zeroclaw_log::record!(
                         DEBUG,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         &format!("Failed to persist orphan closure for {}", m.key)
                     );
                 }
@@ -7234,11 +7254,15 @@ pub async fn deliver_announcement(
     match channel.to_ascii_lowercase().as_str() {
         #[cfg(feature = "channel-telegram")]
         "telegram" => {
-            let tg = config
-                .channels
-                .telegram
-                .get("default")
-                .ok_or_else(|| anyhow::anyhow!("telegram channel not configured"))?;
+            let tg = config.channels.telegram.get("default").ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "telegram channel not configured"
+                );
+                anyhow::Error::msg("telegram channel not configured")
+            })?;
             // One-shot delivery: a snapshot resolver is sufficient
             // because the channel handle is dropped immediately after
             // the single send call. No long-running cache risk.
@@ -7254,11 +7278,15 @@ pub async fn deliver_announcement(
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         "discord" => {
-            let dc = config
-                .channels
-                .discord
-                .get("default")
-                .ok_or_else(|| anyhow::anyhow!("discord channel not configured"))?;
+            let dc = config.channels.discord.get("default").ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "discord channel not configured"
+                );
+                anyhow::Error::msg("discord channel not configured")
+            })?;
             // One-shot delivery: snapshot resolver is sufficient.
             let peers = config.channel_external_peers("discord", "default");
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
@@ -7276,11 +7304,15 @@ pub async fn deliver_announcement(
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         "slack" => {
-            let sl = config
-                .channels
-                .slack
-                .get("default")
-                .ok_or_else(|| anyhow::anyhow!("slack channel not configured"))?;
+            let sl = config.channels.slack.get("default").ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "slack channel not configured"
+                );
+                anyhow::Error::msg("slack channel not configured")
+            })?;
             // One-shot delivery: snapshot resolver is sufficient.
             let peers = config.channel_external_peers("slack", "default");
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
@@ -7296,11 +7328,15 @@ pub async fn deliver_announcement(
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
         "signal" => {
-            let sg = config
-                .channels
-                .signal
-                .get("default")
-                .ok_or_else(|| anyhow::anyhow!("signal channel not configured"))?;
+            let sg = config.channels.signal.get("default").ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "signal channel not configured"
+                );
+                anyhow::Error::msg("signal channel not configured")
+            })?;
             // One-shot delivery: snapshot resolver is sufficient.
             let peers = config.channel_external_peers("signal", "default");
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
@@ -7319,11 +7355,15 @@ pub async fn deliver_announcement(
         }
         #[cfg(feature = "channel-wechat")]
         "wechat" => {
-            let wc = config
-                .channels
-                .wechat
-                .get("default")
-                .ok_or_else(|| anyhow::anyhow!("wechat channel not configured"))?;
+            let wc = config.channels.wechat.get("default").ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "wechat channel not configured"
+                );
+                anyhow::Error::msg("wechat channel not configured")
+            })?;
             // One-shot delivery: snapshot resolver is sufficient. No
             // `.with_persistence` — paired-user writes need a long-running
             // shared Config handle which this path does not have.
@@ -7350,12 +7390,15 @@ pub async fn deliver_announcement(
             // named "default" entry. Replace with a real alias-resolution
             // path (e.g. first enabled, or operator-selected) when the
             // direct-send delivery surface gets reworked.
-            let (alias, wh) = config
-                .channels
-                .webhook
-                .iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("webhook channel not configured"))?;
+            let (alias, wh) = config.channels.webhook.iter().next().ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "webhook channel not configured"
+                );
+                anyhow::Error::msg("webhook channel not configured")
+            })?;
             let ch = WebhookChannel::new(
                 alias.clone(),
                 wh.port,
@@ -7987,13 +8030,13 @@ mod tests {
 
     #[test]
     fn context_window_overflow_error_detector_matches_known_messages() {
-        let overflow_err = anyhow::anyhow!(
-            "OpenAI Codex stream error: Your input exceeds the context window of this model."
+        let overflow_err = anyhow::Error::msg(
+            "OpenAI Codex stream error: Your input exceeds the context window of this model.",
         );
         assert!(is_context_window_overflow_error(&overflow_err));
 
         let other_err =
-            anyhow::anyhow!("OpenAI Codex API error (502 Bad Gateway): error code: 502");
+            anyhow::Error::msg("OpenAI Codex API error (502 Bad Gateway): error code: 502");
         assert!(!is_context_window_overflow_error(&other_err));
     }
 

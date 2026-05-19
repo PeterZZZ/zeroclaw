@@ -2303,9 +2303,16 @@ impl SecurityPolicy {
     /// fields lived on the risk profile.
     pub fn for_agent(config: &crate::schema::Config, agent_alias: &str) -> anyhow::Result<Self> {
         let risk_profile = config.risk_profile_for_agent(agent_alias).ok_or_else(|| {
-            anyhow::anyhow!(
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"agent_alias": agent_alias})),
+                "SecurityPolicy::for_agent: agent has no resolvable risk_profile"
+            );
+            anyhow::Error::msg(format!(
                 "agents.{agent_alias} has no resolvable risk_profile (load-time validation should have caught this)"
-            )
+            ))
         })?;
         let runtime_profile = config.runtime_profile_for_agent(agent_alias);
         // Per-agent workspace becomes the SecurityPolicy boundary so

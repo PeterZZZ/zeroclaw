@@ -348,7 +348,15 @@ impl AcpServer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
-            .ok_or_else(|| anyhow::anyhow!("ACP server writer already started"))?;
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    ERROR,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "ACP server writer already started"
+                );
+                anyhow::Error::msg("ACP server writer already started")
+            })?;
         tokio::spawn(writer_task(writer_rx));
 
         let stdin = tokio::io::stdin();
@@ -482,7 +490,7 @@ impl AcpServer {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to parse JSON-RPC request"
                 );
                 self.write_error(Value::Null, PARSE_ERROR, &format!("Parse error: {e}"))
@@ -1060,7 +1068,7 @@ impl AcpServer {
                     ERROR,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                         .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Failed to serialize JSON-RPC message"
                 );
             }
@@ -1079,7 +1087,7 @@ async fn writer_task(mut rx: mpsc::Receiver<String>) {
                 ERROR,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Failed to write to stdout"
             );
             continue;
@@ -1089,7 +1097,7 @@ async fn writer_task(mut rx: mpsc::Receiver<String>) {
                 ERROR,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Failed to write newline to stdout"
             );
             continue;
@@ -1099,7 +1107,7 @@ async fn writer_task(mut rx: mpsc::Receiver<String>) {
                 ERROR,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Failed to flush stdout"
             );
         }

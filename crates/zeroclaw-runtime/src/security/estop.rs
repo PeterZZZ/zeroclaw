@@ -80,13 +80,13 @@ impl EstopManager {
                         parsed
                     }
                     Err(error) => {
-                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"path": state_path.display().to_string(), "error": error.to_string()})), "Failed to parse estop state file; entering fail-closed mode: ");
+                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"path": state_path.display().to_string(), "error": format!("{}", error)})), "Failed to parse estop state file; entering fail-closed mode: ");
                         should_fail_closed = true;
                         EstopState::fail_closed()
                     }
                 },
                 Err(error) => {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"path": state_path.display().to_string(), "error": error.to_string()})), "Failed to read estop state file; entering fail-closed mode: ");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"path": state_path.display().to_string(), "error": format!("{}", error)})), "Failed to read estop state file; entering fail-closed mode: ");
                     should_fail_closed = true;
                     EstopState::fail_closed()
                 }

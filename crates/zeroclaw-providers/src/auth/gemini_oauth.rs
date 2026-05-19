@@ -374,7 +374,20 @@ pub async fn receive_loopback_code(expected_state: &str, timeout: Duration) -> R
 
                     Ok(code)
                 }
-                Ok(Err(e)) => Err(anyhow::anyhow!("Failed to accept connection: {e}")),
+                Ok(Err(e)) => {
+                    ::zeroclaw_log::record!(
+                        ERROR,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({
+                                "oauth_provider": "gemini",
+                                "phase": "callback_accept",
+                                "error": format!("{}", e),
+                            })),
+                        "gemini_oauth: failed to accept callback connection"
+                    );
+                    Err(anyhow::Error::msg(format!("Failed to accept connection: {e}")))
+                }
                 Err(_) => {
                     eprintln!("\nCallback timeout. Falling back to manual input.");
                     receive_code_from_stdin(expected_state).await
@@ -398,7 +411,14 @@ async fn receive_code_from_stdin(expected_state: &str) -> Result<String> {
         stdin.lock().read_line(&mut line).ok();
         let trimmed = line.trim().to_string();
         if trimmed.is_empty() {
-            return Err(anyhow::anyhow!("No input received"));
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"oauth_provider": "gemini"})),
+                "gemini_oauth: empty stdin input for OAuth code"
+            );
+            return Err(anyhow::Error::msg("No input received"));
         }
         parse_code_from_redirect(&trimmed, Some(&expected))
     })
@@ -432,8 +452,32 @@ fn parse_callback_request(request: &str) -> Result<(String, String)> {
         }
     }
 
-    let code = code.ok_or_else(|| anyhow::anyhow!("No 'code' parameter in callback"))?;
-    let state = state.ok_or_else(|| anyhow::anyhow!("No 'state' parameter in callback"))?;
+    let code = code.ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "oauth_provider": "gemini",
+                    "missing": "code",
+                })),
+            "gemini_oauth: callback missing code parameter"
+        );
+        anyhow::Error::msg("No 'code' parameter in callback")
+    })?;
+    let state = state.ok_or_else(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "oauth_provider": "gemini",
+                    "missing": "state",
+                })),
+            "gemini_oauth: callback missing state parameter"
+        );
+        anyhow::Error::msg("No 'state' parameter in callback")
+    })?;
 
     Ok((code, state))
 }

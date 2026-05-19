@@ -200,7 +200,7 @@ fn create_primary_observer(config: &ObservabilityConfig) -> Box<dyn Observer> {
                         ERROR,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "Failed to create OTel observer. Falling back to noop."
                     );
                     Box::new(NoopObserver)

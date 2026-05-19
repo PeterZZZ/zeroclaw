@@ -843,8 +843,15 @@ impl ModelProvider for AnthropicModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token)."
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "anthropic: no credentials configured"
+            );
+            anyhow::Error::msg(
+                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token).",
             )
         })?;
 
@@ -899,9 +906,15 @@ impl ModelProvider for AnthropicModelProvider {
 
         let chat_response: NativeChatResponse = response.json().await?;
         let parsed = Self::parse_native_response(chat_response);
-        parsed
-            .text
-            .ok_or_else(|| anyhow::anyhow!("No response from Anthropic"))
+        parsed.text.ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "anthropic: empty text in response"
+            );
+            anyhow::Error::msg("No response from Anthropic")
+        })
     }
 
     async fn chat(
@@ -911,8 +924,15 @@ impl ModelProvider for AnthropicModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token)."
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"missing": "credentials"})),
+                "anthropic: no credentials configured"
+            );
+            anyhow::Error::msg(
+                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token).",
             )
         })?;
 

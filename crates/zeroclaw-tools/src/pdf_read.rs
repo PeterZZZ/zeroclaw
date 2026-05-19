@@ -60,10 +60,16 @@ impl Tool for PdfReadTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
+        let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"param": "path"})),
+                "pdf_read: missing path parameter"
+            );
+            anyhow::Error::msg("Missing 'path' parameter")
+        })?;
 
         let max_chars = args
             .get("max_chars")

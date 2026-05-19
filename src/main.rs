@@ -74,8 +74,16 @@ fn json_value_to_setprop_string(
     path: &str,
 ) -> Result<String> {
     let kind = config_patch_prop_kind(config, path);
-    zeroclaw_config::typed_value::coerce_for_set_prop(value, kind)
-        .map_err(|e| anyhow::anyhow!("{}", e.message))
+    zeroclaw_config::typed_value::coerce_for_set_prop(value, kind).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"path": path, "error": e.message.clone()})),
+            "config patch coercion rejected JSON value"
+        );
+        anyhow::Error::msg(e.message)
+    })
 }
 
 fn config_patch_map_prop_error(err: anyhow::Error, path: &str, op_index: usize) -> ConfigApiError {
@@ -1502,10 +1510,20 @@ async fn main() -> Result<()> {
                         .models
                         .ensure(p, "default")
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
+                            ::zeroclaw_log::record!(
+                                WARN,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Reject
+                                )
+                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                .with_attrs(::serde_json::json!({"family": p})),
+                                "ask CLI refused: --model-provider names an unknown family"
+                            );
+                            anyhow::Error::msg(format!(
                                 "Unknown model_provider family: {p}. \
                              Run `zeroclaw onboard model_providers` to see configured options."
-                            )
+                            ))
                         })?;
                     if let Some(m) = &model {
                         entry.model = Some(m.clone());
@@ -1718,7 +1736,7 @@ async fn main() -> Result<()> {
                                     module_path!(),
                                     ::zeroclaw_log::Action::Note
                                 )
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                                 "   No existing gateway to shut down"
                             );
                         }
@@ -2556,7 +2574,7 @@ async fn main() -> Result<()> {
                             // uses; never hardcode a code at the call site.
                             let api_err =
                                 zeroclaw_config::api_error::ConfigApiError::from_validation(
-                                    anyhow::anyhow!("{e}"),
+                                    anyhow::Error::msg(e.to_string()),
                                 )
                                 .with_path(&path);
                             if json {
@@ -2579,9 +2597,16 @@ async fn main() -> Result<()> {
                 crate::config::migration::ensure_disk_at_current_version(&config.config_path)?;
                 if no_interactive {
                     let val = value.ok_or_else(|| {
-                        anyhow::anyhow!(
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                .with_attrs(::serde_json::json!({"path": path})),
+                            "config set --no-interactive refused: positional value missing"
+                        );
+                        anyhow::Error::msg(format!(
                             "Value required in --no-interactive mode. Usage: zeroclaw config set --no-interactive {path} <value>"
-                        )
+                        ))
                     })?;
                     config.set_prop_persistent(&path, &val)?;
                 } else if Config::prop_is_secret(&path) {
@@ -2874,9 +2899,25 @@ async fn main() -> Result<()> {
                     let result_entry: serde_json::Value = match op_name {
                         "add" | "replace" => {
                             let value = op.get("value").ok_or_else(|| {
-                                anyhow::anyhow!(
+                                ::zeroclaw_log::record!(
+                                    WARN,
+                                    ::zeroclaw_log::Event::new(
+                                        module_path!(),
+                                        ::zeroclaw_log::Action::Reject
+                                    )
+                                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                    .with_attrs(
+                                        ::serde_json::json!({
+                                            "op": op_name,
+                                            "op_index": idx,
+                                            "path": path,
+                                        })
+                                    ),
+                                    "config patch op rejected: missing `value` field"
+                                );
+                                anyhow::Error::msg(format!(
                                     "op[{idx}] `{op_name}` on `{path}`: missing `value` field"
-                                )
+                                ))
                             })?;
                             let value_str = json_value_to_setprop_string(value, &config, &path)?;
                             config
@@ -3433,11 +3474,31 @@ async fn shutdown_gateway(host: &str, port: u16, path_prefix: Option<&str>) -> R
         .await
     {
         Ok(response) if response.status().is_success() => Ok(()),
-        Ok(response) => Err(anyhow::anyhow!(
-            "Gateway responded with status: {}",
-            response.status()
-        )),
-        Err(e) => Err(anyhow::anyhow!("Failed to connect to gateway: {e}")),
+        Ok(response) => {
+            let status = response.status();
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"endpoint": url, "status": status.as_u16()})),
+                "gateway admin shutdown returned non-success status"
+            );
+            Err(anyhow::Error::msg(format!(
+                "Gateway responded with status: {status}"
+            )))
+        }
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"endpoint": url, "error": format!("{}", e)})),
+                "gateway admin shutdown: connect failed"
+            );
+            Err(anyhow::Error::msg(format!(
+                "Failed to connect to gateway: {e}"
+            )))
+        }
     }
 }
 
@@ -3470,19 +3531,39 @@ async fn fetch_paircode(
             .await
     };
 
-    let response = response.map_err(|e| anyhow::anyhow!("Failed to connect to gateway: {e}"))?;
+    let response = response.map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+            "gateway paircode fetch: connect failed"
+        );
+        anyhow::Error::msg(format!("Failed to connect to gateway: {e}"))
+    })?;
 
     if !response.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "Gateway responded with status: {}",
-            response.status()
-        ));
+        let status = response.status();
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"status": status.as_u16()})),
+            "gateway paircode fetch returned non-success status"
+        );
+        anyhow::bail!("Gateway responded with status: {status}");
     }
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse response: {e}"))?;
+    let json: serde_json::Value = response.json().await.map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+            "gateway paircode response: JSON parse failed"
+        );
+        anyhow::Error::msg(format!("Failed to parse response: {e}"))
+    })?;
 
     if json.get("success").and_then(|v| v.as_bool()) != Some(true) {
         return Ok(None);

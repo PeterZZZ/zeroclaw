@@ -127,9 +127,15 @@ impl PostgresMemory {
             })
             .context("failed to spawn PostgreSQL initializer thread")?;
 
-        init_handle
-            .join()
-            .map_err(|_| anyhow::anyhow!("PostgreSQL initializer thread panicked"))?
+        init_handle.join().map_err(|_| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                "PostgreSQL initializer thread panicked"
+            );
+            anyhow::Error::msg("PostgreSQL initializer thread panicked")
+        })?
     }
 
     fn init_schema(client: &mut Client, schema_ident: &str, qualified_table: &str) -> Result<()> {
@@ -300,8 +306,15 @@ where
         })
         .context("failed to spawn PostgreSQL operation thread")?;
 
-    rx.await
-        .map_err(|_| anyhow::anyhow!("PostgreSQL operation thread terminated unexpectedly"))?
+    rx.await.map_err(|_| {
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+            "PostgreSQL operation thread terminated unexpectedly"
+        );
+        anyhow::Error::msg("PostgreSQL operation thread terminated unexpectedly")
+    })?
 }
 
 fn validate_identifier(value: &str, field_name: &str) -> Result<()> {

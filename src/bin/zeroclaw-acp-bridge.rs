@@ -175,9 +175,15 @@ fn config_dir_from_args(args: impl IntoIterator<Item = String>) -> Result<Option
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--config-dir" {
-            let dir = args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("--config-dir requires a path value"))?;
+            let dir = args.next().ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "acp-bridge args rejected: --config-dir missing value"
+                );
+                anyhow::Error::msg("--config-dir requires a path value")
+            })?;
             return Ok(Some(dir));
         }
         if let Some(dir) = arg.strip_prefix("--config-dir=") {
@@ -191,9 +197,15 @@ fn pair_code_from_args(args: impl IntoIterator<Item = String>) -> Result<Option<
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--pair-code" {
-            let code = args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("--pair-code requires a code value"))?;
+            let code = args.next().ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
+                    "acp-bridge args rejected: --pair-code missing value"
+                );
+                anyhow::Error::msg("--pair-code requires a code value")
+            })?;
             return Ok(Some(code));
         }
         if let Some(code) = arg.strip_prefix("--pair-code=") {

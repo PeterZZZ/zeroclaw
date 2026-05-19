@@ -92,7 +92,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     WARN,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "ACP WebSocket received non-UTF-8 binary frame"
                 ),
             },
@@ -113,7 +113,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         WARN,
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "ACP WebSocket receive error"
                     );
                 }
@@ -129,7 +129,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
             "ACP WebSocket server task panicked"
         );
     }

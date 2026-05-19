@@ -104,21 +104,51 @@ impl Tool for SendMessageToPeerTool {
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Missing or empty 'channel' parameter"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "channel"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing or empty 'channel' parameter")
+            })?
             .to_string();
         let target = args
             .get("target")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Missing or empty 'target' parameter"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "target"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing or empty 'target' parameter")
+            })?
             .to_string();
         let message = args
             .get("message")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Missing or empty 'message' parameter"))?
+            .ok_or_else(|| {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"param": "message"})),
+                    "tool argument validation failed"
+                );
+
+                anyhow::Error::msg("Missing or empty 'message' parameter")
+            })?
             .to_string();
 
         // Peer-groups bind to channel TYPE, not <type>.<alias>.
@@ -200,7 +230,7 @@ impl Tool for SendMessageToPeerTool {
                 if let Err(e) =
                     crate::agent::loop_::process_message(cfg, &recipient_alias, &body, None).await
                 {
-                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"sender": sender, "recipient": recipient_alias, "error": e.to_string()})), "peer-message in-process delivery failed");
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"sender": sender, "recipient": recipient_alias, "error": format!("{}", e)})), "peer-message in-process delivery failed");
                 }
             });
 

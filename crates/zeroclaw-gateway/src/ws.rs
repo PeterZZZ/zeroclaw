@@ -390,7 +390,7 @@ async fn handle_socket(
                     ERROR,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                         .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                     "Agent initialization failed"
                 );
                 let err = serde_json::json!({
@@ -654,8 +654,22 @@ fn resolve_session_cwd(
     let cwd = requested_cwd
         .map(PathBuf::from)
         .unwrap_or_else(|| default_workspace.to_path_buf());
-    std::fs::canonicalize(&cwd)
-        .map_err(|e| anyhow::anyhow!("cwd is not a usable directory ({}): {e}", cwd.display()))
+    std::fs::canonicalize(&cwd).map_err(|e| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "error": format!("{}", e),
+                })),
+            "ws session cwd rejected"
+        );
+        anyhow::Error::msg(format!(
+            "cwd is not a usable directory ({}): {e}",
+            cwd.display()
+        ))
+    })
 }
 
 fn needs_onboarding_ws_error(
@@ -1031,7 +1045,7 @@ async fn process_chat_message(
                                 module_path!(),
                                 ::zeroclaw_log::Action::Note
                             )
-                            .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                             "WS memory consolidation skipped"
                         );
                     }
@@ -1115,7 +1129,7 @@ async fn process_chat_message(
                 ERROR,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                 "Agent turn failed"
             );
             let sanitized = zeroclaw_providers::sanitize_api_error(&e.to_string());
@@ -1242,7 +1256,7 @@ fn record_turn_cost(
     );
     let cost_usd = usage.cost_usd;
     if let Err(error) = tracker.record_usage(usage) {
-        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"provider": provider_name, "model": model, "error": error.to_string()})), "Failed to record gateway turn cost");
+        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"provider": provider_name, "model": model, "error": format!("{}", error)})), "Failed to record gateway turn cost");
     }
     Some(cost_usd)
 }
