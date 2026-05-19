@@ -139,13 +139,15 @@ impl PostgresMemory {
 
             CREATE TABLE IF NOT EXISTS {qualified_table} (
                 id TEXT PRIMARY KEY,
-                key TEXT UNIQUE NOT NULL,
+                key TEXT NOT NULL,
                 content TEXT NOT NULL,
                 category TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL,
                 session_id TEXT
             );
+            -- Composite (agent_id, key) uniqueness lands in the V3 migration
+            -- once the `agent_id` column is added and backfilled.
 
             CREATE INDEX IF NOT EXISTS idx_memories_category ON {qualified_table}(category);
             CREATE INDEX IF NOT EXISTS idx_memories_session_id ON {qualified_table}(session_id);
@@ -443,6 +445,31 @@ impl Memory for PostgresMemory {
         .await
     }
 
+    async fn get_for_agent(&self, key: &str, agent_id: &str) -> Result<Option<MemoryEntry>> {
+        let client = self.client.clone();
+        let qualified_table = self.qualified_table.clone();
+        let qualified_agents = self.qualified_agents.clone();
+        let key = key.to_string();
+        let agent_id = agent_id.to_string();
+
+        run_on_os_thread(move || -> Result<Option<MemoryEntry>> {
+            let mut client = client.lock();
+            let stmt = format!(
+                "
+                SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, a.alias AS agent_alias, m.agent_id
+                FROM {qualified_table} m
+                LEFT JOIN {qualified_agents} a ON a.id = m.agent_id
+                WHERE m.key = $1 AND m.agent_id = $2
+                LIMIT 1
+                "
+            );
+
+            let row = client.query_opt(&stmt, &[&key, &agent_id])?;
+            row.as_ref().map(Self::row_to_entry).transpose()
+        })
+        .await
+    }
+
     async fn list(
         &self,
         category: Option<&MemoryCategory>,
@@ -486,6 +513,21 @@ impl Memory for PostgresMemory {
             let mut client = client.lock();
             let stmt = format!("DELETE FROM {qualified_table} WHERE key = $1");
             let deleted = client.execute(&stmt, &[&key])?;
+            Ok(deleted > 0)
+        })
+        .await
+    }
+
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> Result<bool> {
+        let client = self.client.clone();
+        let qualified_table = self.qualified_table.clone();
+        let key = key.to_string();
+        let agent_id = agent_id.to_string();
+
+        run_on_os_thread(move || -> Result<bool> {
+            let mut client = client.lock();
+            let stmt = format!("DELETE FROM {qualified_table} WHERE key = $1 AND agent_id = $2");
+            let deleted = client.execute(&stmt, &[&key, &agent_id])?;
             Ok(deleted > 0)
         })
         .await
@@ -547,12 +589,11 @@ impl Memory for PostgresMemory {
                 VALUES
                     ($1, $2, $3, $4, $5, $6, $7,
                      COALESCE($8, (SELECT id FROM {qualified_agents} WHERE alias = 'default' LIMIT 1)))
-                ON CONFLICT (key) DO UPDATE SET
+                ON CONFLICT (agent_id, key) DO UPDATE SET
                     content = EXCLUDED.content,
                     category = EXCLUDED.category,
                     updated_at = EXCLUDED.updated_at,
-                    session_id = EXCLUDED.session_id,
-                    agent_id = EXCLUDED.agent_id
+                    session_id = EXCLUDED.session_id
                 "
             );
 

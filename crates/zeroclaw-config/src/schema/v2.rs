@@ -3242,7 +3242,7 @@ pub fn migrate_sqlite_memory_to_v3(db_path: &Path, conn: &Connection) -> MigResu
 
              CREATE TABLE memories_new (
                 id            TEXT PRIMARY KEY,
-                key           TEXT NOT NULL UNIQUE,
+                key           TEXT NOT NULL,
                 content       TEXT NOT NULL,
                 category      TEXT NOT NULL DEFAULT 'core',
                 embedding     BLOB,
@@ -3252,7 +3252,8 @@ pub fn migrate_sqlite_memory_to_v3(db_path: &Path, conn: &Connection) -> MigResu
                 namespace     TEXT DEFAULT 'default',
                 importance    REAL DEFAULT 0.5,
                 superseded_by TEXT,
-                agent_id      TEXT NOT NULL REFERENCES agents(id)
+                agent_id      TEXT NOT NULL REFERENCES agents(id),
+                UNIQUE (agent_id, key)
              );
 
              INSERT INTO memories_new (
@@ -3517,6 +3518,19 @@ pub fn migrate_postgres_memory_to_v3(
             END IF;
         END$$;
         ALTER TABLE {qualified_table} VALIDATE CONSTRAINT memories_agent_id_fk;
+        -- Swap the legacy key-only uniqueness for composite (agent_id, key)
+        -- so two agents may hold rows under the same caller-chosen key.
+        ALTER TABLE {qualified_table} DROP CONSTRAINT IF EXISTS memories_key_key;
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'memories_agent_key_uniq'
+            ) THEN
+                ALTER TABLE {qualified_table}
+                    ADD CONSTRAINT memories_agent_key_uniq UNIQUE (agent_id, key);
+            END IF;
+        END$$;
         "
     ))?;
 

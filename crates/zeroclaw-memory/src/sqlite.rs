@@ -252,7 +252,10 @@ impl SqliteMemory {
 
         execute_batch_retry(
             conn,
-            "-- Core memories table
+            "-- Core memories table. This is an intermediate shape; the V3
+            -- migration in `zeroclaw_config::schema::v2::migrate_sqlite_memory_to_v3`
+            -- rebuilds it with the `agent_id` column and a composite
+            -- `UNIQUE (agent_id, key)` constraint immediately after init.
             CREATE TABLE IF NOT EXISTS memories (
                 id          TEXT PRIMARY KEY,
                 key         TEXT NOT NULL UNIQUE,
@@ -1023,6 +1026,48 @@ impl Memory for SqliteMemory {
         .await?
     }
 
+    async fn get_for_agent(
+        &self,
+        key: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<Option<MemoryEntry>> {
+        let conn = self.conn.clone();
+        let key = key.to_string();
+        let agent_id = agent_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<MemoryEntry>> {
+            let conn = conn.lock();
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, a.alias, m.agent_id \
+                 FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                 WHERE m.key = ?1 AND m.agent_id = ?2",
+            )?;
+
+            let mut rows = stmt.query_map(params![key, agent_id], |row| {
+                Ok(MemoryEntry {
+                    id: row.get(0)?,
+                    key: row.get(1)?,
+                    content: row.get(2)?,
+                    category: Self::str_to_category(&row.get::<_, String>(3)?),
+                    timestamp: row.get(4)?,
+                    session_id: row.get(5)?,
+                    score: None,
+                    namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
+                    importance: row.get(7)?,
+                    superseded_by: row.get(8)?,
+                    agent_alias: row.get(9)?,
+                    agent_id: row.get(10)?,
+                })
+            })?;
+
+            match rows.next() {
+                Some(Ok(entry)) => Ok(Some(entry)),
+                _ => Ok(None),
+            }
+        })
+        .await?
+    }
+
     async fn list(
         &self,
         category: Option<&MemoryCategory>,
@@ -1101,6 +1146,22 @@ impl Memory for SqliteMemory {
         tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
             let conn = conn.lock();
             let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
+            Ok(affected > 0)
+        })
+        .await?
+    }
+
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
+        let conn = self.conn.clone();
+        let key = key.to_string();
+        let agent_id = agent_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE key = ?1 AND agent_id = ?2",
+                params![key, agent_id],
+            )?;
             Ok(affected > 0)
         })
         .await?
@@ -1373,21 +1434,22 @@ impl Memory for SqliteMemory {
             let cat = Self::category_to_str(&category);
             let id = Uuid::new_v4().to_string();
 
-            // `agent_id = COALESCE($11, default-agent-uuid)` so callers
-            // without an agent context still satisfy the NOT NULL FK by
-            // attributing to the synthesized default agent.
+            // Uniqueness is per (agent_id, key): two agents may hold rows
+            // with the same key without clobbering each other. `agent_id`
+            // falls back to the synthesized default agent when the caller
+            // didn't supply one (callers going through AgentScopedMemory
+            // always do).
             conn.execute(
                 "INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at, session_id, namespace, importance, agent_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, COALESCE(?11, (SELECT id FROM agents WHERE alias = 'default' LIMIT 1)))
-                 ON CONFLICT(key) DO UPDATE SET
+                 ON CONFLICT(agent_id, key) DO UPDATE SET
                     content = excluded.content,
                     category = excluded.category,
                     embedding = excluded.embedding,
                     updated_at = excluded.updated_at,
                     session_id = excluded.session_id,
                     namespace = excluded.namespace,
-                    importance = excluded.importance,
-                    agent_id = excluded.agent_id",
+                    importance = excluded.importance",
                 params![id, key, content, cat, embedding_bytes, now, now, sid, ns, imp, aid],
             )?;
             Ok(())

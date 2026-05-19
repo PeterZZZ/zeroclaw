@@ -153,7 +153,7 @@ impl SchemaCleanr {
     pub fn validate(schema: &Value) -> anyhow::Result<()> {
         let obj = schema
             .as_object()
-            .ok_or_else(|| anyhow::anyhow!("Schema must be an object"))?;
+            .ok_or_else(|| anyhow::Error::msg("Schema must be an object"))?;
 
         // Must have 'type' field
         if !obj.contains_key("type") {

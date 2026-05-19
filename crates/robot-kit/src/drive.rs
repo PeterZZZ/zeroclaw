@@ -243,7 +243,7 @@ impl Tool for DriveTool {
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let action = args["action"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
+            .ok_or_else(|| anyhow::Error::msg("Missing 'action' parameter"))?;
 
         // Safety: check max drive duration
         {

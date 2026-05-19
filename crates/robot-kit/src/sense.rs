@@ -272,7 +272,7 @@ impl Tool for SenseTool {
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let action = args["action"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
+            .ok_or_else(|| anyhow::Error::msg("Missing 'action' parameter"))?;
 
         match action {
             "scan" => {

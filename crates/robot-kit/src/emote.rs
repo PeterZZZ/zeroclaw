@@ -270,10 +270,10 @@ impl Tool for EmoteTool {
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let expression_str = args["expression"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'expression' parameter"))?;
+            .ok_or_else(|| anyhow::Error::msg("Missing 'expression' parameter"))?;
 
         let expression = Expression::from_str(expression_str)
-            .ok_or_else(|| anyhow::anyhow!("Unknown expression: {}", expression_str))?;
+            .ok_or_else(|| anyhow::Error::msg(format!("Unknown expression: {}", expression_str)))?;
 
         let play_sound = args["sound"].as_bool().unwrap_or(true);
         let duration = args["duration"].as_u64().unwrap_or(3);

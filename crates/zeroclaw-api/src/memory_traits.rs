@@ -173,8 +173,31 @@ pub trait Memory: Send + Sync + crate::attribution::Attributable {
         until: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>>;
 
-    /// Get a specific memory by key
+    /// Get a specific memory by key.
+    ///
+    /// After composite uniqueness landed, multiple rows may share a `key`
+    /// (one per agent). This method returns *some* matching row without an
+    /// agent filter; callers that need an agent-scoped lookup use
+    /// [`get_for_agent`](Self::get_for_agent).
     async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>>;
+
+    /// Get the memory row matching `(key, agent_id)`. Siblings of the same
+    /// key under other agents are invisible.
+    ///
+    /// The default implementation composes [`get`](Self::get) with an
+    /// `agent_id` filter and is only correct for backends whose storage
+    /// layout cannot hold more than one row per `key` (markdown's
+    /// per-agent dir scheme, the `none` stub). Backends that can hold
+    /// multiple rows per `key` (SQL with composite unique, Qdrant)
+    /// override this with a native composite lookup.
+    async fn get_for_agent(
+        &self,
+        key: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<Option<MemoryEntry>> {
+        let hit = self.get(key).await?;
+        Ok(hit.filter(|e| e.agent_id.as_deref() == Some(agent_id)))
+    }
 
     /// List all memory keys, optionally filtered by category and/or session
     async fn list(
@@ -183,8 +206,26 @@ pub trait Memory: Send + Sync + crate::attribution::Attributable {
         session_id: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>>;
 
-    /// Remove a memory by key
+    /// Remove a memory by key. Deletes every row matching `key`, regardless
+    /// of agent attribution. Agent-scoped callers (the `AgentScopedMemory`
+    /// wrapper) use [`forget_for_agent`](Self::forget_for_agent) instead.
     async fn forget(&self, key: &str) -> anyhow::Result<bool>;
+
+    /// Remove the row matching `(key, agent_id)`. Siblings of the same key
+    /// under other agents are untouched. Returns `true` iff a row was
+    /// removed.
+    ///
+    /// The default implementation composes [`get_for_agent`](Self::get_for_agent)
+    /// with [`forget`](Self::forget) and is only correct for backends whose
+    /// storage layout cannot hold more than one row per `key`. Backends
+    /// with multi-row-per-key support override this with a native
+    /// composite delete.
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
+        let Some(_entry) = self.get_for_agent(key, agent_id).await? else {
+            return Ok(false);
+        };
+        self.forget(key).await
+    }
 
     /// Remove all memories in a namespace (category).
     /// Returns the number of deleted entries.

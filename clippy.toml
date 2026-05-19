@@ -33,6 +33,11 @@ disallowed-macros = [
     { path = "log::warn",      reason = "use ::zeroclaw_log::record!(WARN, ...) instead" },
     { path = "log::error",     reason = "use ::zeroclaw_log::record!(ERROR, ...) instead" },
     { path = "std::dbg",       reason = "use ::zeroclaw_log::record!(DEBUG, ...) instead; dbg! bypasses the log pipeline" },
+    # `anyhow::anyhow!` will be added here once the workspace-wide migration
+    # to `::zeroclaw_log::record!` + `anyhow::bail!` (or `anyhow::Error::msg`)
+    # is complete. Adding it before the migration would put existing tech
+    # debt in front of CI; the migration is tracked as the immediate
+    # follow-up to the Audacity memory-attribution review fix.
 ]
 # `std::println` / `std::eprintln` are intentionally NOT in this list.
 # Build scripts emit cargo directives (`cargo:rerun-if-changed`) via

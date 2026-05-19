@@ -400,6 +400,97 @@ impl QdrantMemory {
             other => MemoryCategory::Custom(other.to_string()),
         }
     }
+
+    /// Build a Qdrant `must` payload filter from `(field, value)` pairs.
+    fn must_filter(fields: &[(&str, &str)]) -> serde_json::Value {
+        let must: Vec<serde_json::Value> = fields
+            .iter()
+            .map(|(field, value)| serde_json::json!({"key": field, "match": {"value": value}}))
+            .collect();
+        serde_json::json!({"must": must})
+    }
+
+    /// Scroll for the first point matching every `(field, value)` filter
+    /// pair, decoded into a `MemoryEntry`. Returns `None` when nothing
+    /// matches.
+    async fn scroll_first_matching(&self, fields: &[(&str, &str)]) -> Result<Option<MemoryEntry>> {
+        self.ensure_initialized().await?;
+
+        let scroll_body = serde_json::json!({
+            "filter": Self::must_filter(fields),
+            "limit": 1,
+            "with_payload": true,
+        });
+
+        let resp = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/collections/{}/points/scroll", self.collection),
+            )
+            .json(&scroll_body)
+            .send()
+            .await
+            .context("failed to scroll Qdrant")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Qdrant scroll failed ({status}): {text}");
+        }
+
+        let result: QdrantScrollResult = resp.json().await?;
+        let entry = result.result.points.into_iter().next().and_then(|point| {
+            let payload = point.payload?;
+            let id = match &point.id {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => return None,
+            };
+            Some(MemoryEntry {
+                id,
+                key: payload.key,
+                content: payload.content,
+                category: Self::parse_category(&payload.category),
+                timestamp: payload.timestamp,
+                session_id: payload.session_id,
+                score: None,
+                namespace: "default".into(),
+                importance: None,
+                superseded_by: None,
+                agent_alias: payload.agent_id.clone(),
+                agent_id: payload.agent_id,
+            })
+        });
+        Ok(entry)
+    }
+
+    /// Delete every point matching every `(field, value)` filter pair.
+    /// Qdrant's delete response does not expose a per-call match count,
+    /// so this returns `true` on success regardless of how many points
+    /// were touched.
+    async fn delete_points_matching(&self, fields: &[(&str, &str)]) -> Result<bool> {
+        self.ensure_initialized().await?;
+
+        let delete_body = serde_json::json!({"filter": Self::must_filter(fields)});
+        let resp = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/collections/{}/points/delete", self.collection),
+            )
+            .query(&[("wait", "true")])
+            .json(&delete_body)
+            .send()
+            .await
+            .context("failed to delete from Qdrant")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Qdrant delete failed ({status}): {text}");
+        }
+
+        Ok(true)
+    }
 }
 
 /// Qdrant point payload structure
@@ -572,63 +663,12 @@ impl Memory for QdrantMemory {
     }
 
     async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
-        self.ensure_initialized().await?;
+        self.scroll_first_matching(&[("key", key)]).await
+    }
 
-        // Scroll with filter for exact key match
-        let scroll_body = serde_json::json!({
-            "filter": {
-                "must": [{
-                    "key": "key",
-                    "match": { "value": key }
-                }]
-            },
-            "limit": 1,
-            "with_payload": true
-        });
-
-        let resp = self
-            .request(
-                reqwest::Method::POST,
-                &format!("/collections/{}/points/scroll", self.collection),
-            )
-            .json(&scroll_body)
-            .send()
+    async fn get_for_agent(&self, key: &str, agent_id: &str) -> Result<Option<MemoryEntry>> {
+        self.scroll_first_matching(&[("key", key), ("agent_id", agent_id)])
             .await
-            .context("failed to scroll Qdrant")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant scroll failed ({status}): {text}");
-        }
-
-        let result: QdrantScrollResult = resp.json().await?;
-
-        let entry = result.result.points.into_iter().next().and_then(|point| {
-            let payload = point.payload?;
-            let id = match &point.id {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                _ => return None,
-            };
-
-            Some(MemoryEntry {
-                id,
-                key: payload.key,
-                content: payload.content,
-                category: Self::parse_category(&payload.category),
-                timestamp: payload.timestamp,
-                session_id: payload.session_id,
-                score: None,
-                namespace: "default".into(),
-                importance: None,
-                superseded_by: None,
-                agent_alias: payload.agent_id.clone(),
-                agent_id: payload.agent_id,
-            })
-        });
-
-        Ok(entry)
     }
 
     async fn list(
@@ -715,37 +755,12 @@ impl Memory for QdrantMemory {
     }
 
     async fn forget(&self, key: &str) -> Result<bool> {
-        self.ensure_initialized().await?;
+        self.delete_points_matching(&[("key", key)]).await
+    }
 
-        // Delete points matching the key
-        let delete_body = serde_json::json!({
-            "filter": {
-                "must": [{
-                    "key": "key",
-                    "match": { "value": key }
-                }]
-            }
-        });
-
-        let resp = self
-            .request(
-                reqwest::Method::POST,
-                &format!("/collections/{}/points/delete", self.collection),
-            )
-            .query(&[("wait", "true")])
-            .json(&delete_body)
-            .send()
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> Result<bool> {
+        self.delete_points_matching(&[("key", key), ("agent_id", agent_id)])
             .await
-            .context("failed to delete from Qdrant")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant delete failed ({status}): {text}");
-        }
-
-        // Qdrant doesn't return deleted count easily, assume success
-        Ok(true)
     }
 
     async fn count(&self) -> Result<usize> {
@@ -811,16 +826,21 @@ impl Memory for QdrantMemory {
         // never sees a payload-less point as globally visible. Qdrant
         // uses alias verbatim as agent_id (no UUID indirection at the
         // storage layer; see `Memory::ensure_agent_uuid` default impl).
+        let resolved_agent_id = agent_id.unwrap_or("default").to_string();
         let payload = MemoryPayload {
             key: key.to_string(),
             content: content.to_string(),
             category: Self::category_to_str(&category),
             timestamp,
             session_id: session_id.map(str::to_string),
-            agent_id: Some(agent_id.unwrap_or("default").to_string()),
+            agent_id: Some(resolved_agent_id.clone()),
         };
 
-        let _ = self.forget(key).await;
+        // Pre-upsert cleanup must scope to the writing agent so sibling
+        // points under the same key for other agents survive.
+        let _ = self
+            .delete_points_matching(&[("key", key), ("agent_id", resolved_agent_id.as_str())])
+            .await;
 
         let upsert_body = serde_json::json!({
             "points": [{
