@@ -632,6 +632,21 @@ function ConfigAliasHelpBox() {
   );
 }
 
+function suggestConfigAlias(aliases: string[]): string {
+  const used = new Set(aliases);
+  if (!used.has('default')) return 'default';
+  for (let i = 2; i < 100; i += 1) {
+    const candidate = `default_${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return 'default_100';
+}
+
+function validateConfigAlias(alias: string): string | null {
+  if (/^(?!_)(?!.*__)(?!.*_$)[a-z0-9_]{1,63}$/.test(alias)) return null;
+  return 'Alias must use lowercase letters, digits, or single underscores only; no hyphens, dots, spaces, leading/trailing underscores, or double underscores.';
+}
+
 function AliasListView({
   sectionKey,
   typeKey,
@@ -677,8 +692,13 @@ function AliasListView({
   }, [mapPath]);
 
   const submit = async () => {
-    const trimmed = newAlias.trim() || (aliases.length === 0 ? 'default' : `${aliases[0]}-2`);
+    const trimmed = newAlias.trim() || suggestConfigAlias(aliases);
     setAliasError(null);
+    const validationError = validateConfigAlias(trimmed);
+    if (validationError) {
+      setAliasError(validationError);
+      return;
+    }
     try {
       await onSelectAlias(trimmed);
     } catch (e) {
@@ -758,7 +778,7 @@ function AliasListView({
               <input
                 type="text"
                 className="input-electric flex-1 px-3 py-1.5 text-sm"
-                placeholder={aliases.length === 0 ? 'default' : `${aliases[0]}-2`}
+                placeholder={suggestConfigAlias(aliases)}
                 value={newAlias}
                 onChange={(e) => { setNewAlias(e.target.value); setAliasError(null); }}
                 onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
