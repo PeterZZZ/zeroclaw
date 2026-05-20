@@ -1213,7 +1213,9 @@ impl AcpServer {
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"session_id": session_id, "error": e.to_string()})),
+                    .with_attrs(
+                        ::serde_json::json!({"session_id": session_id, "error": e.to_string()})
+                    ),
                 "Failed to persist turn; session continues in memory"
             );
         }
