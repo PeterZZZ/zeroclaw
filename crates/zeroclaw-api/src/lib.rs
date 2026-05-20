@@ -24,6 +24,7 @@ pub mod provider;
 pub mod runtime_traits;
 pub mod schema;
 pub mod tool;
+pub mod transcript;
 pub mod vad;
 
 tokio::task_local! {

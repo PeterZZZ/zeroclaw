@@ -2493,6 +2493,31 @@ pub async fn run(
         }
     });
 
+    // CLI HookRunner construction. Mirrors the channels-orchestrator pattern
+    // at zeroclaw-channels/src/orchestrator/mod.rs:5949-5973 (Phase 1
+    // b1f7c459) so the CLI /new arm at loop_.rs:2748-2793 can fire
+    // session-end hooks. Gated on config.hooks.enabled — None means
+    // pre-Phase-10 CLI behavior (no hook surface) is preserved.
+    let hooks: Option<Arc<crate::hooks::HookRunner>> = if config.hooks.enabled {
+        let mut runner = crate::hooks::HookRunner::new();
+        if config.hooks.builtin.command_logger {
+            runner.register(Box::new(crate::hooks::builtin::CommandLoggerHook::new()));
+        }
+        if config.hooks.builtin.webhook_audit.enabled {
+            runner.register(Box::new(crate::hooks::builtin::WebhookAuditHook::new(
+                config.hooks.builtin.webhook_audit.clone(),
+            )));
+        }
+        if config.hooks.builtin.external_session_end.enabled {
+            runner.register(Box::new(crate::hooks::builtin::ExternalProcessHook::new(
+                config.hooks.builtin.external_session_end.clone(),
+            )));
+        }
+        Some(Arc::new(runner))
+    } else {
+        None
+    };
+
     // ── Cost tracking context (scoped for CLI / cron / web agents) ──
     let cost_tracking_context: Option<ToolLoopCostTrackingContext> =
         crate::cost::CostTracker::get_or_init_global(config.cost.clone(), &config.workspace_dir)
@@ -2767,6 +2792,36 @@ pub async fn run(
                     if !matches!(confirm.trim().to_lowercase().as_str(), "y" | "yes") {
                         println!("Cancelled.\n");
                         continue;
+                    }
+
+                    // Phase 11: fire the session-end hook with the about-to-be-
+                    // cleared transcript BEFORE history.clear(). Mirrors the
+                    // channels-orchestrator path at
+                    // crates/zeroclaw-channels/src/orchestrator/mod.rs:1141-1148.
+                    // Synthesized sender_key="cli" and channel="cli" so the
+                    // session-end JSONL the MemSkills hook writes can be
+                    // distinguished from chat-channel sessions. No-op when
+                    // hooks are unconfigured or the about-to-clear history
+                    // is empty (would carry no transcript signal).
+                    if let Some(hooks) = hooks.as_ref() {
+                        if !history.is_empty() {
+                            let snapshot: Vec<
+                                zeroclaw_api::provider::ConversationMessage,
+                            > = history
+                                .iter()
+                                .cloned()
+                                .map(
+                                    zeroclaw_api::provider::ConversationMessage::Chat,
+                                )
+                                .collect();
+                            let cwd =
+                                config.workspace_dir.to_string_lossy().to_string();
+                            hooks
+                                .fire_session_end_with_history(
+                                    "cli", "cli", &snapshot, &cwd,
+                                )
+                                .await;
+                        }
                     }
 
                     history.clear();
