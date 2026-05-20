@@ -47,7 +47,7 @@ use axum::{
     extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
 };
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -1279,7 +1279,9 @@ pub async fn run_gateway(
         .route("/api/logs", get(api_logs::handle_api_logs))
         .route(
             "/api/config",
-            patch(api_config::handle_patch).options(api_config::handle_options_config),
+            get(api_config::handle_config_get)
+                .patch(api_config::handle_patch)
+                .options(api_config::handle_options_config),
         )
         .route(
             "/api/config/prop",

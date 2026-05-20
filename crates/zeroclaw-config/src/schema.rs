@@ -21388,6 +21388,53 @@ allowed_users = []
         }
     }
 
+    #[test]
+    async fn onboard_state_prop_path_uses_top_level_kebab_field_name() {
+        let mut config = Config::default();
+
+        config
+            .set_prop("onboard-state.completed-sections", "agents")
+            .expect("onboard state marker path should be writable");
+        assert_eq!(
+            config
+                .get_prop("onboard-state.completed-sections")
+                .expect("onboard state marker path should be readable"),
+            "[\"agents\"]"
+        );
+    }
+
+    #[test]
+    async fn per_agent_nested_prop_fields_use_agent_alias_paths() {
+        let mut config = Config::default();
+        config
+            .agents
+            .insert("bob".to_string(), AliasedAgentConfig::default());
+
+        let fields = config.prop_fields();
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.name == "agents.bob.history-pruning.enabled"),
+            "agent nested history-pruning fields should be emitted under the agent alias"
+        );
+        assert!(
+            !fields
+                .iter()
+                .any(|field| field.name.starts_with("agents.bob.agent.history-pruning")),
+            "agent nested fields must not leak the legacy global agent prefix"
+        );
+
+        config
+            .set_prop("agents.bob.history-pruning.enabled", "true")
+            .expect("set_prop should accept the emitted per-agent nested path");
+        assert_eq!(
+            config
+                .get_prop("agents.bob.history-pruning.enabled")
+                .expect("get_prop should accept the emitted per-agent nested path"),
+            "true"
+        );
+    }
+
     /// Audit gate: every non-secret scalar prop round-trips through
     /// `set_prop(get_prop(p))`. The CLI's `zeroclaw config set` and the
     /// dashboard's PATCH op both rely on this being true so an operator

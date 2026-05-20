@@ -158,6 +158,11 @@ pub struct SectionInfo {
     /// Whether the user has marked the section completed in
     /// `onboard_state.completed_sections`.
     pub completed: bool,
+    /// Whether the section currently has enough usable config for the
+    /// first-run path. This is stricter than `completed`: visiting a section
+    /// can mark it completed, but the sidebar checkmark should not imply a
+    /// provider or agent is runnable when required fields are still missing.
+    pub ready: bool,
     /// Display group for the dashboard sidebar (`Foundation`, `Agent`,
     /// `Tools`, etc.). Curated server-side until v3 / #5947 lands a schema
     /// attribute that encodes the grouping declaratively.
@@ -195,27 +200,139 @@ pub struct OnboardStatusResponse {
     /// for logs / debugging. Stable: `fresh_install` / `incomplete_agent`
     /// / `has_dispatchable_agent`.
     pub reason: &'static str,
+    /// `true` when the operator has started entering setup state even if no
+    /// agent can reply yet. The dashboard uses this to say "Continue
+    /// onboarding" instead of pretending the flow is fresh.
+    pub has_partial_state: bool,
+    /// Human-readable readiness failures. When onboarding cannot finish, the
+    /// UI shows these directly so the operator knows exactly what is missing.
+    pub missing: Vec<String>,
 }
 
 /// Pure derivation of the onboard-status response from a config snapshot.
-/// `needs_onboarding` is `false` iff at least one `[agents.<alias>]` block
-/// is dispatchable (`AliasedAgentConfig::is_dispatchable`). A provider
-/// without a bound agent is not a completion signal: `state.model.is_empty()`
-/// still bounces chat dispatch with 503 in that state.
+/// `needs_onboarding` is `false` iff at least one enabled `[agents.<alias>]`
+/// block has a resolved model provider with a selected model plus resolved
+/// risk/runtime profile refs. A provider without a bound, runnable agent is
+/// not a completion signal: chat dispatch still bounces with a setup error in
+/// that state.
 #[must_use]
 pub fn derive_onboard_status(cfg: &zeroclaw_config::schema::Config) -> OnboardStatusResponse {
-    let dispatchable = cfg.agents.values().any(|a| a.is_dispatchable());
-    let reason = if dispatchable {
+    let missing = onboard_missing_requirements(cfg);
+    let ready = missing.is_empty();
+    let has_partial_state = !cfg.onboard_state.completed_sections.is_empty()
+        || cfg.providers.models.iter_entries().next().is_some()
+        || !cfg.risk_profiles.is_empty()
+        || !cfg.runtime_profiles.is_empty()
+        || !cfg.agents.is_empty();
+    let reason = if ready {
         "has_dispatchable_agent"
-    } else if !cfg.onboard_state.completed_sections.is_empty() {
+    } else if has_partial_state {
         "incomplete_agent"
     } else {
         "fresh_install"
     };
     OnboardStatusResponse {
-        needs_onboarding: !dispatchable,
+        needs_onboarding: !ready,
         reason,
+        has_partial_state,
+        missing,
     }
+}
+
+fn onboard_missing_requirements(cfg: &zeroclaw_config::schema::Config) -> Vec<String> {
+    let mut missing = Vec::new();
+    if cfg.providers.models.iter_entries().next().is_none() {
+        missing.push("Add a model provider.".to_string());
+    }
+    if cfg.agents.is_empty() {
+        missing.push("Create an agent.".to_string());
+        return missing;
+    }
+
+    let mut agent_aliases: Vec<&String> = cfg.agents.keys().collect();
+    agent_aliases.sort();
+    let mut has_dispatchable_agent = false;
+    for alias in agent_aliases {
+        let agent_missing = onboard_agent_missing_requirements(cfg, alias, &cfg.agents[alias]);
+        if agent_missing.is_empty() {
+            has_dispatchable_agent = true;
+            break;
+        }
+        missing.extend(agent_missing);
+    }
+    if has_dispatchable_agent {
+        missing.clear();
+    }
+    if !cfg
+        .onboard_state
+        .completed_sections
+        .iter()
+        .any(|section| section == "storage")
+    {
+        missing.push("Choose a storage backend.".to_string());
+    }
+    if !cfg
+        .onboard_state
+        .completed_sections
+        .iter()
+        .any(|section| section == "memory")
+    {
+        missing.push("Confirm the memory backend.".to_string());
+    }
+    missing
+}
+
+fn onboard_agent_missing_requirements(
+    cfg: &zeroclaw_config::schema::Config,
+    alias: &str,
+    agent: &zeroclaw_config::schema::AliasedAgentConfig,
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    if !agent.enabled {
+        missing.push(format!("Enable agent `{alias}`."));
+    }
+
+    let model_ref = agent.model_provider.trim();
+    if model_ref.is_empty() {
+        missing.push(format!("Set a model provider for agent `{alias}`."));
+    } else if let Some((family, _, provider)) = cfg.resolved_model_provider_for_agent(alias) {
+        let has_model = provider
+            .model
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|m| !m.is_empty());
+        if !has_model {
+            missing.push(format!("Choose a model for model provider `{model_ref}`."));
+        } else if !model_provider_alias_usable(provider, model_provider_family_is_local(family)) {
+            missing.push(format!(
+                "Set credential/auth for model provider `{model_ref}`."
+            ));
+        }
+    } else {
+        missing.push(format!(
+            "Fix agent `{alias}` model provider `{model_ref}`; it does not resolve to a configured provider."
+        ));
+    }
+
+    let risk_ref = agent.risk_profile.trim();
+    if risk_ref.is_empty() {
+        missing.push(format!("Set a risk profile for agent `{alias}`."));
+    } else if !cfg.risk_profiles.contains_key(risk_ref) {
+        missing.push(format!(
+            "Fix agent `{alias}` risk profile `{risk_ref}`; it does not resolve to a configured profile."
+        ));
+    }
+
+    let runtime_ref = agent.runtime_profile.trim();
+    if runtime_ref.is_empty() {
+        missing.push(format!("Set a runtime profile for agent `{alias}`."));
+    } else if !cfg.runtime_profiles.contains_key(runtime_ref) {
+        missing.push(format!(
+            "Fix agent `{alias}` runtime profile `{runtime_ref}`; it does not resolve to a configured profile."
+        ));
+    }
+
+    missing
 }
 
 /// `GET /api/onboard/status` — boolean signal for the dashboard's
@@ -438,6 +555,7 @@ pub async fn handle_sections(State(state): State<AppState>, headers: HeaderMap) 
             };
             SectionInfo {
                 completed: completed.contains(&key),
+                ready: section_ready(&cfg, &key, completed.contains(&key)),
                 label: humanize_section(&key),
                 help: section_help(&key).to_string(),
                 has_picker,
@@ -450,6 +568,25 @@ pub async fn handle_sections(State(state): State<AppState>, headers: HeaderMap) 
         .collect();
 
     axum::Json(SectionsResponse { sections }).into_response()
+}
+
+fn section_ready(cfg: &zeroclaw_config::schema::Config, key: &str, completed_marker: bool) -> bool {
+    use zeroclaw_config::sections::Section;
+    match Section::from_key(key) {
+        Some(Section::ModelProviders) => any_usable_model_provider(cfg),
+        Some(Section::RiskProfiles) => !cfg.risk_profiles.is_empty(),
+        Some(Section::RuntimeProfiles) => !cfg.runtime_profiles.is_empty(),
+        Some(Section::Storage) => cfg
+            .prop_fields()
+            .iter()
+            .any(|field| field.name.starts_with("storage.")),
+        Some(Section::Memory) => completed_marker,
+        Some(Section::Agents) => cfg
+            .agents
+            .iter()
+            .any(|(alias, agent)| onboard_agent_missing_requirements(cfg, alias, agent).is_empty()),
+        _ => completed_marker,
+    }
 }
 
 /// Top-level fields that exist on `Config` but are never user-editable
@@ -554,9 +691,9 @@ pub struct PickerItem {
     /// extended description, "(local)" for local-only model_providers).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Optional badge — `"configured"` when an entry already exists for
-    /// this item under the section's path. The frontend uses this to mark
-    /// the row distinct so users see what they've already done.
+    /// Optional badge — `"set"` / `"needs setup"` / `"created"` /
+    /// `"configured"` / `"active"` depending on section semantics. The
+    /// frontend uses this to mark rows distinct without overstating readiness.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub badge: Option<String>,
 }
@@ -669,7 +806,7 @@ fn picker_items_for(
         Section::Agents => PickerDispatch::Items(agents_picker(cfg)),
         // Storage is two-tier (`storage.<kind>.<alias>`) — same shape
         // and walker as channels and the typed-provider families.
-        Section::Storage => PickerDispatch::Items(schema_walk_picker(cfg, "storage")),
+        Section::Storage => PickerDispatch::Items(storage_picker(cfg)),
         // OneTierAliasMap explorer sections: pick a key from the live
         // HashMap. Generic walker covers every section whose schema is
         // `<section>.<alias>` (operator-named keys, no closed kind set).
@@ -689,35 +826,140 @@ fn picker_items_for(
 fn providers_picker(cfg: &zeroclaw_config::schema::Config) -> Vec<PickerItem> {
     zeroclaw_providers::list_model_providers()
         .into_iter()
-        .map(|p| {
-            let configured = cfg.providers.models.contains_model_provider_type(p.name);
-            PickerItem {
-                key: p.name.to_string(),
-                label: p.display_name.to_string(),
-                description: if p.local {
-                    Some("Local — no API key required".to_string())
-                } else {
-                    None
-                },
-                badge: if configured {
-                    Some("configured".to_string())
-                } else {
-                    None
-                },
-            }
+        .map(|p| PickerItem {
+            key: p.name.to_string(),
+            label: p.display_name.to_string(),
+            description: if p.local {
+                Some("Local — no API key required".to_string())
+            } else {
+                None
+            },
+            badge: provider_type_badge(cfg, p.name, p.local),
         })
         .collect()
 }
 
+fn any_usable_model_provider(cfg: &zeroclaw_config::schema::Config) -> bool {
+    cfg.providers
+        .models
+        .iter_entries()
+        .any(|(family, _, base)| {
+            model_provider_alias_usable(base, model_provider_family_is_local(family))
+        })
+}
+
+fn model_provider_family_is_local(family: &str) -> bool {
+    zeroclaw_providers::list_model_providers()
+        .iter()
+        .find(|provider| provider.name == family)
+        .is_some_and(|provider| provider.local)
+}
+
+fn provider_type_badge(
+    cfg: &zeroclaw_config::schema::Config,
+    family: &str,
+    local: bool,
+) -> Option<String> {
+    let mut has_alias = false;
+    let mut has_usable_alias = false;
+    for (ty, _, base) in cfg.providers.models.iter_entries() {
+        if ty != family {
+            continue;
+        }
+        has_alias = true;
+        if model_provider_alias_usable(base, local) {
+            has_usable_alias = true;
+        }
+    }
+    if has_usable_alias {
+        Some("set".to_string())
+    } else if has_alias {
+        Some("needs setup".to_string())
+    } else {
+        None
+    }
+}
+
+fn model_provider_alias_usable(
+    base: &zeroclaw_config::schema::ModelProviderConfig,
+    local: bool,
+) -> bool {
+    let has_model = base
+        .model
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|model| !model.is_empty());
+    if !has_model {
+        return false;
+    }
+    let has_credential = base
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|key| !key.is_empty())
+        || base.requires_openai_auth
+        || local;
+    has_credential
+}
+
+fn storage_picker(cfg: &zeroclaw_config::schema::Config) -> Vec<PickerItem> {
+    let mut items = schema_walk_picker(cfg, "storage");
+    for item in &mut items {
+        item.description = storage_description(&item.key).map(str::to_string);
+        if item.badge.as_deref() == Some("configured") {
+            item.badge = Some("created".to_string());
+        }
+    }
+    items.sort_by_key(|item| storage_rank(&item.key));
+    items
+}
+
+fn storage_rank(key: &str) -> usize {
+    match key {
+        "sqlite" => 0,
+        "postgres" => 1,
+        "qdrant" => 2,
+        "markdown" => 3,
+        "lucid" => 4,
+        _ => 99,
+    }
+}
+
+fn storage_description(key: &str) -> Option<&'static str> {
+    match key {
+        "sqlite" => Some(
+            "Safe default for single-node installs: file-based, zero-config, no external service.",
+        ),
+        "postgres" => {
+            Some("Shared or multi-instance deployments that need durable server-backed storage.")
+        }
+        "qdrant" => {
+            Some("Vector database backend for semantic search when you already run Qdrant.")
+        }
+        "markdown" => {
+            Some("Human-readable files with simple local storage and no database service.")
+        }
+        "lucid" => {
+            Some("Bridge to local lucid-memory CLI while keeping SQLite-style local operation.")
+        }
+        _ => None,
+    }
+}
+
 fn memory_picker(cfg: &zeroclaw_config::schema::Config) -> Vec<PickerItem> {
     let current = cfg.memory.backend.clone();
+    let memory_completed = cfg
+        .onboard_state
+        .completed_sections
+        .iter()
+        .any(|section| section == "memory");
     zeroclaw_memory::selectable_memory_backends()
         .iter()
         .map(|b| PickerItem {
             key: b.key.to_string(),
             label: b.label.to_string(),
             description: None,
-            badge: if b.key == current {
+            badge: if b.key == current && memory_completed {
                 Some("active".to_string())
             } else {
                 None
@@ -831,6 +1073,55 @@ fn agents_picker(cfg: &zeroclaw_config::schema::Config) -> Vec<PickerItem> {
     items
 }
 
+fn apply_first_run_agent_defaults(cfg: &mut zeroclaw_config::schema::Config, alias: &str) {
+    let model_provider = cfg.first_model_provider_alias();
+    let risk_profile = first_alias_preferring_default(cfg.risk_profiles.keys());
+    let runtime_profile = first_alias_preferring_default(cfg.runtime_profiles.keys());
+
+    let Some(agent) = cfg.agents.get_mut(alias) else {
+        return;
+    };
+    if agent.model_provider.trim().is_empty()
+        && let Some(model_provider) = model_provider
+    {
+        agent.model_provider = model_provider.into();
+    }
+    if agent.risk_profile.trim().is_empty()
+        && let Some(risk_profile) = risk_profile
+    {
+        agent.risk_profile = risk_profile;
+    }
+    if agent.runtime_profile.trim().is_empty()
+        && let Some(runtime_profile) = runtime_profile
+    {
+        agent.runtime_profile = runtime_profile;
+    }
+}
+
+fn mark_onboard_section_completed(cfg: &mut zeroclaw_config::schema::Config, section: &str) {
+    if !cfg
+        .onboard_state
+        .completed_sections
+        .iter()
+        .any(|completed| completed == section)
+    {
+        cfg.onboard_state
+            .completed_sections
+            .push(section.to_string());
+        cfg.mark_dirty("onboard-state.completed-sections");
+    }
+}
+
+fn first_alias_preferring_default<'a>(aliases: impl Iterator<Item = &'a String>) -> Option<String> {
+    let mut aliases: Vec<&String> = aliases.collect();
+    aliases.sort();
+    aliases
+        .iter()
+        .find(|alias| alias.as_str() == "default")
+        .or_else(|| aliases.first())
+        .map(|alias| (*alias).clone())
+}
+
 /// `tunnel`-flavored picker: same as `schema_walk_picker` plus a synthetic
 /// `none` entry at the top, marked active when the current `tunnel.tunnel_provider`
 /// matches. Mirrors the TUI's tunnel section.
@@ -900,6 +1191,24 @@ pub struct SectionSelectBody {
     pub alias: Option<String>,
 }
 
+fn typed_family_config_key(section: zeroclaw_config::sections::Section, key: &str) -> String {
+    if matches!(
+        section,
+        zeroclaw_config::sections::Section::ModelProviders
+            | zeroclaw_config::sections::Section::TtsProviders
+            | zeroclaw_config::sections::Section::TranscriptionProviders
+    ) {
+        // Provider catalog/runtime identifiers use snake_case
+        // (`atomic_chat`, `local_whisper`), while Configurable field paths
+        // are kebab-case (`atomic-chat`, `local-whisper`). Keep references
+        // snake_case; normalize only the config-map path used to create and
+        // edit the alias block.
+        key.replace('_', "-")
+    } else {
+        key.to_string()
+    }
+}
+
 pub async fn handle_section_select(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -937,15 +1246,16 @@ pub async fn handle_section_select(
             // an existing type/alias is a no-op for the bucket and just
             // returns the form prefix for the alias.
             let family = section_enum.as_str();
+            let config_key = typed_family_config_key(section_enum, &key);
             let created = working
-                .create_map_key(&format!("{family}.{key}"), &alias)
+                .create_map_key(&format!("{family}.{config_key}"), &alias)
                 .map_err(|msg| {
                     error_response(
                         ConfigApiError::new(
                             ConfigApiCode::PathNotFound,
                             format!("could not select {family} `{key}` alias `{alias}`: {msg}"),
                         )
-                        .with_path(format!("{family}.{key}")),
+                        .with_path(format!("{family}.{config_key}")),
                     )
                 });
             let created = match created {
@@ -954,7 +1264,7 @@ pub async fn handle_section_select(
             };
             // Per-family typed configs derive their own default endpoint
             // URI via family traits at runtime construction time.
-            (format!("{family}.{key}.{alias}"), created)
+            (format!("{family}.{config_key}.{alias}"), created)
         }
         Section::Channels => {
             let created = working
@@ -1026,6 +1336,7 @@ pub async fn handle_section_select(
             // PersonalityEditor and the runtime have somewhere to read
             // and write IDENTITY.md / SOUL.md / USER.md / etc.
             if created && matches!(section_enum, Section::Agents) {
+                apply_first_run_agent_defaults(&mut working, &key);
                 let workspace_dir = working.agent_workspace_dir(&key);
                 if let Err(err) = tokio::fs::create_dir_all(&workspace_dir).await {
                     return error_response(
@@ -1068,6 +1379,7 @@ pub async fn handle_section_select(
                 Ok(c) => c,
                 Err(resp) => return resp,
             };
+            mark_onboard_section_completed(&mut working, "storage");
             (format!("storage.{key}.{alias}"), created)
         }
         Section::Memory => {
@@ -1083,6 +1395,7 @@ pub async fn handle_section_select(
                     .with_path("memory.backend"),
                 );
             }
+            mark_onboard_section_completed(&mut working, "memory");
             ("memory".to_string(), true)
         }
         Section::Tunnel => {
@@ -1175,6 +1488,54 @@ mod tests {
     }
 
     #[test]
+    fn typed_provider_catalog_keys_can_create_kebab_config_sections() {
+        let mut cfg = zeroclaw_config::schema::Config::default();
+        let cases = [
+            (
+                zeroclaw_config::sections::Section::ModelProviders,
+                "providers.models",
+                "atomic_chat",
+                "providers.models.atomic-chat",
+            ),
+            (
+                zeroclaw_config::sections::Section::ModelProviders,
+                "providers.models",
+                "gemini_cli",
+                "providers.models.gemini-cli",
+            ),
+            (
+                zeroclaw_config::sections::Section::TranscriptionProviders,
+                "providers.transcription",
+                "local_whisper",
+                "providers.transcription.local-whisper",
+            ),
+        ];
+
+        for (section, family, key, expected_path) in cases {
+            let path = format!("{family}.{}", typed_family_config_key(section, key));
+            assert_eq!(path, expected_path);
+            cfg.create_map_key(&path, "default")
+                .unwrap_or_else(|e| panic!("{key} should map to `{expected_path}`: {e}"));
+        }
+
+        assert!(
+            cfg.providers.models.atomic_chat.contains_key("default"),
+            "created Atomic Chat alias should land in the atomic_chat provider map",
+        );
+        assert!(
+            cfg.providers.models.gemini_cli.contains_key("default"),
+            "created Gemini CLI alias should land in the gemini_cli provider map",
+        );
+        assert!(
+            cfg.providers
+                .transcription
+                .local_whisper
+                .contains_key("default"),
+            "created Local Whisper alias should land in the local_whisper provider map",
+        );
+    }
+
+    #[test]
     fn derive_onboard_status_requires_dispatchable_agent() {
         let mut cfg = zeroclaw_config::schema::Config::default();
         let resp = derive_onboard_status(&cfg);
@@ -1188,7 +1549,8 @@ mod tests {
             resp.needs_onboarding,
             "provider configured without a bound agent must not flip needs_onboarding"
         );
-        assert_eq!(resp.reason, "fresh_install");
+        assert_eq!(resp.reason, "incomplete_agent");
+        assert!(resp.has_partial_state);
 
         cfg.create_map_key("risk-profiles", "default").unwrap();
         cfg.create_map_key("runtime-profiles", "default").unwrap();
@@ -1198,15 +1560,50 @@ mod tests {
             resp.needs_onboarding,
             "agent without provider/profile bindings must still need onboarding"
         );
-        assert_eq!(resp.reason, "fresh_install");
+        assert_eq!(resp.reason, "incomplete_agent");
+        assert!(
+            resp.missing
+                .iter()
+                .any(|m| m == "Set a model provider for agent `default`.")
+        );
 
         let agent = cfg.agents.get_mut("default").unwrap();
         agent.model_provider = "anthropic.default".into();
         agent.risk_profile = "default".into();
         agent.runtime_profile = "default".into();
         let resp = derive_onboard_status(&cfg);
+        assert!(
+            resp.needs_onboarding,
+            "provider alias without a selected model must still need onboarding"
+        );
+        assert!(
+            resp.missing
+                .iter()
+                .any(|m| m == "Choose a model for model provider `anthropic.default`.")
+        );
+
+        cfg.set_prop_persistent("providers.models.anthropic.default.model", "claude-sonnet")
+            .unwrap();
+        let resp = derive_onboard_status(&cfg);
+        assert!(
+            resp.needs_onboarding,
+            "hosted provider alias without credential/auth must still need onboarding"
+        );
+        assert!(
+            resp.missing
+                .iter()
+                .any(|m| m == "Set credential/auth for model provider `anthropic.default`.")
+        );
+
+        cfg.set_prop_persistent("providers.models.anthropic.default.api-key", "sk-test")
+            .unwrap();
+        cfg.onboard_state
+            .completed_sections
+            .extend(["storage".to_string(), "memory".to_string()]);
+        let resp = derive_onboard_status(&cfg);
         assert!(!resp.needs_onboarding);
         assert_eq!(resp.reason, "has_dispatchable_agent");
+        assert!(!resp.has_partial_state || resp.missing.is_empty());
     }
 
     #[test]
@@ -1221,6 +1618,36 @@ mod tests {
             "completed_sections marker without a dispatchable agent must NOT flip the redirect"
         );
         assert_eq!(resp.reason, "incomplete_agent");
+    }
+
+    #[test]
+    fn apply_first_run_agent_defaults_binds_existing_provider_and_profiles() {
+        let mut cfg = zeroclaw_config::schema::Config::default();
+        cfg.create_map_key("providers.models.anthropic", "work")
+            .unwrap();
+        cfg.create_map_key("risk-profiles", "default").unwrap();
+        cfg.create_map_key("runtime-profiles", "deep_work").unwrap();
+        cfg.create_map_key("agents", "default").unwrap();
+
+        apply_first_run_agent_defaults(&mut cfg, "default");
+
+        let agent = cfg.agents.get("default").unwrap();
+        assert_eq!(agent.model_provider.as_str(), "anthropic.work");
+        assert_eq!(agent.risk_profile, "default");
+        assert_eq!(agent.runtime_profile, "deep_work");
+    }
+
+    #[test]
+    fn memory_section_ready_tracks_onboarding_progress_not_default_backend() {
+        let cfg = zeroclaw_config::schema::Config::default();
+        assert!(
+            !section_ready(&cfg, "memory", false),
+            "fresh onboarding should not show Memory checked merely because a default backend exists"
+        );
+        assert!(
+            section_ready(&cfg, "memory", true),
+            "Memory should show checked after the user has advanced through that section"
+        );
     }
 
     fn empty_cfg() -> zeroclaw_config::schema::Config {
@@ -1334,19 +1761,19 @@ mod tests {
             "at least one model_provider should be marked local"
         );
 
-        // Empty config has no configured model_providers — no badges yet.
+        // Empty config has no model_provider aliases — no badges yet.
         assert!(
             items.iter().all(|i| i.badge.is_none()),
-            "fresh config shouldn't mark any model_provider as configured"
+            "fresh config shouldn't mark any model_provider as present"
         );
     }
 
     #[test]
-    fn providers_picker_marks_configured_after_create_map_key() {
+    fn providers_picker_marks_alias_readiness() {
         // Typed-family layout: each canonical family is a map-keyed
         // sub-section at `model_providers.<family>` whose entries are
-        // operator-named aliases. Adding an alias on any family flips the
-        // picker badge to "configured" for that family.
+        // operator-named aliases. Creating the alias alone is not enough
+        // for chat dispatch; it still needs model + credential/auth.
         let mut cfg = empty_cfg();
         cfg.create_map_key("providers.models.anthropic", "default")
             .expect("create_map_key");
@@ -1354,8 +1781,23 @@ mod tests {
         let anthropic = items.iter().find(|i| i.key == "anthropic").unwrap();
         assert_eq!(
             anthropic.badge.as_deref(),
-            Some("configured"),
-            "anthropic should be marked configured after adding an alias"
+            Some("needs setup"),
+            "anthropic should need setup after adding an empty alias"
+        );
+
+        cfg.set_prop(
+            "providers.models.anthropic.default.model",
+            "claude-sonnet-4-5",
+        )
+        .expect("set model");
+        cfg.set_prop("providers.models.anthropic.default.api-key", "sk-test")
+            .expect("set api key");
+        let items = providers_picker(&cfg);
+        let anthropic = items.iter().find(|i| i.key == "anthropic").unwrap();
+        assert_eq!(
+            anthropic.badge.as_deref(),
+            Some("set"),
+            "anthropic should be marked set once required chat fields are present"
         );
     }
 
@@ -1367,11 +1809,11 @@ mod tests {
         let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
         assert!(keys.contains(&"sqlite"));
         assert!(keys.contains(&"none"));
-        // Default backend should be marked active.
+        // Fresh onboarding should not imply the user selected the default.
         let active = items.iter().find(|i| i.badge.as_deref() == Some("active"));
         assert!(
-            active.is_some(),
-            "exactly one memory backend should be active (the default)"
+            active.is_none(),
+            "fresh onboarding should not mark a memory backend active before the user confirms the step"
         );
     }
 
@@ -1541,14 +1983,14 @@ mod tests {
     }
 
     /// Storage is `[storage.<kind>.<alias>]` — two-tier typed-family
-    /// shape, served by the existing `schema_walk_picker`. The picker
+    /// shape, served by the storage picker. The picker
     /// surfaces the 5 storage kinds (sqlite, postgres, qdrant,
     /// markdown, lucid) regardless of which aliases exist, and badges
-    /// the kind `configured` once any alias under it is created.
+    /// the kind `created` once any alias under it is created.
     #[test]
-    fn storage_picker_lists_all_kinds_and_marks_configured() {
+    fn storage_picker_lists_all_kinds_and_marks_created() {
         let cfg = empty_cfg();
-        let items = schema_walk_picker(&cfg, "storage");
+        let items = storage_picker(&cfg);
         let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
         for expected in ["sqlite", "postgres", "qdrant", "markdown", "lucid"] {
             assert!(
@@ -1566,12 +2008,16 @@ mod tests {
         let mut cfg2 = empty_cfg();
         cfg2.create_map_key("storage.sqlite", "primary")
             .expect("create_map_key(storage.sqlite, primary) must succeed");
-        let items = schema_walk_picker(&cfg2, "storage");
+        let items = storage_picker(&cfg2);
         let sqlite = items.iter().find(|i| i.key == "sqlite").unwrap();
         assert_eq!(
             sqlite.badge.as_deref(),
-            Some("configured"),
-            "storage.sqlite should be marked configured after adding an alias",
+            Some("created"),
+            "storage.sqlite should be marked created after adding an alias",
+        );
+        assert!(
+            sqlite.description.is_some(),
+            "storage picker should explain each backend tradeoff",
         );
     }
 }

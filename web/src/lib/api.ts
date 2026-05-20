@@ -910,6 +910,8 @@ export interface SectionInfo {
   has_picker: boolean;
   /** True when the user has marked the section completed in onboard_state. */
   completed: boolean;
+  /** True when the section has enough usable config for first-run setup. */
+  ready: boolean;
   /** Display group for the sidebar (`Onboarding`, `Agent`, `Tools`, ...). */
   group: string;
   /** True when this section is part of the `/onboard` wizard (driven by
@@ -937,13 +939,15 @@ export function getSections(): Promise<SectionsResponse> {
 }
 
 export interface OnboardStatusResponse {
-  /** True when the user is on a fresh install (no completed sections AND
-   * no provider configured). The Dashboard uses this to redirect first
-   * visits to `/onboard`. */
+  /** True when no enabled agent can reply yet. */
   needs_onboarding: boolean;
-  /** Stable machine-readable reason: `fresh_install`, `has_provider`, or
-   * `has_completed_sections`. */
+  /** Stable machine-readable reason: `fresh_install`, `incomplete_agent`, or
+   * `has_dispatchable_agent`. */
   reason: string;
+  /** True once the operator has entered any setup state. */
+  has_partial_state: boolean;
+  /** Human-readable readiness failures for the finish gate. */
+  missing: string[];
 }
 
 export function getOnboardStatus(): Promise<OnboardStatusResponse> {

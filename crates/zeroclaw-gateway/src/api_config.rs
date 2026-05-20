@@ -12,12 +12,14 @@
 //! for the full surface and acceptance checklist.
 
 use axum::{
+    Json,
     extract::{Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use zeroclaw_config::api_error::{ConfigApiCode, ConfigApiError};
+use zeroclaw_config::traits::MaskSecrets;
 use zeroclaw_runtime::onboard::{field_visibility, section_for_path};
 
 use super::AppState;
@@ -105,6 +107,20 @@ pub struct PatchResponse {
     /// validation warning here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<zeroclaw_config::validation_warnings::ValidationWarning>,
+}
+
+/// GET /api/config — compatibility whole-config read for older bundled
+/// dashboard pages. New clients should prefer the per-property API, but
+/// returning a masked snapshot here avoids a hard 405 when an older page is
+/// served by a newer gateway.
+pub async fn handle_config_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let mut cfg = state.config.read().clone();
+    cfg.mask_secrets();
+    Json(cfg).into_response()
 }
 
 fn parse_patch_ops(value: serde_json::Value) -> Result<Vec<PatchOp>, ConfigApiError> {

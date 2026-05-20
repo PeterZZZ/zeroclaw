@@ -1379,22 +1379,99 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                 } else {
                     // ── Nested property delegation (non-Option, non-flatten) ──
                     nested_prop_fields.push(quote! {
-                        fields.extend(self.#field_ident.prop_fields());
+                        {
+                            let inner_prefix = <#field_ty>::configurable_prefix();
+                            let nested_prefix = if Self::configurable_prefix().is_empty() {
+                                #plain_field_name_lit.to_string()
+                            } else {
+                                format!("{}.{}", Self::configurable_prefix(), #plain_field_name_lit)
+                            };
+                            for mut field in self.#field_ident.prop_fields() {
+                                let leaf = if inner_prefix.is_empty() {
+                                    field.name.as_str()
+                                } else {
+                                    field.name
+                                        .strip_prefix(inner_prefix)
+                                        .and_then(|s| s.strip_prefix('.'))
+                                        .unwrap_or(field.name.as_str())
+                                };
+                                field.name = if leaf.is_empty() {
+                                    nested_prefix.clone()
+                                } else {
+                                    format!("{nested_prefix}.{leaf}")
+                                };
+                                fields.push(field);
+                            }
+                        }
                     });
                     nested_get_prop.push(quote! {
-                        if let Ok(val) = self.#field_ident.get_prop(name) {
-                            return Ok(val);
+                        {
+                            let inner_prefix = <#field_ty>::configurable_prefix();
+                            let nested_prefix = if Self::configurable_prefix().is_empty() {
+                                #plain_field_name_lit.to_string()
+                            } else {
+                                format!("{}.{}", Self::configurable_prefix(), #plain_field_name_lit)
+                            };
+                            if let Some(leaf) = name
+                                .strip_prefix(&nested_prefix)
+                                .and_then(|s| s.strip_prefix('.'))
+                            {
+                                let inner_name = if inner_prefix.is_empty() {
+                                    leaf.to_string()
+                                } else {
+                                    format!("{inner_prefix}.{leaf}")
+                                };
+                                if let Ok(val) = self.#field_ident.get_prop(&inner_name) {
+                                    return Ok(val);
+                                }
+                            }
                         }
                     });
                     nested_set_prop.push(quote! {
-                        if let Ok(()) = self.#field_ident.set_prop(name, value_str) {
-                            return Ok(());
+                        {
+                            let inner_prefix = <#field_ty>::configurable_prefix();
+                            let nested_prefix = if Self::configurable_prefix().is_empty() {
+                                #plain_field_name_lit.to_string()
+                            } else {
+                                format!("{}.{}", Self::configurable_prefix(), #plain_field_name_lit)
+                            };
+                            if let Some(leaf) = name
+                                .strip_prefix(&nested_prefix)
+                                .and_then(|s| s.strip_prefix('.'))
+                            {
+                                let inner_name = if inner_prefix.is_empty() {
+                                    leaf.to_string()
+                                } else {
+                                    format!("{inner_prefix}.{leaf}")
+                                };
+                                if let Ok(()) = self.#field_ident.set_prop(&inner_name, value_str) {
+                                    return Ok(());
+                                }
+                            }
                         }
                     });
 
                     nested_prop_is_secret.push(quote! {
-                        if <#field_ty>::prop_is_secret(name) {
-                            return true;
+                        {
+                            let inner_prefix = <#field_ty>::configurable_prefix();
+                            let nested_prefix = if Self::configurable_prefix().is_empty() {
+                                #plain_field_name_lit.to_string()
+                            } else {
+                                format!("{}.{}", Self::configurable_prefix(), #plain_field_name_lit)
+                            };
+                            if let Some(leaf) = name
+                                .strip_prefix(&nested_prefix)
+                                .and_then(|s| s.strip_prefix('.'))
+                            {
+                                let inner_name = if inner_prefix.is_empty() {
+                                    leaf.to_string()
+                                } else {
+                                    format!("{inner_prefix}.{leaf}")
+                                };
+                                if <#field_ty>::prop_is_secret(&inner_name) {
+                                    return true;
+                                }
+                            }
                         }
                     });
                 }
