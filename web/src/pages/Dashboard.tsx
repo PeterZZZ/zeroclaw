@@ -1941,7 +1941,7 @@ function MemoriesTab() {
           title="Add a memory entry"
         >
           <Plus className="h-3 w-3" />
-          Add memory
+          {t('dashboard.add_memory')}
         </button>
 
         <div className="ml-auto flex items-center gap-2 flex-wrap">
@@ -2029,7 +2029,7 @@ function MemoriesTab() {
           {visibleEntries.map((entry) => (
             <div
               key={entry.id}
-              className="flex items-start justify-between gap-3 py-3 px-4 rounded-xl"
+              className="flex items-center justify-between gap-3 py-3 px-4 rounded-xl"
               style={{ background: 'var(--pc-bg-elevated)' }}
             >
               <div className="flex-1 min-w-0">
@@ -2109,7 +2109,7 @@ function MemoriesTab() {
                 className="text-lg font-semibold"
                 style={{ color: 'var(--pc-text-primary)' }}
               >
-                Add memory
+                {t('dashboard.add_memory')}
               </h3>
               <button
                 type="button"
