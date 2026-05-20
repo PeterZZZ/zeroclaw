@@ -32,6 +32,7 @@ import {
   type PickerItem,
   type SectionInfo,
 } from '../../lib/api';
+import { isLocalModelProviderName } from '../../lib/modelProviders';
 import FieldForm, { type FieldFormHandle } from '../../components/onboard/FieldForm';
 import SectionPicker from '../../components/onboard/SectionPicker';
 
@@ -82,11 +83,13 @@ export default function Onboard() {
 
   const refreshReadiness = useCallback(async () => {
     try {
-      const status = await getOnboardStatus();
-      setCanFinish(!status.needs_onboarding);
-      if (!status.needs_onboarding) setFinishIssues(null);
       const resp = await getSections();
-      setSections(resp.sections.filter((s) => s.is_onboarding));
+      const onboardingSections = resp.sections.filter((s) => s.is_onboarding);
+      setSections(onboardingSections);
+      const status = await getOnboardStatus();
+      const readyToFinish = !status.needs_onboarding && firstRunRequiredSectionsReady(onboardingSections);
+      setCanFinish(readyToFinish);
+      if (readyToFinish) setFinishIssues(null);
       const agents = await getMapKeys('agents').catch(() => null);
       const onlyAgent = agents?.keys.length === 1 ? agents.keys[0] : null;
       if (onlyAgent) {
@@ -363,12 +366,17 @@ export default function Onboard() {
         console.warn('Failed to persist completion marker on finish:', e);
       }
       const status = await getOnboardStatus();
-      setCanFinish(!status.needs_onboarding);
-      if (status.needs_onboarding) {
+      const resp = await getSections();
+      const onboardingSections = resp.sections.filter((s) => s.is_onboarding);
+      setSections(onboardingSections);
+      const wizardIssues = firstRunReadinessIssues(onboardingSections);
+      const readyToFinish = !status.needs_onboarding && wizardIssues.length === 0;
+      setCanFinish(readyToFinish);
+      if (!readyToFinish) {
         setIssueTitle('Finish needs a runnable agent first.');
         setFinishIssues(
-          status.missing.length > 0
-            ? status.missing
+          status.missing.length > 0 || wizardIssues.length > 0
+            ? [...status.missing, ...wizardIssues]
             : ['Complete the required setup steps before finishing onboarding.'],
         );
         return;
@@ -705,6 +713,18 @@ function breadcrumbDetail(
   }
   if (pickedType) return `${pickedType.item.label} aliases`;
   return null;
+}
+
+function firstRunRequiredSectionsReady(sections: SectionInfo[]): boolean {
+  return firstRunReadinessIssues(sections).length === 0;
+}
+
+function firstRunReadinessIssues(sections: SectionInfo[]): string[] {
+  const labels = new Map(sections.map((section) => [section.key, section.label]));
+  const byKey = new Map(sections.map((section) => [section.key, section]));
+  return FIRST_RUN_SECTION_ORDER
+    .filter((key) => !byKey.get(key)?.ready)
+    .map((key) => `${labels.get(key) ?? key} is not complete yet.`);
 }
 
 function sectionByKey(
@@ -1330,20 +1350,7 @@ function riskPresetOps(prefix: string, preset: RiskPreset) {
 }
 
 function isLocalModelProvider(provider: string): boolean {
-  const canonical = provider.replace(/-/g, '_');
-  return new Set([
-    'ollama',
-    'lmstudio',
-    'llamacpp',
-    'sglang',
-    'vllm',
-    'osaurus',
-    'atomic_chat',
-    'gemini_cli',
-    'opencode',
-    'kilocli',
-    'synthetic',
-  ]).has(canonical);
+  return isLocalModelProviderName(provider);
 }
 
 function capitalize(value: string): string {

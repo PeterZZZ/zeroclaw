@@ -72,6 +72,9 @@ pub struct ModelsQuery {
 pub struct ModelsResponse {
     pub model_provider: String,
     pub models: Vec<String>,
+    /// Whether this provider family is local according to the canonical
+    /// provider catalog.
+    pub local: bool,
     /// `true` when the catalog was fetched live; `false` if the cache was
     /// served (or if this model_provider has no remote catalog and the empty list
     /// is the genuine answer).
@@ -96,6 +99,7 @@ pub async fn handle_catalog_models(
         return e.into_response();
     }
     let _ = state;
+    let local = model_provider_family_is_local(&q.model_provider);
 
     // Try provider construction + list_models first (covers credentialed
     // /models endpoints). Fall back to the family catalog table when
@@ -127,6 +131,7 @@ pub async fn handle_catalog_models(
     axum::Json(ModelsResponse {
         model_provider: q.model_provider,
         models,
+        local,
         live,
     })
     .into_response()
@@ -262,22 +267,6 @@ fn onboard_missing_requirements(cfg: &zeroclaw_config::schema::Config) -> Vec<St
     }
     if has_dispatchable_agent {
         missing.clear();
-    }
-    if !cfg
-        .onboard_state
-        .completed_sections
-        .iter()
-        .any(|section| section == "storage")
-    {
-        missing.push("Choose a storage backend.".to_string());
-    }
-    if !cfg
-        .onboard_state
-        .completed_sections
-        .iter()
-        .any(|section| section == "memory")
-    {
-        missing.push("Confirm the memory backend.".to_string());
     }
     missing
 }
@@ -594,6 +583,7 @@ fn section_ready(cfg: &zeroclaw_config::schema::Config, key: &str, completed_mar
 const HIDDEN_TOP_LEVEL: &[&str] = &[
     "schema_version",
     "onboard_state",
+    "onboard-state",
     "config_path",
     "workspace_dir",
     "env_overridden_paths",
@@ -1595,9 +1585,6 @@ mod tests {
 
         cfg.set_prop_persistent("providers.models.anthropic.default.api-key", "sk-test")
             .unwrap();
-        cfg.onboard_state
-            .completed_sections
-            .extend(["storage".to_string(), "memory".to_string()]);
         let resp = derive_onboard_status(&cfg);
         assert!(!resp.needs_onboarding);
         assert_eq!(resp.reason, "has_dispatchable_agent");
@@ -1693,6 +1680,12 @@ mod tests {
             assert!(
                 !roots.contains(*hidden),
                 "hidden top-level `{hidden}` must not appear",
+            );
+        }
+        for hidden in ["onboard_state", "onboard-state"] {
+            assert!(
+                !roots.contains(hidden),
+                "onboarding bookkeeping root `{hidden}` must not appear",
             );
         }
     }

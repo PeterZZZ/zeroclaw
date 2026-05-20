@@ -40,6 +40,7 @@ import {
 } from '../../lib/api';
 import { useConfigDraft } from '../../lib/draftStore';
 import { fuzzyFilter } from '../../lib/fuzzy';
+import { isLocalModelProviderName } from '../../lib/modelProviders';
 import EntityEnabledToggle from '../EntityEnabledToggle';
 
 function entryValue(entry: ListResponseEntry): unknown {
@@ -217,20 +218,8 @@ function setupRequirement(entry: ListResponseEntry): { label: string; tone: 'req
 }
 
 function isLocalModelProviderPath(path: string): boolean {
-  const provider = (path.match(/^providers\.models\.([^.]+)\./)?.[1] ?? '').replace(/-/g, '_');
-  return new Set([
-    'ollama',
-    'lmstudio',
-    'llamacpp',
-    'sglang',
-    'vllm',
-    'osaurus',
-    'atomic_chat',
-    'gemini_cli',
-    'opencode',
-    'kilocli',
-    'synthetic',
-  ]).has(provider);
+  const provider = path.match(/^providers\.models\.([^.]+)\./)?.[1] ?? '';
+  return isLocalModelProviderName(provider);
 }
 
 function modelFallbackExample(path: string): string {
@@ -329,7 +318,7 @@ function isOptionalArray(typeHint: string): boolean {
 // Per-provider catalog cache. Cleared via clearFieldFormCatalogCaches() on
 // nav so a new model alias added under (say) `anthropic` shows up the next
 // time the user opens an agent form without a hard refresh.
-let modelsCache: Record<string, { models: string[]; live: boolean }> = {};
+let modelsCache: Record<string, { models: string[]; live: boolean; local: boolean }> = {};
 
 // In-flight `getAgentOptions()` promise so N FieldForm rows mounting at
 // once share a single round-trip. Cleared when the request resolves;
@@ -1010,12 +999,16 @@ function FieldRow({ entry, value, onChange, comment, onCommentChange, error, onD
     }
     void getCatalogModels(provider)
       .then((r) => {
-        modelsCache[provider] = { models: r.models, live: r.live };
+        modelsCache[provider] = { models: r.models, live: r.live, local: r.local };
         setProviderModels(r.models);
         setModelsFetchFailed(!r.live && r.models.length === 0);
       })
       .catch(() => {
-        modelsCache[provider] = { models: [], live: false };
+        modelsCache[provider] = {
+          models: [],
+          live: false,
+          local: isLocalModelProviderName(provider),
+        };
         setProviderModels([]);
         setModelsFetchFailed(true);
       });

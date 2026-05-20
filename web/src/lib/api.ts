@@ -885,8 +885,10 @@ export function getCatalog(): Promise<CatalogResponse> {
 }
 
 export interface ModelsResponse {
-  provider: string;
+  model_provider: string;
   models: string[];
+  /** True when the provider family is local according to the gateway catalog. */
+  local: boolean;
   /** false when the upstream catalog fetch failed; form should fall back to free-text. */
   live: boolean;
 }
