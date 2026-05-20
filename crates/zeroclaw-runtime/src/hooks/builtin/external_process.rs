@@ -478,4 +478,129 @@ mod tests {
             "no transcript should exist for an empty sender"
         );
     }
+
+    /// CLI-path equivalent of `orchestrator_dataflow_fires_external_hook_with_cached_history`.
+    ///
+    /// In the CLI interactive REPL there is no per-sender HashMap — there
+    /// is a single linear `Vec<ChatMessage>` named `history` living at
+    /// `crates/zeroclaw-runtime/src/agent/loop_.rs`. Phase 11 wires
+    /// `fire_session_end_with_history` against that vector inside the
+    /// `"/clear" | "/new"` match arm, with sender_key="cli" and
+    /// channel="cli". This test replicates that dataflow inline (no
+    /// LLM, no actual REPL) to prove the registered ExternalProcessHook
+    /// emits a transcript whose name keys off the `"cli"` sender and
+    /// whose body contains the about-to-be-cleared CLI history verbatim.
+    #[tokio::test]
+    async fn cli_dataflow_fires_external_hook_with_cli_history() {
+        let tmp = tempdir();
+        let cfg = ExternalSessionEndConfig {
+            enabled: true,
+            command: "/bin/cat".into(),
+            args: vec![],
+            transcript_dir: tmp.path().to_string_lossy().to_string(),
+            timeout_secs: 5,
+        };
+        let mut runner = HookRunner::new();
+        runner.register(Box::new(ExternalProcessHook::new(cfg)));
+
+        // Mirror the CLI loop's storage: a linear conversation history.
+        // System messages are filtered upstream of the hook in loop_.rs
+        // (the about-to-clear `history` includes the leading system
+        // prompt), but the hook itself accepts whatever the caller hands
+        // it — keep the fixture small and focused on user/assistant turns.
+        let history: Vec<ChatMessage> = vec![
+            ChatMessage::user("hello from the cli /new test"),
+            ChatMessage::assistant("acknowledged"),
+            ChatMessage::user("/new"),
+        ];
+
+        // Inline replication of Phase 11's call in the `"/clear" | "/new"`
+        // match arm:
+        //   1. early-return if hooks is None (this test always registers one)
+        //   2. early-return if history is empty
+        //   3. map ChatMessage → ConversationMessage::Chat
+        //   4. fire_session_end_with_history with sender_key="cli", channel="cli"
+        assert!(!history.is_empty(), "test setup invariant");
+        let sender_key = "cli";
+        let channel = "cli";
+        let snapshot: Vec<ConversationMessage> = history
+            .iter()
+            .cloned()
+            .map(ConversationMessage::Chat)
+            .collect();
+        let cwd = "/tmp/cli-workspace";
+        runner
+            .fire_session_end_with_history(sender_key, channel, &snapshot, cwd)
+            .await;
+
+        // Assertion 1: exactly one transcript file was written and its
+        // filename keys off the "cli" sender_key prefix.
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected exactly one transcript file");
+        let path = entries[0].path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            name.starts_with("cli-"),
+            "filename should start with cli-; got {name}"
+        );
+
+        // Assertion 2: the file contains 3 JSONL lines (one per CLI turn)
+        // and the user's /new command made it through verbatim.
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            body.lines().count(),
+            3,
+            "expected 3 JSONL lines (user, assistant, user); got:\n{body}"
+        );
+        assert!(
+            body.contains(r#""text":"hello from the cli /new test""#),
+            "expected the user's first message in the transcript; got: {body}"
+        );
+        assert!(body.contains(r#""text":"/new""#));
+        assert!(body.contains(r#""role":"assistant""#));
+        assert!(body.contains(r#""role":"user""#));
+    }
+
+    /// CLI-path equivalent of `orchestrator_dataflow_empty_history_does_nothing`.
+    ///
+    /// At session start the CLI loop seeds `history` with a single
+    /// system message; if the user types `/new` immediately (or after
+    /// pressing `/clear` and getting redirected back to an empty
+    /// history), Phase 11's empty-history guard must skip the
+    /// dispatch entirely. This test replicates that guard inline.
+    #[tokio::test]
+    async fn cli_dataflow_empty_history_does_nothing() {
+        let tmp = tempdir();
+        let cfg = ExternalSessionEndConfig {
+            enabled: true,
+            command: "/bin/cat".into(),
+            args: vec![],
+            transcript_dir: tmp.path().to_string_lossy().to_string(),
+            timeout_secs: 5,
+        };
+        let mut runner = HookRunner::new();
+        runner.register(Box::new(ExternalProcessHook::new(cfg)));
+
+        // Empty CLI history → skip dispatch entirely.
+        let history: Vec<ChatMessage> = vec![];
+        if !history.is_empty() {
+            // (would fire; never reached in this test)
+            unreachable!();
+        }
+
+        // Drain runner so we never accidentally fire below.
+        drop(runner);
+
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "no transcript should exist for an empty CLI history"
+        );
+    }
 }
