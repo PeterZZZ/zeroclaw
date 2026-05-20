@@ -2794,6 +2794,36 @@ pub async fn run(
                         continue;
                     }
 
+                    // Phase 11: fire the session-end hook with the about-to-be-
+                    // cleared transcript BEFORE history.clear(). Mirrors the
+                    // channels-orchestrator path at
+                    // crates/zeroclaw-channels/src/orchestrator/mod.rs:1141-1148.
+                    // Synthesized sender_key="cli" and channel="cli" so the
+                    // session-end JSONL the MemSkills hook writes can be
+                    // distinguished from chat-channel sessions. No-op when
+                    // hooks are unconfigured or the about-to-clear history
+                    // is empty (would carry no transcript signal).
+                    if let Some(hooks) = hooks.as_ref() {
+                        if !history.is_empty() {
+                            let snapshot: Vec<
+                                zeroclaw_api::provider::ConversationMessage,
+                            > = history
+                                .iter()
+                                .cloned()
+                                .map(
+                                    zeroclaw_api::provider::ConversationMessage::Chat,
+                                )
+                                .collect();
+                            let cwd =
+                                config.workspace_dir.to_string_lossy().to_string();
+                            hooks
+                                .fire_session_end_with_history(
+                                    "cli", "cli", &snapshot, &cwd,
+                                )
+                                .await;
+                        }
+                    }
+
                     history.clear();
                     history.push(ChatMessage::system(&system_prompt));
                     // Clear conversation and daily memory
