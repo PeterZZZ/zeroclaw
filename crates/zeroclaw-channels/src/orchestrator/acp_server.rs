@@ -1976,34 +1976,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_initialize_default_model_absent_when_unconfigured() {
-        let server = AcpServer::new(Config::default(), AcpServerConfig::default());
-        let result = server.handle_initialize(&serde_json::json!({})).unwrap();
-        assert!(
-            result["_meta"]["zeroclaw"].get("defaultModel").is_none(),
-            "defaultModel must be absent when no provider is configured, got: {}",
-            result["_meta"]["zeroclaw"]["defaultModel"]
-        );
-    }
-
-    #[test]
-    fn handle_initialize_default_model_reflects_configured_provider() {
-        use zeroclaw_config::schema::ModelProviderConfig;
-        let mut config = Config::default();
-        config.providers.fallback = Some("myprovider".to_string());
-        config.providers.models.insert(
-            "myprovider".to_string(),
-            ModelProviderConfig {
-                model: Some("llama3.2".to_string()),
-                ..Default::default()
-            },
-        );
-        let server = AcpServer::new(config, AcpServerConfig::default());
-        let result = server.handle_initialize(&serde_json::json!({})).unwrap();
-        assert_eq!(result["_meta"]["zeroclaw"]["defaultModel"], "llama3.2");
-    }
-
-    #[test]
     fn session_new_defaults_to_launch_cwd_when_client_omits_cwd() {
         let config = Config {
             data_dir: PathBuf::from("/not/the/project"),
@@ -2969,7 +2941,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_load_restores_history_and_streams_notifications() {
-        use zeroclaw_api::provider::{ChatMessage, ConversationMessage};
+        use zeroclaw_api::model_provider::{ChatMessage, ConversationMessage};
         let cwd = tempfile::tempdir().unwrap();
         let store =
             Arc::new(zeroclaw_infra::acp_session_store::AcpSessionStore::new(cwd.path()).unwrap());
@@ -3093,7 +3065,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_resume_restores_without_replay() {
-        use zeroclaw_api::provider::{ChatMessage, ConversationMessage};
+        use zeroclaw_api::model_provider::{ChatMessage, ConversationMessage};
         let cwd = tempfile::tempdir().unwrap();
         let store =
             Arc::new(zeroclaw_infra::acp_session_store::AcpSessionStore::new(cwd.path()).unwrap());

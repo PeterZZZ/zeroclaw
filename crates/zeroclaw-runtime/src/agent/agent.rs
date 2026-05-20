@@ -3151,11 +3151,11 @@ mod tests {
 
     #[test]
     fn seed_conversation_history_preserves_tool_call_variants() {
-        use zeroclaw_api::provider::{
+        use zeroclaw_api::model_provider::{
             ChatMessage, ConversationMessage, ToolCall, ToolResultMessage,
         };
 
-        let provider = Box::new(MockProvider {
+        let provider = Box::new(MockModelProvider {
             responses: Mutex::new(vec![]),
         });
 
@@ -3170,7 +3170,7 @@ mod tests {
 
         let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
         let mut agent = Agent::builder()
-            .provider(provider)
+            .model_provider(provider)
             .tools(vec![Box::new(MockTool)])
             .memory(mem)
             .observer(observer)
@@ -4141,19 +4141,19 @@ mod tests {
 
         // Use a small limit so that pre-filling to the limit forces a trim on
         // the very first new turn.
-        let agent_config = zeroclaw_config::schema::AgentConfig {
+        let agent_config = zeroclaw_config::schema::AliasedAgentConfig {
             max_history_messages: 4,
-            ..zeroclaw_config::schema::AgentConfig::default()
+            ..zeroclaw_config::schema::AliasedAgentConfig::default()
         };
 
         // Simple streaming provider that returns plain text (no tool calls).
-        let provider = Box::new(NarrationStreamProvider {
+        let provider = Box::new(NarrationStreamModelProvider {
             call_count: Arc::new(Mutex::new(0)),
         });
 
         let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
         let mut agent = Agent::builder()
-            .provider(provider)
+            .model_provider(provider)
             .tools(vec![Box::new(MockTool)])
             .memory(mem)
             .observer(observer)

@@ -281,8 +281,8 @@ mod tests {
         store.create_session("sess-msgs", "/tmp/proj").unwrap();
 
         let msgs = vec![
-            ConversationMessage::Chat(zeroclaw_api::provider::ChatMessage::user("hello")),
-            ConversationMessage::Chat(zeroclaw_api::provider::ChatMessage::assistant("hi")),
+            ConversationMessage::Chat(zeroclaw_api::model_provider::ChatMessage::user("hello")),
+            ConversationMessage::Chat(zeroclaw_api::model_provider::ChatMessage::assistant("hi")),
         ];
         store.append_turn("sess-msgs", &msgs).unwrap();
 
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn all_conversation_message_variants_round_trip() {
-        use zeroclaw_api::provider::{ChatMessage, ToolCall, ToolResultMessage};
+        use zeroclaw_api::model_provider::{ChatMessage, ToolCall, ToolResultMessage};
         let tmp = TempDir::new().unwrap();
         let store = AcpSessionStore::new(tmp.path()).unwrap();
         store.create_session("sess-variants", "/tmp/proj").unwrap();
@@ -360,7 +360,7 @@ mod tests {
         // Brief sleep to ensure timestamp advances
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let msg = ConversationMessage::Chat(zeroclaw_api::provider::ChatMessage::user("hi"));
+        let msg = ConversationMessage::Chat(zeroclaw_api::model_provider::ChatMessage::user("hi"));
         store.append_turn("sess-activity", &[msg]).unwrap();
 
         let after = store
@@ -378,7 +378,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = AcpSessionStore::new(tmp.path()).unwrap();
 
-        let msg = ConversationMessage::Chat(zeroclaw_api::provider::ChatMessage::user("hello"));
+        let msg = ConversationMessage::Chat(zeroclaw_api::model_provider::ChatMessage::user("hello"));
         let result = store.append_turn("does-not-exist", &[msg]);
         assert!(result.is_err());
 
@@ -399,7 +399,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = AcpSessionStore::new(tmp.path()).unwrap();
         store.create_session("sess-del", "/tmp/proj").unwrap();
-        let msg = ConversationMessage::Chat(zeroclaw_api::provider::ChatMessage::user("hi"));
+        let msg = ConversationMessage::Chat(zeroclaw_api::model_provider::ChatMessage::user("hi"));
         store.append_turn("sess-del", &[msg]).unwrap();
 
         let deleted = store.delete_session("sess-del").unwrap();
