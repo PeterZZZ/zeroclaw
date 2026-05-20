@@ -774,6 +774,21 @@ impl Memory for QdrantMemory {
             .await
     }
 
+    async fn purge_session_for_agent(&self, session_id: &str, agent_id: &str) -> Result<usize> {
+        let matches = self
+            .list(None, Some(session_id))
+            .await?
+            .into_iter()
+            .filter(|entry| entry.agent_id.as_deref() == Some(agent_id))
+            .count();
+        if matches == 0 {
+            return Ok(0);
+        }
+        self.delete_points_matching(&[("session_id", session_id), ("agent_id", agent_id)])
+            .await?;
+        Ok(matches)
+    }
+
     async fn count(&self) -> Result<usize> {
         self.ensure_initialized().await?;
 

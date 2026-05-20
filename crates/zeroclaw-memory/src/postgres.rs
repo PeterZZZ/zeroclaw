@@ -546,6 +546,22 @@ impl Memory for PostgresMemory {
         .await
     }
 
+    async fn purge_session_for_agent(&self, session_id: &str, agent_id: &str) -> Result<usize> {
+        let client = self.client.clone();
+        let qualified_table = self.qualified_table.clone();
+        let session_id = session_id.to_string();
+        let agent_id = agent_id.to_string();
+
+        run_on_os_thread(move || -> Result<usize> {
+            let mut client = client.lock();
+            let stmt =
+                format!("DELETE FROM {qualified_table} WHERE session_id = $1 AND agent_id = $2");
+            let deleted = client.execute(&stmt, &[&session_id, &agent_id])?;
+            usize::try_from(deleted).context("PostgreSQL returned an oversized delete count")
+        })
+        .await
+    }
+
     async fn count(&self) -> Result<usize> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();

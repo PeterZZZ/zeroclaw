@@ -20,6 +20,7 @@ pub enum AuditOp {
     Get,
     List,
     Forget,
+    Purge,
     StoreProcedural,
 }
 
@@ -31,6 +32,7 @@ impl std::fmt::Display for AuditOp {
             Self::Get => write!(f, "get"),
             Self::List => write!(f, "list"),
             Self::Forget => write!(f, "forget"),
+            Self::Purge => write!(f, "purge"),
             Self::StoreProcedural => write!(f, "store_procedural"),
         }
     }
@@ -201,6 +203,23 @@ impl<M: Memory> Memory for AuditedMemory<M> {
             Some(&format!("agent_id={agent_id}")),
         );
         self.inner.forget_for_agent(key, agent_id).await
+    }
+
+    async fn purge_session_for_agent(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<usize> {
+        self.log_audit(
+            AuditOp::Purge,
+            None,
+            None,
+            Some(session_id),
+            Some(&format!("agent_id={agent_id}")),
+        );
+        self.inner
+            .purge_session_for_agent(session_id, agent_id)
+            .await
     }
 
     async fn count(&self) -> anyhow::Result<usize> {

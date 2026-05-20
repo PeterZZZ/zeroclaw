@@ -498,7 +498,7 @@ pub async fn run_gateway(
         )?,
     );
     // Model resolution (1) the first-model_provider's `model`,
-    // (2) the first configured `[model_providers.<type>.<alias>]`
+    // (2) the first configured `[providers.models.<type>.<alias>]`
     // model with a WARN naming what to set, (3) leave the model empty so
     // the gateway boots and the dashboard can complete browser-based
     // onboarding at /onboard. The chat-dispatch path checks
@@ -521,7 +521,7 @@ pub async fn run_gateway(
                 Some(m) => {
                     ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"model_provider": model_provider_name, "model": m})), "first model_provider has no `model` set; using first configured \
                      providers.models entry as default. Set \
-                     [model_providers.<type>.<alias>] model = \"...\" to silence \
+                     [providers.models.<type>.<alias>] model = \"...\" to silence \
                      this warning.");
                     m
                 }
@@ -531,7 +531,7 @@ pub async fn run_gateway(
                         ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                             .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                             .with_attrs(::serde_json::json!({"display_addr": display_addr})),
-                        "Gateway booting without a configured model. Visit http:///onboard to complete browser onboarding. Chat endpoints will return 503 needs_onboarding until at least one [model_providers.<type>.<alias>] model = \"...\" is set."
+                        "Gateway booting without a configured model. Visit http:///onboard to complete browser onboarding. Chat endpoints will return 503 needs_onboarding until at least one [providers.models.<type>.<alias>] model = \"...\" is set."
                     );
                     String::new()
                 }
@@ -1845,7 +1845,7 @@ fn needs_onboarding_for(model: &str) -> Option<anyhow::Error> {
         );
         Some(anyhow::Error::msg(
             "needs_onboarding: gateway has no model configured. Complete \
-             browser onboarding at /onboard, or set [model_providers.<name>] \
+             browser onboarding at /onboard, or set [providers.models.<type>.<alias>] \
              model = \"...\" before sending messages.",
         ))
     } else {

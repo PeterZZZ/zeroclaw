@@ -151,14 +151,13 @@ impl Tool for SendMessageToPeerTool {
             })?
             .to_string();
 
-        // Peer-groups bind to channel TYPE, not <type>.<alias>.
-        let channel_type = channel
-            .split_once('.')
-            .map(|(t, _)| t)
-            .unwrap_or(channel.as_str());
+        let fallback_channel_type = channel.split_once('.').map(|(t, _)| t);
         let resolved = resolve_peer_set(&self.config, &self.sender_alias);
 
-        if !resolved.is_known_peer(channel_type, &target) {
+        if !resolved.is_known_peer(&channel, &target)
+            && !fallback_channel_type
+                .is_some_and(|channel_type| resolved.is_known_peer(channel_type, &target))
+        {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),

@@ -1199,6 +1199,27 @@ impl Memory for SqliteMemory {
         .await?
     }
 
+    async fn purge_session_for_agent(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let agent_id = agent_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE session_id = ?1 AND agent_id = ?2",
+                params![session_id, agent_id],
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(affected)
+        })
+        .await?
+    }
+
     async fn purge_agent(&self, agent_alias: &str) -> anyhow::Result<usize> {
         let conn = self.conn.clone();
         let agent_alias = agent_alias.to_string();
@@ -1473,8 +1494,9 @@ impl Memory for SqliteMemory {
             return self.recall(query, limit, session_id, since, until).await;
         }
 
+        let full_candidate_limit = self.count().await?.max(limit);
         let raw = self
-            .recall(query, limit.saturating_mul(4), session_id, since, until)
+            .recall(query, full_candidate_limit, session_id, since, until)
             .await?;
         if raw.is_empty() {
             return Ok(Vec::new());
@@ -1631,6 +1653,45 @@ mod tests {
                 .iter()
                 .all(|r| r.content.to_lowercase().contains("rust"))
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_recall_for_agents_does_not_lose_allowed_rows_behind_disallowed_matches() {
+        let (_tmp, mem) = temp_sqlite();
+        let alpha = mem.ensure_agent_uuid("alpha").await.unwrap();
+        let rogue = mem.ensure_agent_uuid("rogue").await.unwrap();
+
+        for idx in 0..12 {
+            mem.store_with_agent(
+                &format!("rogue-{idx}"),
+                "needle disallowed row",
+                MemoryCategory::Core,
+                None,
+                None,
+                None,
+                Some(&rogue),
+            )
+            .await
+            .unwrap();
+        }
+        mem.store_with_agent(
+            "alpha-allowed",
+            "needle allowed row",
+            MemoryCategory::Core,
+            None,
+            None,
+            None,
+            Some(&alpha),
+        )
+        .await
+        .unwrap();
+
+        let results = mem
+            .recall_for_agents(&[alpha.as_str()], "needle", 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].key, "alpha-allowed");
     }
 
     #[tokio::test]

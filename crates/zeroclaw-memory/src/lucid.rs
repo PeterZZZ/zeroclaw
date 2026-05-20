@@ -422,6 +422,16 @@ impl Memory for LucidMemory {
         self.local.forget_for_agent(key, agent_id).await
     }
 
+    async fn purge_session_for_agent(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<usize> {
+        self.local
+            .purge_session_for_agent(session_id, agent_id)
+            .await
+    }
+
     async fn count(&self) -> anyhow::Result<usize> {
         self.local.count().await
     }

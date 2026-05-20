@@ -921,7 +921,7 @@ fn resolved_default_provider(config: &Config) -> String {
 }
 
 /// Resolve the default model for channel startup: the first configured
-/// `[model_providers.<type>.<alias>]` entry's `model` field. Hard-fails
+/// `[providers.models.<type>.<alias>]` entry's `model` field. Hard-fails
 /// with an actionable error when nothing is configured. There is no
 /// global fallback provider — every callsite either resolves through an
 /// agent's `model_provider` or comes through `first_provider()`.
@@ -935,8 +935,8 @@ fn resolved_default_model(config: &Config) -> anyhow::Result<String> {
         return Ok(m.to_string());
     }
     anyhow::bail!(
-        "no model configured: no [model_providers.<type>.<alias>] entry has a \
-         `model` field set. Configure at least one [model_providers.<type>.<alias>] \
+        "no model configured: no [providers.models.<type>.<alias>] entry has a \
+         `model` field set. Configure at least one [providers.models.<type>.<alias>] \
          model = \"...\", or define a [[model_routes]] hint, before starting channels.",
     )
 }
@@ -6343,7 +6343,7 @@ pub async fn start_channels(
                 .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
             "Channels supervisor exiting: no model configured but \
              channels are present. Complete browser onboarding at \
-             /onboard (or set [model_providers.<type>.<alias>] model = \"...\" \
+             /onboard (or set [providers.models.<type>.<alias>] model = \"...\" \
              and reload the daemon) before channels can route messages."
         );
         return Ok(());
@@ -6502,7 +6502,7 @@ pub async fn start_channels(
                 anyhow::Error::msg(format!(
                     "no model configured: agents.{agent_alias}.model_provider does not resolve to a \
                      ModelProviderConfig with a `model` field, and providers.models is empty. \
-                     Configure `[model_providers.<type>.<alias>] model = \"...\"` and reference it \
+                     Configure `[providers.models.<type>.<alias>] model = \"...\"` and reference it \
                      from `agents.{agent_alias}.model_provider`."
                 ))
             })?;

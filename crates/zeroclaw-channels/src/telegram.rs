@@ -648,8 +648,7 @@ impl TelegramChannel {
             anyhow::bail!("Cannot persist empty Telegram identity");
         }
         let group_name = format!("telegram_{}", self.alias);
-        // Peer-groups bind to channel TYPE, not <type>.<alias>.
-        let channel_ref = "telegram".to_string();
+        let channel_ref = format!("telegram.{}", self.alias);
         let snapshot = {
             let mut cfg = config.write();
             if !cfg.channels.telegram.contains_key(&self.alias) {
@@ -1330,7 +1329,7 @@ impl TelegramChannel {
             } else {
                 let _ = self
                     .send(&SendMessage::new(
-                        "ℹ️ Telegram pairing is not active. Ask operator to add your user ID to peer_groups.telegram_default.external_peers in config.toml.",
+                        "ℹ️ Telegram pairing is not active. Ask operator to add your user ID to the matching peer_groups.telegram_<alias>.external_peers entry in config.toml.",
                         &chat_id,
                     ))
                     .await;

@@ -199,10 +199,9 @@ async fn two_sqlite_agents_on_one_install_have_isolated_memory() {
     );
 }
 
-/// Peer-group routing: a peer group binds to channel TYPE (not
-/// `<type>.<alias>`), so two agents that share the same telegram type
-/// resolve each other regardless of which telegram alias each is bound
-/// to. Asserts:
+/// Peer-group routing: a peer group can bind to an exact channel alias
+/// (`telegram.prod`) or to a bare channel type (`telegram`) for legacy
+/// type-wide compatibility. Asserts:
 ///   1. Resolver: alpha (in the group) recognizes beta + the external
 ///      operator on type `"telegram"` and refuses gamma (on the channel
 ///      but not on the group).
@@ -240,7 +239,7 @@ async fn peer_group_routes_messages_only_within_resolved_peer_set() {
     cfg.peer_groups.insert(
         "research".into(),
         PeerGroupConfig {
-            // Channel TYPE — alias suffix does not belong here.
+            // Legacy channel type-wide binding remains accepted.
             channel: "telegram".into(),
             agents: vec![AgentAlias::from("alpha"), AgentAlias::from("beta")],
             external_peers: vec![PeerUsername::from("operator")],
@@ -307,5 +306,74 @@ async fn peer_group_routes_messages_only_within_resolved_peer_set() {
         to_beta.output.contains("in-process"),
         "in-process delivery output must name its routing path so the agent can reason about delivery semantics, got: {:?}",
         to_beta.output
+    );
+}
+
+#[tokio::test]
+async fn peer_group_dotted_channel_refs_remain_alias_scoped_for_dispatch() {
+    use serde_json::json;
+    use std::sync::Arc;
+    use zeroclaw_api::tool::Tool;
+    use zeroclaw_config::multi_agent::{AgentAlias, PeerGroupConfig};
+    use zeroclaw_config::providers::ChannelRef;
+    use zeroclaw_config::schema::{AliasedAgentConfig, Config, RiskProfileConfig};
+    use zeroclaw_runtime::peers::resolve_peer_set;
+    use zeroclaw_runtime::tools::SendMessageToPeerTool;
+
+    let mut cfg = Config::default();
+    cfg.risk_profiles
+        .insert("research-floor".into(), RiskProfileConfig::default());
+    for alias in ["alpha", "beta"] {
+        let mut agent = AliasedAgentConfig {
+            risk_profile: "research-floor".into(),
+            ..AliasedAgentConfig::default()
+        };
+        agent.channels.push(ChannelRef::from("telegram.prod"));
+        agent.channels.push(ChannelRef::from("telegram.dev"));
+        cfg.agents.insert(alias.to_string(), agent);
+    }
+    cfg.peer_groups.insert(
+        "research-prod".into(),
+        PeerGroupConfig {
+            channel: "telegram.prod".into(),
+            agents: vec![AgentAlias::from("alpha"), AgentAlias::from("beta")],
+            external_peers: vec![],
+            ignore: vec![],
+        },
+    );
+
+    let alpha_peers = resolve_peer_set(&cfg, "alpha");
+    assert!(alpha_peers.is_known_peer("telegram.prod", "beta"));
+    assert!(
+        !alpha_peers.is_known_peer("telegram.dev", "beta"),
+        "alias-scoped peer groups must not broaden to sibling channel aliases"
+    );
+
+    let cfg = Arc::new(cfg);
+    let tool = SendMessageToPeerTool::new(cfg, "alpha");
+    let prod = tool
+        .execute(json!({
+            "channel": "telegram.prod",
+            "target": "beta",
+            "message": "hi"
+        }))
+        .await
+        .expect("execute returns Ok");
+    assert!(
+        prod.success,
+        "exact alias dispatch should succeed: {prod:?}"
+    );
+
+    let dev = tool
+        .execute(json!({
+            "channel": "telegram.dev",
+            "target": "beta",
+            "message": "hi"
+        }))
+        .await
+        .expect("execute returns Ok with structured failure");
+    assert!(
+        !dev.success,
+        "sibling alias dispatch must not inherit telegram.prod peers"
     );
 }

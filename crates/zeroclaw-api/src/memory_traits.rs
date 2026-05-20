@@ -232,6 +232,19 @@ pub trait Memory: Send + Sync + crate::attribution::Attributable {
         anyhow::bail!("purge_session not supported by this memory backend")
     }
 
+    /// Remove all memories in a session for one agent.
+    /// Returns the number of deleted entries.
+    /// Default: returns unsupported error. Backends with per-agent storage
+    /// override this; agent-scoped wrappers use it instead of composing a
+    /// session list with key-only deletes.
+    async fn purge_session_for_agent(
+        &self,
+        _session_id: &str,
+        _agent_id: &str,
+    ) -> anyhow::Result<usize> {
+        anyhow::bail!("purge_session_for_agent not supported by this memory backend")
+    }
+
     /// Remove every memory row attributed to the given agent alias.
     /// Returns the number of deleted entries. Called when an agent alias is
     /// removed from `[agents.<alias>]` so the database doesn't accumulate

@@ -74,6 +74,14 @@ impl Memory for NoneMemory {
         Ok(false)
     }
 
+    async fn purge_session_for_agent(
+        &self,
+        _session_id: &str,
+        _agent_id: &str,
+    ) -> anyhow::Result<usize> {
+        Ok(0)
+    }
+
     async fn count(&self) -> anyhow::Result<usize> {
         Ok(0)
     }

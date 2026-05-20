@@ -397,18 +397,13 @@ impl Memory for AgentScopedMemory {
     }
 
     async fn purge_session(&self, session_id: &str) -> Result<usize> {
-        let candidates = self.inner.list(None, Some(session_id)).await?;
-        let mut purged = 0;
-        for entry in candidates {
-            if self
-                .inner
-                .forget_for_agent(&entry.key, &self.agent_id)
-                .await?
-            {
-                purged += 1;
-            }
-        }
-        Ok(purged)
+        // Bulk session deletes must be scoped by both session and bound
+        // agent at the backend boundary. Listing a session and deleting by
+        // `(key, agent_id)` can delete the bound agent's row from a
+        // different session when keys collide.
+        self.inner
+            .purge_session_for_agent(session_id, &self.agent_id)
+            .await
     }
 
     async fn reindex(&self) -> Result<usize> {
@@ -751,6 +746,81 @@ mod tests {
         assert!(
             err.to_string().contains("admin Memory handle"),
             "expected admin-only refusal, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_session_deletes_only_bound_agent_rows_in_that_session() {
+        let (_tmp, inner) = fresh_sqlite();
+        let uuids = provision_agents(&inner, &["alpha", "beta"]).await;
+        let alpha_uuid = &uuids[0];
+        let beta_uuid = &uuids[1];
+
+        inner
+            .store_with_agent(
+                "shared-key",
+                "alpha other session",
+                MemoryCategory::Core,
+                Some("other-session"),
+                None,
+                None,
+                Some(alpha_uuid),
+            )
+            .await
+            .unwrap();
+        inner
+            .store_with_agent(
+                "shared-key",
+                "beta target session",
+                MemoryCategory::Core,
+                Some("target-session"),
+                None,
+                None,
+                Some(beta_uuid),
+            )
+            .await
+            .unwrap();
+        inner
+            .store_with_agent(
+                "alpha-target",
+                "alpha target session",
+                MemoryCategory::Core,
+                Some("target-session"),
+                None,
+                None,
+                Some(alpha_uuid),
+            )
+            .await
+            .unwrap();
+
+        let wrapper =
+            AgentScopedMemory::new(as_dyn(inner.clone()), alpha_uuid, vec![beta_uuid.clone()]);
+
+        let purged = wrapper.purge_session("target-session").await.unwrap();
+        assert_eq!(purged, 1, "only alpha's row in target-session is deleted");
+        assert!(
+            inner
+                .get_for_agent("shared-key", alpha_uuid)
+                .await
+                .unwrap()
+                .is_some(),
+            "same-key alpha row in another session must survive"
+        );
+        assert!(
+            inner
+                .get_for_agent("shared-key", beta_uuid)
+                .await
+                .unwrap()
+                .is_some(),
+            "sibling row in target-session must survive"
+        );
+        assert!(
+            inner
+                .get_for_agent("alpha-target", alpha_uuid)
+                .await
+                .unwrap()
+                .is_none(),
+            "bound agent row in target-session must be deleted"
         );
     }
 
