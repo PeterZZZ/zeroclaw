@@ -150,11 +150,15 @@ pub fn show_report(config: &Config) -> Result<()> {
 }
 
 /// Promote staged dream mutations from `dream_pending.json` into memory.
+///
+/// Delegates to `zeroclaw_runtime::dream::pending::promote_pending`, which
+/// preserves the pending file on partial backend failures so the user can
+/// retry without losing staged work.
 pub async fn promote(config: &Config) -> Result<()> {
-    use zeroclaw_api::memory_traits::{Memory, MemoryCategory};
+    use zeroclaw_runtime::dream::pending::promote_pending;
 
-    let pending = DreamPending::load(&config.workspace_dir)?;
-    let Some(pending) = pending else {
+    // Snapshot pending counts up front for the "Promoting N insights..." banner.
+    let Some(pending_view) = DreamPending::load(&config.workspace_dir)? else {
         println!("{}", get_required_cli_string("cli-dream-no-pending"));
         return Ok(());
     };
@@ -164,14 +168,14 @@ pub async fn promote(config: &Config) -> Result<()> {
         get_cli_string_with_args(
             "cli-dream-promote-summary",
             &[
-                ("insights", &pending.insights.len().to_string()),
-                ("prunes", &pending.proposed_prunes.len().to_string()),
+                ("insights", &pending_view.insights.len().to_string()),
+                ("prunes", &pending_view.proposed_prunes.len().to_string()),
             ],
         )
         .unwrap_or_else(|| format!(
             "Promoting {} insights, pruning {} stale keys...",
-            pending.insights.len(),
-            pending.proposed_prunes.len()
+            pending_view.insights.len(),
+            pending_view.proposed_prunes.len()
         ))
     );
 
@@ -185,67 +189,39 @@ pub async fn promote(config: &Config) -> Result<()> {
     )
     .context("dream promote: failed to create memory backend")?;
 
-    let mut stored = 0usize;
-    for insight in &pending.insights {
-        let key = format!("dream_insight_{}", uuid::Uuid::new_v4());
-        match memory
-            .store_with_metadata(
-                &key,
-                &insight.content,
-                MemoryCategory::Core,
-                None,
-                Some("dream"),
-                Some(insight.importance),
-            )
-            .await
-        {
-            Ok(()) => stored += 1,
-            Err(e) => {
-                let err_str = e.to_string();
-                eprintln!(
-                    "{}",
-                    get_cli_string_with_args(
-                        "cli-dream-promote-store-error",
-                        &[("error", err_str.as_str())],
-                    )
-                    .unwrap_or_else(|| format!("  Failed to store insight: {err_str}"))
-                );
-            }
-        }
-    }
-
-    let mut pruned = 0usize;
-    for key in &pending.proposed_prunes {
-        match memory.forget(key).await {
-            Ok(true) => pruned += 1,
-            Ok(false) => {}
-            Err(e) => {
-                let err_str = e.to_string();
-                eprintln!(
-                    "{}",
-                    get_cli_string_with_args(
-                        "cli-dream-promote-prune-error",
-                        &[("key", key.as_str()), ("error", err_str.as_str())],
-                    )
-                    .unwrap_or_else(|| format!("  Failed to prune key {key}: {err_str}"))
-                );
-            }
-        }
-    }
-
-    DreamPending::clear(&config.workspace_dir)?;
+    let result = promote_pending(&config.workspace_dir, memory.as_ref())
+        .await?
+        .expect("pending was just loaded above");
 
     println!(
         "{}",
         get_cli_string_with_args(
             "cli-dream-promote-done",
             &[
-                ("stored", &stored.to_string()),
-                ("pruned", &pruned.to_string()),
+                ("stored", &result.stored.to_string()),
+                ("pruned", &result.pruned.to_string()),
             ],
         )
-        .unwrap_or_else(|| format!("Done: {stored} insights stored, {pruned} memories pruned."))
+        .unwrap_or_else(|| format!(
+            "Done: {} insights stored, {} memories pruned.",
+            result.stored, result.pruned
+        ))
     );
+
+    if result.pending_retained {
+        let failed_total = result.failed_insights.len() + result.failed_prunes.len();
+        let failed_str = failed_total.to_string();
+        println!(
+            "{}",
+            get_cli_string_with_args(
+                "cli-dream-promote-partial",
+                &[("failed", failed_str.as_str())],
+            )
+            .unwrap_or_else(|| format!(
+                "{failed_total} item(s) failed; dream_pending.json retained for retry."
+            ))
+        );
+    }
 
     Ok(())
 }

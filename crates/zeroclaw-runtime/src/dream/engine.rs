@@ -206,6 +206,51 @@ impl DreamEngine {
 
         // In audit mode, stage proposed mutations for review instead of applying.
         if self.config.audit_mode {
+            // Preserve unreviewed work: if dream_pending.json already exists,
+            // skip writing a new one so a scheduled cycle can't silently
+            // clobber pending review surface from an earlier cycle. Surface
+            // the skip through a dream_report so the user is still notified.
+            match DreamPending::load(&self.workspace_dir) {
+                Ok(Some(_existing)) => {
+                    info!(
+                        "Dream cycle complete (audit): existing dream_pending.json preserved; \
+                         skipping new stage to avoid overwriting unreviewed work"
+                    );
+                    let skip_summary = "Dream cycle skipped: pending review at \
+                                        dream_pending.json — run `zeroclaw dream promote` \
+                                        or remove the file before the next cycle."
+                        .to_string();
+
+                    if self.config.show_report {
+                        let report = DreamReport {
+                            summary: skip_summary.clone(),
+                            insights_count: 0,
+                            pruned_count: 0,
+                            timestamp: Utc::now(),
+                            delivered: false,
+                        };
+                        if let Err(e) = report.save(&self.workspace_dir) {
+                            warn!("Failed to persist dream report on audit-skip: {e}");
+                        }
+                    }
+
+                    return Ok(DreamCycleResult {
+                        gathered_count,
+                        insights,
+                        pruned_count: 0,
+                        consolidated_count: 0,
+                        report_summary: Some(skip_summary),
+                        timestamp: Utc::now(),
+                        llm_assisted,
+                    });
+                }
+                Ok(None) => {} // No existing pending — proceed to stage.
+                Err(e) => {
+                    warn!("Failed to check existing dream_pending.json: {e}");
+                    // Be safe: proceed as if no pending file existed.
+                }
+            }
+
             let staged_insights: Vec<StagedInsight> = insights
                 .iter()
                 .filter(|s| !s.trim().is_empty())
@@ -230,6 +275,26 @@ impl DreamEngine {
             };
             if let Err(e) = pending.save(&self.workspace_dir) {
                 warn!("Failed to persist dream_pending.json: {e}");
+            }
+
+            // Also surface a "stage created" report so interactive startup
+            // notifies the user there's pending review work.
+            if self.config.show_report {
+                let report_summary_text = summary.clone().unwrap_or_else(|| {
+                    "Dream cycle staged proposed mutations to dream_pending.json. \
+                     Run `zeroclaw dream promote` to apply."
+                        .to_string()
+                });
+                let report = DreamReport {
+                    summary: report_summary_text,
+                    insights_count: pending.insights.len(),
+                    pruned_count: pending.proposed_prunes.len(),
+                    timestamp: Utc::now(),
+                    delivered: false,
+                };
+                if let Err(e) = report.save(&self.workspace_dir) {
+                    warn!("Failed to persist dream report on stage: {e}");
+                }
             }
 
             info!(
@@ -312,6 +377,13 @@ impl DreamEngine {
     // ── Phase 1: Gather ���───────────────────────────────────────
 
     /// Collect recent daily memories and conversation summaries.
+    ///
+    /// Filters out:
+    /// - `MemoryCategory::Conversation` (chat context).
+    /// - Anything in the `"dream"` namespace (memories created by previous
+    ///   dream cycles — including promoted Core insights). This prevents a
+    ///   self-referential feedback loop where the engine re-dreams its own
+    ///   outputs.
     async fn gather(&self, memory: &dyn Memory) -> Result<Vec<MemoryEntry>> {
         let since = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
 
@@ -322,6 +394,10 @@ impl DreamEngine {
 
         // Exclude Conversation memories to avoid chat context leaking into dreams.
         entries.retain(|e| !matches!(e.category, MemoryCategory::Conversation));
+
+        // Exclude dream-namespaced memories so the engine never reads its own
+        // generated artifacts back into the next cycle's reflection input.
+        entries.retain(|e| e.namespace != "dream");
 
         // Cap to configured limit.
         entries.truncate(self.config.gather_limit);
@@ -594,6 +670,9 @@ mod tests {
                 forgets: Mutex::new(0),
             }
         }
+        fn with_entries(entries: Vec<MemoryEntry>) -> Self {
+            Self::with_daily_entries(entries)
+        }
     }
 
     #[async_trait]
@@ -665,6 +744,7 @@ mod tests {
     struct MockProvider {
         response: String,
         called_with_model: Mutex<Option<String>>,
+        last_message: Mutex<Option<String>>,
     }
 
     impl MockProvider {
@@ -672,6 +752,7 @@ mod tests {
             Self {
                 response: response.to_string(),
                 called_with_model: Mutex::new(None),
+                last_message: Mutex::new(None),
             }
         }
     }
@@ -681,11 +762,12 @@ mod tests {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
-            _message: &str,
+            message: &str,
             model: &str,
             _temperature: Option<f64>,
         ) -> anyhow::Result<String> {
             *self.called_with_model.lock().unwrap() = Some(model.to_string());
+            *self.last_message.lock().unwrap() = Some(message.to_string());
             Ok(self.response.clone())
         }
     }
@@ -700,6 +782,26 @@ mod tests {
             session_id: None,
             score: None,
             namespace: "default".into(),
+            importance,
+            superseded_by: None,
+        }
+    }
+
+    fn make_entry(
+        key: &str,
+        category: MemoryCategory,
+        namespace: &str,
+        importance: Option<f64>,
+    ) -> MemoryEntry {
+        MemoryEntry {
+            id: key.into(),
+            key: key.into(),
+            content: format!("content for {key}"),
+            category,
+            timestamp: Utc::now().to_rfc3339(),
+            session_id: None,
+            score: None,
+            namespace: namespace.into(),
             importance,
             superseded_by: None,
         }
@@ -835,5 +937,110 @@ mod tests {
         assert!(!result.llm_assisted);
         assert!(result.insights.is_empty());
         assert!(provider.called_with_model.lock().unwrap().is_none());
+    }
+
+    // ── New blocker coverage (Audacity88 re-review 2026-05-20) ──
+
+    /// A second audit-mode cycle must not silently clobber the first cycle's
+    /// pending review surface. The first cycle's proposed insights must still
+    /// be loadable from dream_pending.json after the second cycle runs.
+    #[tokio::test]
+    async fn second_audit_cycle_preserves_unreviewed_pending() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().to_path_buf();
+
+        let memory = RecordingMemory::with_daily_entries(vec![make_daily_entry("k1", None)]);
+        let provider_first = MockProvider::new(
+            r#"{"insights":["FIRST_INSIGHT"],"stale_keys":[],"summary":"first cycle"}"#,
+        );
+
+        let config = DreamModeConfig {
+            enabled: true,
+            audit_mode: true,
+            show_report: true,
+            ..DreamModeConfig::default()
+        };
+        let engine = DreamEngine::new(config.clone(), workspace.clone());
+
+        engine
+            .run_cycle(&memory, Some(&provider_first), Some("m"))
+            .await
+            .unwrap();
+
+        let pending_after_first = crate::dream::pending::DreamPending::load(&workspace)
+            .unwrap()
+            .unwrap();
+        assert!(
+            pending_after_first
+                .insights
+                .iter()
+                .any(|i| i.content == "FIRST_INSIGHT"),
+            "first cycle must stage FIRST_INSIGHT"
+        );
+
+        // Second cycle with different insight. The pending file must still
+        // surface the first cycle's work — either by skipping the write,
+        // appending+deduping, or otherwise preserving the unreviewed content.
+        let provider_second = MockProvider::new(
+            r#"{"insights":["SECOND_INSIGHT"],"stale_keys":[],"summary":"second cycle"}"#,
+        );
+        engine
+            .run_cycle(&memory, Some(&provider_second), Some("m"))
+            .await
+            .unwrap();
+
+        let pending_after_second = crate::dream::pending::DreamPending::load(&workspace)
+            .unwrap()
+            .unwrap();
+        assert!(
+            pending_after_second
+                .insights
+                .iter()
+                .any(|i| i.content == "FIRST_INSIGHT"),
+            "second cycle must not drop FIRST_INSIGHT from the unreviewed pending file"
+        );
+    }
+
+    /// Memories with `namespace == "dream"` (consolidated/promoted from
+    /// previous cycles) must not flow back into the next cycle's reflect
+    /// input. Otherwise the dream pipeline would loop on its own outputs.
+    #[tokio::test]
+    async fn gather_excludes_dream_namespace() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().to_path_buf();
+
+        let memory = RecordingMemory::with_entries(vec![
+            make_entry("user_pref_x", MemoryCategory::Daily, "default", None),
+            make_entry("dream_insight_y", MemoryCategory::Core, "dream", None),
+        ]);
+        let provider = MockProvider::new(r#"{"insights":[],"stale_keys":[],"summary":null}"#);
+
+        let config = DreamModeConfig {
+            enabled: true,
+            audit_mode: false,
+            show_report: false,
+            ..DreamModeConfig::default()
+        };
+        let engine = DreamEngine::new(config, workspace);
+
+        engine
+            .run_cycle(&memory, Some(&provider), Some("m"))
+            .await
+            .unwrap();
+
+        let llm_input = provider
+            .last_message
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("provider must be invoked");
+        assert!(
+            llm_input.contains("user_pref_x"),
+            "user/project memory should reach reflect input"
+        );
+        assert!(
+            !llm_input.contains("dream_insight_y"),
+            "dream-namespaced memory must be filtered out of reflect input"
+        );
     }
 }

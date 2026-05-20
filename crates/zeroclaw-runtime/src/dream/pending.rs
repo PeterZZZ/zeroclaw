@@ -9,8 +9,26 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use zeroclaw_api::memory_traits::{Memory, MemoryCategory};
 
 const PENDING_FILENAME: &str = "dream_pending.json";
+
+/// Per-item result from a promote attempt, used to communicate partial failures.
+#[derive(Debug, Clone)]
+pub struct PromoteResult {
+    /// Number of insights successfully written to memory.
+    pub stored: usize,
+    /// Number of prune keys successfully removed.
+    pub pruned: usize,
+    /// Insights that failed to store, kept for retry. Stays in the pending file.
+    pub failed_insights: Vec<StagedInsight>,
+    /// Prune keys whose `forget()` returned an error, kept for retry.
+    pub failed_prunes: Vec<String>,
+    /// Whether `dream_pending.json` still exists after promotion. `true` when
+    /// there were failures (file rewritten with just the failed items); `false`
+    /// when everything succeeded (file removed).
+    pub pending_retained: bool,
+}
 
 /// A staged set of proposed memory mutations from a dream cycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,9 +89,155 @@ impl DreamPending {
     }
 }
 
+/// Apply staged dream mutations from `dream_pending.json` to the memory backend.
+///
+/// On success: removes `dream_pending.json`.
+/// On partial failure: rewrites `dream_pending.json` with just the failed items
+/// so the user can retry. This preserves unapplied staged work — promotion is
+/// idempotent against transient backend errors.
+pub async fn promote_pending(
+    workspace_dir: &Path,
+    memory: &dyn Memory,
+) -> Result<Option<PromoteResult>> {
+    let Some(pending) = DreamPending::load(workspace_dir)? else {
+        return Ok(None);
+    };
+
+    let mut stored = 0usize;
+    let mut failed_insights: Vec<StagedInsight> = Vec::new();
+    for insight in &pending.insights {
+        let key = format!("dream_insight_{}", uuid::Uuid::new_v4());
+        match memory
+            .store_with_metadata(
+                &key,
+                &insight.content,
+                MemoryCategory::Core,
+                None,
+                Some("dream"),
+                Some(insight.importance),
+            )
+            .await
+        {
+            Ok(()) => stored += 1,
+            Err(_) => failed_insights.push(insight.clone()),
+        }
+    }
+
+    let mut pruned = 0usize;
+    let mut failed_prunes: Vec<String> = Vec::new();
+    for key in &pending.proposed_prunes {
+        match memory.forget(key).await {
+            Ok(true) => pruned += 1,
+            Ok(false) => {} // already gone — treat as success, drop from pending
+            Err(_) => failed_prunes.push(key.clone()),
+        }
+    }
+
+    let has_failures = !failed_insights.is_empty() || !failed_prunes.is_empty();
+    if has_failures {
+        let retry_pending = DreamPending {
+            insights: failed_insights.clone(),
+            proposed_prunes: failed_prunes.clone(),
+            timestamp: pending.timestamp,
+            summary: pending.summary,
+        };
+        retry_pending.save(workspace_dir)?;
+    } else {
+        DreamPending::clear(workspace_dir)?;
+    }
+
+    Ok(Some(PromoteResult {
+        stored,
+        pruned,
+        failed_insights,
+        failed_prunes,
+        pending_retained: has_failures,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+    use zeroclaw_api::memory_traits::MemoryEntry;
+
+    /// Memory that succeeds for the first N store calls then errors. Used to
+    /// simulate transient backend failures mid-promote.
+    struct FailingMemory {
+        store_calls: Mutex<usize>,
+        store_succeeds_first: usize,
+    }
+
+    impl FailingMemory {
+        fn new(store_succeeds_first: usize) -> Self {
+            Self {
+                store_calls: Mutex::new(0),
+                store_succeeds_first,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Memory for FailingMemory {
+        fn name(&self) -> &str {
+            "failing-mock"
+        }
+        async fn store(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            let mut n = self.store_calls.lock().unwrap();
+            *n += 1;
+            if *n > self.store_succeeds_first {
+                anyhow::bail!("simulated backend failure on store #{n}");
+            }
+            Ok(())
+        }
+        async fn store_with_metadata(
+            &self,
+            key: &str,
+            content: &str,
+            category: MemoryCategory,
+            session_id: Option<&str>,
+            _namespace: Option<&str>,
+            _importance: Option<f64>,
+        ) -> anyhow::Result<()> {
+            self.store(key, content, category, session_id).await
+        }
+        async fn recall(
+            &self,
+            _q: &str,
+            _l: usize,
+            _s: Option<&str>,
+            _since: Option<&str>,
+            _until: Option<&str>,
+        ) -> anyhow::Result<Vec<MemoryEntry>> {
+            Ok(Vec::new())
+        }
+        async fn get(&self, _k: &str) -> anyhow::Result<Option<MemoryEntry>> {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+            _c: Option<&MemoryCategory>,
+            _s: Option<&str>,
+        ) -> anyhow::Result<Vec<MemoryEntry>> {
+            Ok(Vec::new())
+        }
+        async fn forget(&self, _k: &str) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+        async fn count(&self) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn pending_roundtrip() {
@@ -117,5 +281,88 @@ mod tests {
 
         DreamPending::clear(temp.path()).unwrap();
         assert!(!temp.path().join("dream_pending.json").exists());
+    }
+
+    /// When promote() encounters a partial backend failure, the pending file
+    /// must be rewritten with the unapplied items rather than cleared. This
+    /// preserves staged work for the user to retry.
+    #[tokio::test]
+    async fn partial_promote_failure_preserves_failed_items() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().to_path_buf();
+
+        // Stage three insights.
+        let pending = DreamPending {
+            insights: vec![
+                StagedInsight {
+                    content: "Insight A".into(),
+                    importance: 0.5,
+                },
+                StagedInsight {
+                    content: "Insight B".into(),
+                    importance: 0.5,
+                },
+                StagedInsight {
+                    content: "Insight C".into(),
+                    importance: 0.5,
+                },
+            ],
+            proposed_prunes: vec![],
+            timestamp: Utc::now(),
+            summary: None,
+        };
+        pending.save(&workspace).unwrap();
+
+        // Memory that succeeds for the first store, fails on every subsequent.
+        let memory = FailingMemory::new(1);
+
+        let result = promote_pending(&workspace, &memory).await.unwrap().unwrap();
+
+        assert_eq!(result.stored, 1, "only the first store should succeed");
+        assert_eq!(
+            result.failed_insights.len(),
+            2,
+            "two stores must be reported as failed"
+        );
+        assert!(
+            result.pending_retained,
+            "pending file should be retained on partial failure"
+        );
+
+        // Critical: pending file must still exist with the failed items so the
+        // user can retry.
+        let after = DreamPending::load(&workspace).unwrap();
+        assert!(
+            after.is_some(),
+            "dream_pending.json must survive a partial-failure promote"
+        );
+        let after = after.unwrap();
+        assert_eq!(after.insights.len(), 2);
+        assert!(after.insights.iter().any(|i| i.content == "Insight B"));
+        assert!(after.insights.iter().any(|i| i.content == "Insight C"));
+    }
+
+    #[tokio::test]
+    async fn full_promote_success_clears_pending() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().to_path_buf();
+
+        let pending = DreamPending {
+            insights: vec![StagedInsight {
+                content: "ok".into(),
+                importance: 0.5,
+            }],
+            proposed_prunes: vec![],
+            timestamp: Utc::now(),
+            summary: None,
+        };
+        pending.save(&workspace).unwrap();
+
+        let memory = FailingMemory::new(10); // never fails
+
+        let result = promote_pending(&workspace, &memory).await.unwrap().unwrap();
+        assert_eq!(result.stored, 1);
+        assert!(!result.pending_retained);
+        assert!(DreamPending::load(&workspace).unwrap().is_none());
     }
 }

@@ -41,6 +41,7 @@ cli-dream-no-pending = No pending dream mutations to promote.
 cli-dream-promote-about = Apply staged dream mutations from dream_pending.json
 cli-dream-promote-summary = Promoting {$insights} insights, pruning {$prunes} stale keys...
 cli-dream-promote-done = Done: {$stored} insights stored, {$pruned} memories pruned.
+cli-dream-promote-partial = {$failed} item(s) failed; dream_pending.json retained for retry.
 cli-dream-promote-store-error = { "  " }Failed to store insight: {$error}
 cli-dream-promote-prune-error = { "  " }Failed to prune key {$key}: {$error}
 cli-dream-report-header = While you were away... ({$timestamp})
